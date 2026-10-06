@@ -28,8 +28,13 @@
 --   PortalAchievement  Part, string attribute "Achievement".
 --   PortalChamberExit  Part. Finishes a Workshop chamber / challenge chamber / editor playtest.
 --
+-- Instances: every player (a co-op pair shares one) plays in their own spot, workspace.PortalInstances.Slot_<n>, far
+-- away from everyone else (PortalConfig "INSTANCES"). Chapters, challenges, Workshop chambers and playtests all load there.
+--
 -- Chamber doors (ChamberLockDoor, tagged PortalChamberDoor by PortalConfig) get these attributes, kept up to date:
---   Open (bool)        exit door: a player is near AND (it has no inputs connected OR they're all on). entry: false
+--   Open (bool)        exit door: a player is near AND it's unlocked. entry: false
+--   Unlocked (bool)    exit door: its inputs are all on / a chip opened it / it's set to open without a button.
+--                      Editor-built exits with nothing connected stay LOCKED, and their finish trigger does nothing.
 --   PlayerNear (bool)  someone is within Config.DOOR_OPEN_RADIUS
 -- Have your door's own script open / close on the "Open" attribute.
 --

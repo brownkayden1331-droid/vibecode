@@ -863,7 +863,17 @@ local function placeTemplate(template, def, cf, e, opts)
 		local T = template:GetPivot()
 		local mn0, mx0 = visibleExtents(CFrame.new(T.Position), template)
 		local w = mx0 - mn0
-		local yaw = (w.X < w.Z) and CFrame.Angles(0, math.rad(90), 0) or CFrame.new()
+		local thin = (w.X < w.Z) and Vector3.xAxis or Vector3.zAxis
+		-- which way along that axis is the front: the pivot's facing if it points along it, else -Z
+		local look = Vector3.new(T.LookVector.X, 0, T.LookVector.Z)
+		local front = -Vector3.zAxis
+		if look.Magnitude > 0.1 and math.abs(look.Unit:Dot(thin)) > 0.7 then
+			front = thin * (look:Dot(thin) > 0 and 1 or -1)
+		elseif thin == Vector3.xAxis then
+			front = -Vector3.xAxis
+		end
+		-- turn about Y so the front points out of the wall (cf's -Z)
+		local yaw = CFrame.Angles(0, math.atan2(front.X, -front.Z), 0)
 		target = cf * yaw * T.Rotation
 	elseif def.upright or def.mount == "floor" or def.mount == "ceiling" then
 		-- keep the way the model stands in PortalAssets (so turrets etc. stay upright whatever their pivot is),

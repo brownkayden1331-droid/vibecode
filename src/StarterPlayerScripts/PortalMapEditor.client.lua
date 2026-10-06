@@ -43,6 +43,16 @@
 -- as coloured circles with their name, which change shade with what they're pointing at so they stay readable on
 -- white tiles, black tiles, items or the grey void. Build and Play takes the whole team in.
 --
+-- Editor modes (Options > Editor > Editor Mode, or File > Editor mode):
+--   Simple        the Items palette (the classic editor)
+--   Intermediate  + Textures tab (search / asset id, put textures on the selected surfaces)
+--                 + Meshes tab (search / mesh id, drag decoration meshes in; right-click > Size)
+--   Advanced      + My Chips tab (little programs, built from blocks or typed as lines), item labels, mesh nudging,
+--                 a coordinates readout under the pointer
+--
+-- The exit door is locked until something opens it: connect a button (etc.) to it, open it with a chip, or right-click
+-- it > Open without a button. Build and Play warns you, Publish refuses a chamber nobody can finish.
+--
 -- Connections: buttons, pedestals, laser catchers and logic gates can drive things. An item with several inputs
 -- needs ALL of them on (Portal 2). Logic gates (AND / OR / NOT / XOR / NAND / NOR) combine inputs and feed other items
 -- or other gates.
