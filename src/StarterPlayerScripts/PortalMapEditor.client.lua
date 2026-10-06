@@ -2117,26 +2117,37 @@ do
 	end
 
 	-- ----- MESHES (MeshParts) -----
-	-- TOOLBOX: search the Toolbox; what you pick is cut down to only its MeshParts on the server.
+	-- TOOLBOX: searches the Creator Store's MeshParts only (no models); a pick becomes a real MeshPart.
 	-- IN GAME: your own MeshParts in PortalAssets.Meshes. Or paste any Mesh asset id for a real MeshPart.
-	local meshPage, mesh = sourcePage("meshes", "Search meshes (Toolbox)...")
+	local meshPage, mesh = sourcePage("meshes", "Search meshes (Creator Store)...")
 	local meshId = inputBox(meshPage, px(7, 590), px(178, 30), "Mesh asset id")
 	local meshTex = inputBox(meshPage, px(190, 590), px(178, 30), "Texture id (optional)")
-	note(meshPage, px(9, 668), px(359, 60), "Toolbox picks keep only their MeshParts (no scripts). Drag into the room, right-click to resize. IN GAME = ReplicatedStorage.PortalAssets.Meshes.")
+	note(meshPage, px(9, 668), px(359, 60), "TOOLBOX searches MeshParts only. Drag one into the room, right-click it to resize. IN GAME = ReplicatedStorage.PortalAssets.Meshes.")
 
-	-- a Toolbox pick: the server keeps just its MeshParts, then you carry it like any item
+	-- a Creator Store MeshPart: the server makes it, then you carry it like any item
+	local picked = {} -- [asset id] = the value the server gave back ("mesh:<id>" or "tbmesh:<id>")
+	local function keyOf(value)
+		local mid = value:match("^mesh:(%d+)$")
+		if mid then return Config.MeshKey(mid, nil) end
+		return "tbmesh_" .. (value:match("^tbmesh:(%d+)$") or "")
+	end
 	local function pickToolboxMesh(r)
 		if E.carry then return end
-		local key = "tbmesh_" .. r.id
-		local function carry() if E.active and not E.carry then Pal.startCarry({ kind = "prop", variant = "tbmesh:" .. r.id, name = r.name }) end end
-		if Config.ToolboxModel(key) then carry() sfx("Click") return end
+		local function carry(value) if E.active and not E.carry then Pal.startCarry({ kind = "prop", variant = value, name = r.name }) end end
+		local known = picked[r.id]
+		if known and Config.ToolboxModel(keyOf(known)) then carry(known) sfx("Click") return end
 		flash("Loading " .. r.name .. "...")
 		task.spawn(function()
-			local ok, res = netCall("ToolboxLoad", { kind = "toolboxmesh", id = r.id })
-			if not ok then flash(tostring(res or "Couldn't load that mesh.")) sfx("Error") return end
+			local ok, res = netCall("ToolboxLoad", { kind = "storemesh", id = r.id })
+			if not ok or type(res) ~= "table" or type(res.value) ~= "string" then
+				flash(tostring((not ok) and res or "Couldn't load that mesh."))
+				sfx("Error")
+				return
+			end
+			picked[r.id] = res.value
 			local f = ReplicatedStorage:WaitForChild(Config.TOOLBOX_FOLDER, 10)
-			if f and f:WaitForChild(key, 10) then
-				carry()
+			if f and f:WaitForChild(keyOf(res.value), 10) then
+				carry(res.value)
 				flash("Click in the room to place " .. r.name .. ".")
 			end
 		end)

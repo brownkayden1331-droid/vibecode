@@ -1097,6 +1097,53 @@ local function loadToolboxMeshes(id)
 	return out
 end
 
+-- Meshes tab search: the Creator Store API with searchCategoryType = MeshPart, so ONLY meshes come back (not
+-- models, not the whole Toolbox). Pages: the API pages with tokens, kept here per search.
+local storeTokens = {} -- [query] = { [page] = pageToken }
+local function creatorStoreKey()
+	local ok, secret = pcall(function() return HttpService:GetSecret(Config.CREATOR_STORE_KEY_SECRET) end)
+	return ok and secret or nil
+end
+local function searchStoreMeshes(q, page)
+	local token = nil
+	if page > 0 then
+		token = storeTokens[q] and storeTokens[q][page]
+		if not token then return true, {} end -- no more pages
+	end
+	local url = Config.CREATOR_STORE_SEARCH_URL .. "?searchCategoryType=MeshPart&maxPageSize=30&query=" .. HttpService:UrlEncode(q)
+		.. (token and ("&pageToken=" .. HttpService:UrlEncode(token)) or "")
+	local headers = {}
+	local key = creatorStoreKey()
+	if key then headers["x-api-key"] = key end
+	local ok, res = pcall(function() return HttpService:RequestAsync({ Url = url, Method = "GET", Headers = headers }) end)
+	if not ok then
+		warn("[PortalServer] Creator Store search:", res)
+		return false, "Couldn't reach the Creator Store. Turn on Game Settings > Security > Allow HTTP Requests."
+	end
+	if not res.Success then
+		warn("[PortalServer] Creator Store search:", res.StatusCode, res.Body)
+		if res.StatusCode == 401 or res.StatusCode == 403 then
+			return false, "The Creator Store needs an API key: make an Open Cloud key with Creator Store read access and add it as the secret \""
+				.. Config.CREATOR_STORE_KEY_SECRET .. "\" (see the README)."
+		end
+		return false, ("The Creator Store search failed (%d)."):format(res.StatusCode)
+	end
+	local okJ, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+	if not okJ or type(data) ~= "table" then return false, "The Creator Store sent something unreadable." end
+	local list = {}
+	for _, item in ipairs(type(data.creatorStoreAssets) == "table" and data.creatorStoreAssets or {}) do
+		local a = type(item.asset) == "table" and item.asset or item
+		local id = tonumber(a.id)
+		if id then
+			local creator = type(item.creator) == "table" and (item.creator.name or "") or ""
+			table.insert(list, { id = id, name = tostring(a.name or a.displayName or id):sub(1, 60), creator = tostring(creator) })
+		end
+	end
+	storeTokens[q] = storeTokens[q] or {}
+	storeTokens[q][page + 1] = type(data.nextPageToken) == "string" and data.nextPageToken ~= "" and data.nextPageToken or nil
+	return true, list
+end
+
 local function toolboxSearch(player, arg)
 	arg = type(arg) == "table" and arg or {}
 	local kind = arg.kind == "textures" and "textures" or "meshes"
@@ -1105,6 +1152,11 @@ local function toolboxSearch(player, arg)
 	local key = kind .. "|" .. q:lower() .. "|" .. page
 	local c = toolboxSearchCache[key]
 	if c and os.clock() - c.t < 300 then return true, c.list end
+	if kind == "meshes" then
+		local okS, list = searchStoreMeshes(q, page)
+		if okS then toolboxSearchCache[key] = { t = os.clock(), list = list } end
+		return okS, list
+	end
 	local ok, res = pcall(function()
 		if kind == "textures" then return InsertService:GetFreeDecals(q, page) end
 		return InsertService:GetFreeModels(q, page)
@@ -1127,6 +1179,15 @@ end
 
 local function toolboxLoad(player, arg)
 	if type(arg) ~= "table" then return false end
+	if arg.kind == "storemesh" then
+		-- a Creator Store MeshPart: a real MeshPart straight from its id, or (if that id won't make one) the
+		-- asset loaded and cut down to its MeshParts
+		local mp = loadMeshPart(arg.id, nil)
+		if mp then return true, { value = "mesh:" .. math.floor(tonumber(arg.id)) } end
+		local mm, merr = loadToolboxMeshes(arg.id)
+		if mm then return true, { value = "tbmesh:" .. math.floor(tonumber(arg.id)) } end
+		return false, merr or "Couldn't load that mesh."
+	end
 	if arg.kind == "toolboxmesh" then
 		local mm, merr = loadToolboxMeshes(arg.id)
 		if not mm then return false, merr end

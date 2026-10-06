@@ -506,6 +506,12 @@ function C.ValidMeshValue(v)
 	return type(v) == "string" and #v <= 60 and (v:match("^mesh:%d+$") ~= nil or v:match("^mesh:%d+:%d+$") ~= nil
 		or v:match("^asset:%d+$") ~= nil or v:match("^tbmesh:%d+$") ~= nil or v:match("^[%w _%-%.%(%)]+$") ~= nil)
 end
+-- Meshes tab search: Roblox's Creator Store API, MeshParts only (PortalServer calls it with HttpService).
+-- Needs Game Settings > Security > Allow HTTP Requests. If Roblox asks for a key (401 / 403), make an Open Cloud API
+-- key with Creator Store read access and store it as an experience secret with this name.
+C.CREATOR_STORE_SEARCH_URL = "https://apis.roblox.com/toolbox-service/v2/assets:search"
+C.CREATOR_STORE_KEY_SECRET = "CreatorStoreApiKey"
+
 -- models loaded from the Toolbox (Creator Store) by PortalServer live here, named by asset id
 C.TOOLBOX_FOLDER = "PortalToolbox"
 function C.ToolboxModel(id)

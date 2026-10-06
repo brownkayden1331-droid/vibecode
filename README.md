@@ -16,7 +16,9 @@ Options › Editor › **Editor Mode** (also File › Editor mode inside the edi
 - **Intermediate** – adds **Textures** and **Meshes** tabs. Each searches the **Toolbox** (Creator Store) by default; **IN GAME** switches to your own assets.
   - Textures: Toolbox decals, `ReplicatedStorage.PortalAssets.Textures`, or a pasted id. Select surfaces, then click a texture.
   - Meshes: **MeshParts** only.
-    - **TOOLBOX** (default) searches the Toolbox. Roblox only lets a game search Toolbox *models*, so whatever you pick is cut down on the server to just its MeshParts (with their SurfaceAppearances / textures); scripts, sounds and everything else are thrown away. Items without MeshParts are refused. Needs InsertService › **AllowInsertFreeModels** ticked in Studio.
+    - **TOOLBOX** (default) searches the Creator Store for **MeshParts only** (Roblox's Creator Store API, `toolbox-service/v2/assets:search` with `searchCategoryType=MeshPart`), so no models and no scripts. A pick becomes a real MeshPart. Setup:
+      1. Game Settings › Security › **Allow HTTP Requests** on.
+      2. If the tab says it needs an API key: Creator Hub › Open Cloud › API Keys › create a key with **Creator Store** read access, then add it to the experience's **Secrets** named `CreatorStoreApiKey` (Creator Hub › your experience › Secrets; for Studio testing, Game Settings › Security › Secrets).
     - **IN GAME** lists your own MeshParts in `ReplicatedStorage.PortalAssets.Meshes`.
     - Or paste any **Mesh** asset id (+ optional texture id): the server makes a real MeshPart with `AssetService:CreateMeshPartAsync`.
     - Loaded meshes are cached in `ReplicatedStorage.PortalToolbox`. Drag into the room; right-click › Size.
