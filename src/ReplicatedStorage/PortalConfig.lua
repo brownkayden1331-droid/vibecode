@@ -1,0 +1,1410 @@
+-- PortalConfig
+-- ReplicatedStorage (ModuleScript)  -- name it exactly "PortalConfig"
+local C = {}
+
+C.MAPS_FOLDER = "PortalMaps"
+C.LOBBY_SPAWN = "MenuSpawn"
+C.COOP_HUB_MAP = "CoopHub"
+C.EDITOR_ORIGIN = Vector3.new(0, 600, 0)
+
+C.CHAPTERS = {
+	{ title = "The Courtesy Call", map = "Chapter1", preview = "" },
+	{ title = "The Cold Boot", map = "Chapter2", preview = "" },
+	{ title = "The Return", map = "Chapter3", preview = "" },
+	{ title = "The Surprise", map = "Chapter4", preview = "" },
+	{ title = "The Escape", map = "Chapter5", preview = "" },
+	{ title = "The Fall", map = "Chapter6", preview = "" },
+	{ title = "The Reunion", map = "Chapter7", preview = "" },
+	{ title = "The Itch", map = "Chapter8", preview = "" },
+	{ title = "The Part Where He Kills You", map = "Chapter9", preview = "" },
+}
+
+C.COURSES = {
+	{ title = "The Cold Boot", coop = false, chambers = {
+		{ id = "SP_ColdBoot_01", name = "01 Portal Carousel" },
+		{ id = "SP_ColdBoot_02", name = "02 Portal Gun" },
+		{ id = "SP_ColdBoot_03", name = "03 Smooth Jazz" },
+		{ id = "SP_ColdBoot_04", name = "04 Cube Momentum" },
+	} },
+	{ title = "Team Building", coop = true, chambers = {
+		{ id = "MP_Team_01", name = "01 Doors" },
+		{ id = "MP_Team_02", name = "02 Buttons" },
+		{ id = "MP_Team_03", name = "03 Lasers" },
+		{ id = "MP_Team_04", name = "04 Rat Maze" },
+		{ id = "MP_Team_05", name = "05 Laser Crusher" },
+		{ id = "MP_Team_06", name = "06 Behind the Scenes" },
+	} },
+}
+
+C.ACHIEVEMENTS = {
+	{ id = "WAKE_UP", name = "Wake Up Call", desc = "Finish the first chapter.", chapter = 1 },
+	{ id = "COLD_BOOT", name = "Rebooted", desc = "Finish chapter two.", chapter = 2 },
+	{ id = "HALFWAY", name = "Halfway There", desc = "Finish chapter five.", chapter = 5 },
+	{ id = "THE_END", name = "Still Alive", desc = "Finish the last chapter.", chapter = 9, hidden = true },
+	{ id = "FIRST_SAVE", name = "Insurance Policy", desc = "Save your game for the first time." },
+	{ id = "PORTALS_100", name = "Hole Puncher", desc = "Place 100 portals.", goal = 100 },
+	{ id = "PORTALS_1000", name = "Swiss Cheese", desc = "Place 1000 portals.", goal = 1000 },
+	{ id = "ENRICHMENT", name = "Window Shopper", desc = "Visit Robot Enrichment.", client = true },
+	{ id = "EDITOR", name = "Test Chamber Designer", desc = "Open the test chamber editor." },
+	{ id = "PUBLISH", name = "Published Author", desc = "Publish a test chamber to the Workshop." },
+	{ id = "WORKSHOP_PLAY", name = "Community Spirit", desc = "Finish a Workshop test chamber." },
+	{ id = "COOP_FRIEND", name = "Team Player", desc = "Start a co-op game with a partner." },
+	{ id = "OPTIONS", name = "Tinkerer", desc = "Change a setting in the options menu.", client = true },
+}
+
+C.STORE_CATEGORIES = { "Skins", "Headwear", "Misc", "Gestures", "Bundles" }
+C.STORE = {
+	{ id = "beanie", name = "Bionic Beanie", category = "Headwear", slot = "head", bots = "both", price = 25, productId = 0, icon = "", preview = "" },
+	{ id = "tophat", name = "Top Hat", category = "Headwear", slot = "head", bots = "both", price = 25, productId = 0, icon = "", preview = "" },
+	{ id = "glasses", name = "Science Goggles", category = "Headwear", slot = "head", bots = "both", price = 15, productId = 0, icon = "", preview = "" },
+	{ id = "moonflag", name = "Moon Flag", category = "Misc", slot = "flag", bots = "both", price = 10, productId = 0, icon = "", preview = "" },
+	{ id = "bitflag", name = "Bit.Trip Flag", category = "Misc", slot = "flag", bots = "both", price = 10, productId = 0, icon = "", preview = "" },
+	{ id = "military", name = "Military Skins", category = "Skins", slot = "skin", bots = "both", price = 25, was = 60, productId = 0, icon = "", preview = "" },
+	{ id = "moonskin", name = "Moon Skins", category = "Skins", slot = "skin", bots = "both", price = 25, was = 60, productId = 0, icon = "", preview = "" },
+	{ id = "darkskin", name = "Shadow Skins", category = "Skins", slot = "skin", bots = "both", price = 25, was = 60, productId = 0, icon = "", preview = "" },
+	{ id = "sitspin", name = "Sit Spin", category = "Gestures", slot = "gesture", bots = "orange", price = 15, productId = 0, icon = "", preview = "" },
+	{ id = "dribble", name = "Dribble", category = "Gestures", slot = "gesture", bots = "blue", price = 15, productId = 0, icon = "", preview = "" },
+	{ id = "starter", name = "Starter Bundle", category = "Bundles", price = 50, was = 75, productId = 0, icon = "", preview = "",
+		grants = { "beanie", "moonflag", "military" } },
+}
+C.FEATURED_ITEM = "beanie"
+C.BACKPACK_SLOTS = 250
+
+C.MAX_SAVE_SLOTS = 20
+C.AUTOSAVE_MINUTES = 5
+
+C.CELL = 10
+C.EDITOR_LIMITS = { x = 28, yMin = -4, yMax = 10, z = 28, cells = 4000, ents = 64 }
+C.DIRS = { Vector3.xAxis, -Vector3.xAxis, Vector3.yAxis, -Vector3.yAxis, Vector3.zAxis, -Vector3.zAxis }
+C.OFFS = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
+C.SURFACES = {
+	white = { color = Color3.fromRGB(232, 236, 230), material = Enum.Material.SmoothPlastic },
+	black = { color = Color3.fromRGB(66, 75, 73), material = Enum.Material.SmoothPlastic },
+}
+
+-- ==========================================
+-- TILE COLOURS (editor: right-click a surface > Tile color, or T to paint the last colour again)
+-- data.colors[faceKey] = index into this list. Textures / Decals on your tile assets get tinted too,
+-- so white / light grey tile textures give the cleanest colours.
+-- ==========================================
+C.TILE_COLORS = {
+	{ name = "Red", color = Color3.fromRGB(214, 74, 70) },
+	{ name = "Orange", color = Color3.fromRGB(236, 140, 52) },
+	{ name = "Yellow", color = Color3.fromRGB(236, 206, 70) },
+	{ name = "Green", color = Color3.fromRGB(96, 186, 90) },
+	{ name = "Cyan", color = Color3.fromRGB(70, 196, 210) },
+	{ name = "Blue", color = Color3.fromRGB(66, 120, 220) },
+	{ name = "Purple", color = Color3.fromRGB(150, 96, 214) },
+	{ name = "Pink", color = Color3.fromRGB(230, 120, 180) },
+	{ name = "Brown", color = Color3.fromRGB(140, 98, 66) },
+	{ name = "Grey", color = Color3.fromRGB(140, 146, 146) },
+}
+-- the colour a tile ends up (non-portalable tiles get a darker shade so you can still tell them apart)
+function C.TileTint(idx, portalable)
+	local t = idx and C.TILE_COLORS[idx]
+	if not t then return nil end
+	return portalable and t.color or t.color:Lerp(Color3.new(0, 0, 0), 0.45)
+end
+function C.TintPanel(p, color)
+	p.Color = color
+	for _, d in ipairs(p:GetChildren()) do
+		if d:IsA("Texture") or d:IsA("Decal") then d.Color3 = color end
+	end
+end
+
+-- ==========================================
+-- TEAM BUILDING (several players editing one chamber)
+-- ==========================================
+C.TEAM_MAX = 4
+C.TEAM_COLORS = {
+	Color3.fromRGB(70, 170, 255), Color3.fromRGB(255, 150, 40), Color3.fromRGB(110, 220, 90), Color3.fromRGB(235, 80, 170),
+	Color3.fromRGB(170, 110, 255), Color3.fromRGB(255, 225, 70), Color3.fromRGB(80, 220, 210), Color3.fromRGB(255, 90, 80),
+}
+
+C.DOOR_ASSET = "ChamberLockDoor"
+C.DOOR_RECESS = C.CELL -- doors sit this many studs back in an alcove in the wall (C.CELL = one tile, 0 = flush)
+C.DOOR_OPEN_RADIUS = 14 -- the exit door opens when a player is this close (and its buttons are pressed, if it has any)
+C.FAITH_PLATE_FLUSH = true -- faith plates sit IN the floor (top flush with the tiles, in a little pit) like Portal 2
+
+-- ALL test elements
+--   mount:  "floor" | "ceiling" | "wall" | "any" (floors, walls and ceilings, sticking straight out of the surface)
+--   asset:  model name looked up in ReplicatedStorage.PortalAssets (TestElements, TestingAssets, EditorAssets, then anywhere)
+--   needsFloor: wall items that must sit on the bottom row of a wall (doors)
+--   recess:  studs the item is pushed back into the wall; the wall tile is replaced by an alcove around it
+--   flush:   floor items sunk into the floor: their top sits level with the tiles, the tile becomes a pit around them
+--   span:    two-ended items (emitter "1" on the wall, emitter "2" across the room). e[9] = length in tiles,
+--            nil = reach the opposite wall. Drag the end handle in the editor to change it.
+--   fitCell: resize the model to exactly one tile (fitHeight = its thickness)
+--   aim:     two attachment names (muzzle, target). The model is turned the least it takes to point that line straight
+--            out of the surface (so it keeps the look it has in PortalAssets), then spun by the item's turn.
+--   upright: "any" items that stand on the surface like they stand on the floor in PortalAssets (their up = out of the
+--            surface): pedestals on walls stick straight out of the wall, on ceilings they hang down.
+-- Per-template attributes you can set on the model in PortalAssets to fine-tune placement:
+--   MountRotation (Vector3, degrees)  extra rotation after placing
+--   MountOffset   (Vector3, studs)    extra offset in the surface's space (X right, Y up, -Z out of the surface)
+--   Seat          (bool, default true) false = don't snap the model's bounding box onto the surface
+C.ENTITY_TYPES = {
+	entry        = { name = "Entry Door",             mount = "wall",    mandatory = true, needsFloor = true, recess = C.DOOR_RECESS, asset = C.DOOR_ASSET },
+	exit         = { name = "Exit Door",              mount = "wall",    mandatory = true, needsFloor = true, recess = C.DOOR_RECESS, asset = C.DOOR_ASSET },
+	button       = { name = "Weighted Floor Button",  mount = "floor",   asset = "Button" },
+	pedestal     = { name = "Pedestal Button",        mount = "any",     upright = true, asset = "PedestalButton" },
+	gate         = { name = "Logic Gate",             mount = "any",     asset = "Logic Gate" },
+	cube         = { name = "Cube",                   mount = "floor" },
+	cubedropper  = { name = "Cube Dropper",           mount = "ceiling", asset = "Cube Dropper" },
+	faithplate   = { name = "Faith Plate",            mount = "floor",   flush = C.FAITH_PLATE_FLUSH, asset = "FaithPlate" },
+	fizzler      = { name = "Fizzler",                mount = "wall",    span = true, asset = "Fizzler" },
+	laser        = { name = "Laser Emitter",          mount = "any",     aim = { "ShootOut", "ShootEnd" }, asset = "Laser Emitter" },
+	lasercatcher = { name = "Laser Catcher",          mount = "any",     asset = "Laser Catcher" },
+	laserfield   = { name = "Laser Field",            mount = "wall",    span = true, asset = "Laser_Field" },
+	lightbridge  = { name = "Hard Light Bridge",      mount = "wall",    asset = "LightBridgeFree" },
+	tbeam        = { name = "Excursion Funnel",       mount = "wall",    asset = "TBeam" },
+	turret       = { name = "Turret",                 mount = "floor",   asset = "Turret" },
+	toxicgoo     = { name = "Toxic Goo",              mount = "floor",   fitCell = true, fitHeight = 0.5, asset = "ToxicGoo" },
+	propulsion   = { name = "Propulsion Gel Dropper", mount = "ceiling", asset = "Propulsion Dropper" },
+	repulsion    = { name = "Repulsion Gel Dropper",  mount = "ceiling", asset = "Repulsion Dropper" },
+	gel_blue     = { name = "Repulsion Gel",          mount = "floor" },
+	gel_orange   = { name = "Propulsion Gel",         mount = "floor" },
+	gel_white    = { name = "Conversion Gel",         mount = "floor" },
+	gel_water    = { name = "Cleansing Gel",          mount = "floor" },
+}
+
+-- ==========================================
+-- CONNECTIONS (the editor and PortalServer both use these - nothing to keep in sync any more)
+-- ==========================================
+-- sources drive things; logic gates are both (things go in, the gate drives something else).
+-- An item with SEVERAL inputs needs ALL of them on (Portal 2). Put an OR gate in front for "any".
+C.LINK_SOURCES = { button = true, pedestal = true, lasercatcher = true, gate = true }
+C.LINK_ONLY_SOURCE = { button = true, pedestal = true, lasercatcher = true } -- nothing can drive these
+C.LINK_BLOCKED = { cube = true, entry = true, gel_blue = true, gel_orange = true, gel_white = true, gel_water = true }
+function C.CanSource(kind) return C.LINK_SOURCES[kind] == true end
+function C.CanTarget(kind)
+	return C.ENTITY_TYPES[kind] ~= nil and not C.LINK_ONLY_SOURCE[kind] and not C.LINK_BLOCKED[kind]
+end
+
+-- Linked items: what they do while their inputs are off (the item menu's "Start enabled" overrides this).
+-- Inputs on flips it. Funnels flip direction instead, droppers drop a new cube.
+C.LINK_DEFAULT_ON = { fizzler = true, laserfield = true, laser = false, lightbridge = false, exit = false }
+C.SWITCHABLE = { fizzler = true, laserfield = true, laser = true, lightbridge = true, exit = true }
+C.BUTTON_TYPES = { "Weighted", "Cube", "Sphere" } -- floor button: anything / cubes only / spheres only
+C.DROPPER_CUBES = { "Normal", "Companion", "Edgeless", "Reflection" } -- used when PortalAssets.Cubes is empty
+
+-- pedestal buttons: the modes PedestalButtonServer has
+C.PEDESTAL_TIMER = 3 -- default seconds for Timer mode (the editor's red timer, 1 - 30)
+C.PEDESTAL_MODES = { "Timer", "Normal", "HoldDown" }
+C.PEDESTAL_LABELS = {
+	Timer = "Timer (on for the time below)",
+	Normal = "Single press (short pulse)",
+	HoldDown = "Toggle (click on, click off)",
+}
+
+-- logic gates: output = what the inputs add up to
+C.GATE_TYPES = { "AND", "OR", "NOT", "XOR", "NAND", "NOR" }
+C.GATE_LABELS = {
+	AND = "AND - all inputs on",
+	OR = "OR - any input on",
+	NOT = "NOT - flips its input",
+	XOR = "XOR - an odd number on",
+	NAND = "NAND - not all on",
+	NOR = "NOR - none on",
+}
+C.GATE_COLORS = {
+	AND = Color3.fromRGB(70, 140, 225), OR = Color3.fromRGB(240, 150, 50), NOT = Color3.fromRGB(220, 70, 70),
+	XOR = Color3.fromRGB(165, 95, 225), NAND = Color3.fromRGB(60, 185, 170), NOR = Color3.fromRGB(225, 205, 70),
+}
+function C.GateResult(mode, on, n)
+	if mode == "OR" then return on > 0 end
+	if mode == "NOT" or mode == "NOR" then return on == 0 end
+	if mode == "XOR" then return on % 2 == 1 end
+	if mode == "NAND" then return not (n > 0 and on == n) end
+	return n > 0 and on == n -- AND
+end
+
+-- item options live in e[10] = { mode = string, startOn = bool, dropOnStart = bool, ... }
+function C.Options(e)
+	return type(e[10]) == "table" and e[10] or {}
+end
+function C.StartOn(e, linked)
+	local o = C.Options(e)
+	if type(o.startOn) == "boolean" then return o.startOn end
+	if linked then return C.LINK_DEFAULT_ON[e[1]] == true end
+	return true
+end
+function C.PedestalMode(e)
+	local m = C.Options(e).mode
+	return table.find(C.PEDESTAL_MODES, m) and m or "Timer"
+end
+function C.GateMode(e)
+	local m = C.Options(e).mode
+	return table.find(C.GATE_TYPES, m) and m or "AND"
+end
+
+-- sets an attribute on an item and every model inside it (the scripts running the test elements look at the inner model)
+function C.SetAll(root, name, value)
+	root:SetAttribute(name, value)
+	for _, d in ipairs(root:GetDescendants()) do
+		if d:IsA("Model") then d:SetAttribute(name, value) end
+	end
+end
+
+-- data.faces[faceKey]: nil = portalable, 0 = not portalable, 2 = portalable with wall tiles, 3 = not portalable with wall tiles
+-- (wall tiles only matter on floors / ceilings: they use the Floor / Ceiling tile assets otherwise)
+function C.FaceInfo(v)
+	return not (v == 0 or v == 3), (v == 2 or v == 3)
+end
+function C.FaceValue(portalable, wallTiles)
+	if portalable then return wallTiles and 2 or nil end
+	return wallTiles and 3 or 0
+end
+
+-- span items (fizzlers, laser fields) lie along the tile edge they sit on; turn 1 = upright, the way they're placed first
+local function effRot(e)
+	local def = C.ENTITY_TYPES[e[1]]
+	return (e[6] or 0) + ((def and def.span) and 1 or 0)
+end
+C.EffRot = effRot
+
+-- can an item of this type go on face f? (1/2 = ±X wall, 3 = ceiling, 4 = floor, 5/6 = ±Z wall)
+function C.MountOk(def, f)
+	if not def or not f then return false end
+	if def.mount == "floor" then return f == 4 end
+	if def.mount == "ceiling" then return f == 3 end
+	if def.mount == "wall" then return f ~= 3 and f ~= 4 end
+	return f >= 1 and f <= 6 -- "any"
+end
+
+-- how many tiles a span item can reach from its wall (counting its own tile) before hitting the far wall
+function C.SpanMax(e, air)
+	if not air then return nil end
+	local o = C.OFFS[e[5]]
+	if not o then return nil end
+	local n, x, y, z = 1, e[2], e[3], e[4]
+	while n < 60 do
+		x, y, z = x - o[1], y - o[2], z - o[3]
+		if not air[C.Key(x, y, z)] then break end
+		n += 1
+	end
+	return n
+end
+function C.SpanLength(e, air)
+	local max = C.SpanMax(e, air)
+	local want = tonumber(e[9])
+	if max then return want and math.clamp(math.floor(want), 1, max) or max end
+	return want and math.max(1, math.floor(want)) or nil
+end
+
+-- does this item replace its tile (door alcove / faith plate pit)?
+function C.MakesHole(kind)
+	local def = C.ENTITY_TYPES[kind]
+	if not def then return false end
+	if (def.recess or 0) > 0 then return true end
+	return def.flush == true and C.FindAsset ~= nil and C.FindAsset(def.asset) ~= nil
+end
+-- tiles that are replaced by a door alcove / faith plate pit
+function C.HoleFaces(ents)
+	local holes = {}
+	for _, e in ipairs(ents or {}) do
+		if C.MakesHole(e[1]) then holes[C.Key(e[2], e[3], e[4]) .. "," .. e[5]] = true end
+	end
+	return holes
+end
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ASSET_FOLDERS = { "TestElements", "TestingAssets", "EditorAssets" }
+local function assetFolder(name)
+	local assets = ReplicatedStorage:FindFirstChild("PortalAssets")
+	return assets and assets:FindFirstChild(name)
+end
+local function editorAsset(name)
+	local f = assetFolder("EditorAssets")
+	return f and f:FindFirstChild(name)
+end
+local function findAsset(name)
+	if not name then return nil end
+	local assets = ReplicatedStorage:FindFirstChild("PortalAssets")
+	if not assets then return nil end
+	for _, folderName in ipairs(ASSET_FOLDERS) do
+		local folder = assets:FindFirstChild(folderName)
+		local t = folder and folder:FindFirstChild(name)
+		if t and (t:IsA("Model") or t:IsA("BasePart")) then return t end
+	end
+	-- anywhere else in PortalAssets, as long as it's a top-level item of some folder (not a part inside another model)
+	for _, d in ipairs(assets:GetDescendants()) do
+		if d.Name == name and (d:IsA("Model") or d:IsA("BasePart")) and d.Parent and d.Parent:IsA("Folder") then return d end
+	end
+	return nil
+end
+
+C.EditorAsset = editorAsset
+C.FindAsset = findAsset
+
+function C.CubeVariants()
+	local f = assetFolder("Cubes")
+	local list = {}
+	if f then
+		for _, c in ipairs(f:GetChildren()) do
+			if c:IsA("Model") or c:IsA("BasePart") then table.insert(list, c.Name) end
+		end
+	end
+	table.sort(list)
+	return list
+end
+
+function C.CubeAsset(variant)
+	local f = assetFolder("Cubes")
+	return f and type(variant) == "string" and f:FindFirstChild(variant) or nil
+end
+
+local function eachPart(inst, fn)
+	if inst:IsA("BasePart") then fn(inst) end
+	for _, d in ipairs(inst:GetDescendants()) do
+		if d:IsA("BasePart") then fn(d) end
+	end
+end
+C.EachPart = eachPart
+
+function C.Key(x, y, z) return x .. "," .. y .. "," .. z end
+function C.FaceKey(x, y, z, f) return x .. "," .. y .. "," .. z .. "," .. f end
+
+function C.FaceCFrame(origin, x, y, z, f, depth)
+	local d = C.DIRS[f]
+	local pos = origin + Vector3.new(x, y, z) * C.CELL + d * (C.CELL / 2 + depth)
+	local up = math.abs(d.Y) > 0.5 and Vector3.zAxis or Vector3.yAxis
+	return CFrame.lookAt(pos, pos - d, up)
+end
+
+-- Where an item sits. In this frame -Z (LookVector) always points out of the surface into the room.
+--   floor / ceiling: on the surface centre, upright, turned by rot * 90 degrees
+--   wall:            bottom edge of the panel (so doors stand on the floor), facing into the room
+--   any:             centre of the panel, LookVector straight out of the surface (rot spins it about that axis)
+function C.EntityCFrame(origin, e)
+	local def = C.ENTITY_TYPES[e[1]]
+	local x, y, z, f, rot = e[2], e[3], e[4], e[5], effRot(e)
+	local d = C.DIRS[f]
+	local center = origin + Vector3.new(x, y, z) * C.CELL
+	local surface = center + d * (C.CELL / 2)
+	if def and def.upright then
+		-- the model's up = straight out of the surface; on the floor that's exactly how it stands in PortalAssets
+		local n = -d
+		local ref = math.abs(n.Y) > 0.5 and Vector3.zAxis or Vector3.yAxis
+		local look = -(ref - n * ref:Dot(n)).Unit
+		return CFrame.lookAt(surface, surface + look, n) * CFrame.Angles(0, math.rad(rot * 90), 0)
+	end
+	if def and def.mount == "any" then
+		local up = math.abs(d.Y) > 0.5 and Vector3.zAxis or Vector3.yAxis
+		return CFrame.lookAt(surface, surface - d, up) * CFrame.Angles(0, 0, math.rad(rot * 90))
+	end
+	if math.abs(d.Y) > 0.5 then
+		return CFrame.new(surface) * CFrame.Angles(0, math.rad(rot * 90), 0)
+	end
+	if def and def.needsFloor then
+		local base = Vector3.new(surface.X, center.Y - C.CELL / 2, surface.Z)
+		return CFrame.lookAt(base, base - d)
+	end
+	-- other wall items sit on one edge of the tile: rot turns them to the next edge (the editor's diamond handles)
+	return CFrame.lookAt(surface, surface - d) * CFrame.Angles(0, 0, math.rad(rot * 90)) * CFrame.new(0, -C.CELL / 2, 0)
+end
+
+-- the tile frame an item sits in: centre of the panel, -Z out of the surface, Y = the item's "up" after its turn
+function C.ItemFrame(origin, e)
+	local f, rot = e[5], effRot(e)
+	local d = C.DIRS[f]
+	local surface = origin + Vector3.new(e[2], e[3], e[4]) * C.CELL + d * (C.CELL / 2)
+	local up = math.abs(d.Y) > 0.5 and Vector3.zAxis or Vector3.yAxis
+	return CFrame.lookAt(surface, surface - d, up) * CFrame.Angles(0, 0, math.rad(rot * 90))
+end
+
+-- min / max corners of an oriented box, measured in cf's local space
+local function extentsIn(cf, boxCF, size)
+	local rel = cf:ToObjectSpace(boxCF)
+	local h = size / 2
+	local ax, ay, az = rel.XVector, rel.YVector, rel.ZVector
+	local ext = Vector3.new(
+		math.abs(ax.X) * h.X + math.abs(ay.X) * h.Y + math.abs(az.X) * h.Z,
+		math.abs(ax.Y) * h.X + math.abs(ay.Y) * h.Y + math.abs(az.Y) * h.Z,
+		math.abs(ax.Z) * h.X + math.abs(ay.Z) * h.Y + math.abs(az.Z) * h.Z
+	)
+	return rel.Position - ext, rel.Position + ext
+end
+local function boundsOf(v)
+	if v:IsA("Model") then return v:GetBoundingBox() end
+	return v.CFrame, v.Size
+end
+
+-- top-level pieces of a model (children, looking inside Folders)
+local function piecesOf(root)
+	local out = {}
+	local function walk(p)
+		for _, c in ipairs(p:GetChildren()) do
+			if c:IsA("BasePart") or c:IsA("Model") then table.insert(out, c)
+			elseif c:IsA("Folder") then walk(c) end
+		end
+	end
+	walk(root)
+	return out
+end
+local function centerOf(inst)
+	if inst:IsA("BasePart") then return inst.Position end
+	return (inst:GetBoundingBox()).Position
+end
+-- the two ends of a two-ended item: children "1" / "2", a piece named ...End and the piece furthest from it,
+-- two pieces with the same name, or failing that the two pieces furthest apart
+local function findEnds(root)
+	if not root:IsA("Model") then return nil end
+	local a, b = root:FindFirstChild("1"), root:FindFirstChild("2")
+	if a and b and (a:IsA("BasePart") or a:IsA("Model")) and (b:IsA("BasePart") or b:IsA("Model")) then return a, b end
+	local pieces = piecesOf(root)
+	local function farthestFrom(p)
+		local best, bd = nil, -1
+		for _, q in ipairs(pieces) do
+			if q ~= p then
+				local d = (centerOf(q) - centerOf(p)).Magnitude
+				if d > bd then best, bd = q, d end
+			end
+		end
+		return best
+	end
+	for _, p in ipairs(pieces) do
+		if p.Name:lower():match("end$") then
+			local o = farthestFrom(p)
+			if o then return o, p end
+		end
+	end
+	local byName = {}
+	for _, p in ipairs(pieces) do
+		if byName[p.Name] then return byName[p.Name], p end
+		byName[p.Name] = p
+	end
+	local best, bestA, bestB = -1, nil, nil
+	for i = 1, #pieces do
+		for j = i + 1, #pieces do
+			local d = (centerOf(pieces[i]) - centerOf(pieces[j])).Magnitude
+			if d > best then best, bestA, bestB = d, pieces[i], pieces[j] end
+		end
+	end
+	return bestA, bestB
+end
+
+-- world position of a named attachment / bone in a template (loose attachments in a model are world-space)
+local function aimPoint(root, name)
+	local want = name:lower():gsub("[^%a]", "")
+	for _, d in ipairs(root:GetDescendants()) do
+		if d:IsA("Attachment") and d.Name:lower():gsub("[^%a]", "") == want then
+			-- bones (and anything under a part or a bone) are relative to their parent: ask for the world position
+			if d:IsA("Bone") or (d.Parent and (d.Parent:IsA("BasePart") or d.Parent:IsA("Attachment"))) then
+				return d.WorldPosition
+			end
+			return d.Position -- loose in the model: already world-space
+		end
+	end
+	return nil
+end
+
+-- clone a template even if some of its parts have Archivable off. Clone() silently skips those, which is
+-- exactly how an item can look fine in Studio and lose bits (turret arms, a button mesh) when it gets built.
+local function cloneTemplate(template)
+	local off = {}
+	for _, d in ipairs(template:GetDescendants()) do
+		if not d.Archivable then
+			d.Archivable = true
+			table.insert(off, d)
+		end
+	end
+	local rootOff = not template.Archivable
+	if rootOff then template.Archivable = true end
+	local v = template:Clone()
+	for _, d in ipairs(off) do d.Archivable = false end
+	if rootOff then template.Archivable = false end
+	return v
+end
+
+-- min / max of the parts you can actually SEE, in cf's space. Invisible hitboxes, vision cones, triggers or a
+-- helper part left somewhere in the asset no longer drag the model off its tile / down into the floor.
+local function visibleExtents(cf, v)
+	local mn, mx
+	local function add(p)
+		local a, b = extentsIn(cf, p.CFrame, p.Size)
+		mn = mn and mn:Min(a) or a
+		mx = mx and mx:Max(b) or b
+	end
+	eachPart(v, function(p) if p.Transparency < 0.98 then add(p) end end)
+	if not mn then eachPart(v, add) end
+	if not mn then
+		local bcf, size = boundsOf(v)
+		return extentsIn(cf, bcf, size)
+	end
+	return mn, mx
+end
+
+-- the smallest rotation that turns direction a onto direction b
+local function shortestArc(a, b)
+	local d = a:Dot(b)
+	if d > 0.9999 then return CFrame.new() end
+	if d < -0.9999 then
+		local axis = math.abs(a.X) < 0.9 and a:Cross(Vector3.xAxis) or a:Cross(Vector3.yAxis)
+		return CFrame.fromAxisAngle(axis.Unit, math.pi)
+	end
+	return CFrame.fromAxisAngle(a:Cross(b).Unit, math.acos(math.clamp(d, -1, 1)))
+end
+
+-- ----- span items: keep their beams alive after stretching -----
+local function partOf(x)
+	if x:IsA("BasePart") then return x end
+	return x:FindFirstChildWhichIsA("BasePart", true)
+end
+-- Beams only draw between attachments that live in a part (or a bone). An attachment sitting loose in a model, one
+-- that points outside the model, or one that's missing makes the beam silently vanish while the field still works.
+-- Loose ones are moved into the end they're nearest to (same spot), missing ones get a fresh attachment on that end.
+local function fixSpanBeams(v, a, b)
+	local pa, pb = partOf(a), partOf(b)
+	local effects = 0
+	for _, d in ipairs(v:GetDescendants()) do
+		if d:IsA("ParticleEmitter") then effects += 1 end
+		if d:IsA("Beam") then
+			effects += 1
+			if pa and pb then
+				for i, prop in ipairs({ "Attachment0", "Attachment1" }) do
+					local att = d[prop]
+					local inside = att and att:IsDescendantOf(v)
+					local hosted = inside and att.Parent and (att.Parent:IsA("BasePart") or att.Parent:IsA("Attachment"))
+					if inside and not hosted then
+						local w = att.CFrame -- loose in a model = world space (placeTemplate already moved it)
+						local host = ((w.Position - pa.Position).Magnitude <= (w.Position - pb.Position).Magnitude) and pa or pb
+						att.Parent = host
+						att.WorldCFrame = w
+					elseif not inside then
+						local host = (i == 1) and pa or pb
+						local n = host:FindFirstChild("SpanBeam" .. i)
+						if not n then
+							n = Instance.new("Attachment")
+							n.Name = "SpanBeam" .. i
+							n.Parent = host
+						end
+						d[prop] = n
+					end
+				end
+			end
+		end
+	end
+	return effects
+end
+-- laser field with no beam / particles at all: a see-through red sheet between the two posts
+local function fieldFallback(v, a, b)
+	local ca, cb = centerOf(a), centerOf(b)
+	local len = (cb - ca).Magnitude
+	if len < 0.5 then return end
+	local dir = (cb - ca) / len
+	local bcf, size = boundsOf(a)
+	local best
+	for _, ax in ipairs({ { bcf.RightVector, size.X }, { bcf.UpVector, size.Y }, { bcf.LookVector, size.Z } }) do
+		local flat = ax[1] - dir * ax[1]:Dot(dir)
+		if flat.Magnitude > 0.5 and (not best or ax[2] > best[2]) then best = { flat.Unit, ax[2] } end
+	end
+	if not best then return end
+	local p = Instance.new("Part")
+	p.Name = "FieldFallback"
+	p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = true, false, false, false, false
+	p.Material = Enum.Material.Neon
+	p.Color = Color3.fromRGB(255, 60, 60)
+	p.Transparency = 0.7
+	p.Size = Vector3.new(len, math.max(best[2] * 0.85, 1), 0.06)
+	p.CFrame = CFrame.fromMatrix((ca + cb) / 2, dir, best[1])
+	p.Parent = v
+end
+
+-- clone a template and put it on the surface.
+-- Returns the clone, how far its front sticks out (local Z, negative = into the room), for span items the far end,
+-- and how tall the visible model is (used for the faith plate pit)
+local function placeTemplate(template, def, cf, e, opts)
+	local v = cloneTemplate(template)
+	local target = cf
+	local pa, pb
+	if def.span and v:IsA("Model") then
+		local a, b = findEnds(template)
+		if a and b then pa, pb = centerOf(a), centerOf(b) end
+	elseif def.aim then
+		pa, pb = aimPoint(template, def.aim[1]), aimPoint(template, def.aim[2])
+	end
+	if def.aim and pa and pb and (pb - pa).Magnitude > 0.01 then
+		-- lasers: turn it the LEAST it takes to point the muzzle straight out of the surface, then spin it by the
+		-- item's turn. A laser modelled standing on the floor sits on a floor exactly like that and tips over onto
+		-- walls; one modelled on a wall hangs on walls like that and lies down on floors.
+		local want = cf.LookVector
+		local spin = CFrame.fromAxisAngle(want, math.rad(effRot(e) * 90))
+		target = CFrame.new(cf.Position) * spin * shortestArc((pb - pa).Unit, want) * template:GetPivot().Rotation
+	elseif pa and pb then
+		-- span items: 1 -> 2 points straight out of the surface, keeping its up as up
+		local T = template:GetPivot()
+		local axis = T:VectorToObjectSpace(pb - pa)
+		if axis.Magnitude > 0.01 then
+			local look = axis.Unit
+			local up = T:VectorToObjectSpace(Vector3.yAxis)
+			if math.abs(look:Dot(up)) > 0.95 then up = T:VectorToObjectSpace(Vector3.zAxis) end
+			up = (up - look * look:Dot(up)).Unit
+			local F = CFrame.fromMatrix(Vector3.zero, look:Cross(up).Unit, up, -look)
+			target = cf * F:Inverse()
+			if def.span then
+				-- posts / emitter strips lie along the tile edge the item sits on
+				target = cf * CFrame.Angles(0, 0, math.rad(90)) * F:Inverse()
+			end
+		end
+	elseif def.upright or def.mount == "floor" or def.mount == "ceiling" then
+		-- keep the way the model stands in PortalAssets (so turrets etc. stay upright whatever their pivot is),
+		-- only add the item's turn
+		target = cf * template:GetPivot().Rotation
+	end
+	local mr = template:GetAttribute("MountRotation")
+	if typeof(mr) == "Vector3" then
+		target = target * CFrame.Angles(math.rad(mr.X), math.rad(mr.Y), math.rad(mr.Z))
+	end
+	v:PivotTo(target)
+
+	-- exactly one tile (toxic goo etc.)
+	local gooOffset = Vector3.zero
+	if def.fitCell then
+		local o = type(e[10]) == "table" and e[10] or {}
+		local x0, x1, z0, z1 = tonumber(o.gx0) or 0, tonumber(o.gx1) or 0, tonumber(o.gz0) or 0, tonumber(o.gz1) or 0
+		gooOffset = Vector3.new((x1 - x0) / 2, 0, (z1 - z0) / 2) * C.CELL
+		if v:IsA("BasePart") then
+			v.Size = Vector3.new(C.CELL * (1 + x0 + x1), def.fitHeight or 1, C.CELL * (1 + z0 + z1))
+			v.CFrame = CFrame.new(v.Position)
+		elseif v:IsA("Model") then
+			local _, sz = v:GetBoundingBox()
+			local k = C.CELL / math.max(sz.X, sz.Z, 0.01)
+			pcall(function() v:ScaleTo(v:GetScale() * k) end)
+		end
+	end
+
+	local seatAs = def.upright and "floor" or def.mount
+	local mn, mx
+	if seatAs == "floor" or seatAs == "ceiling" then
+		mn, mx = visibleExtents(cf, v) -- turrets, buttons, pedestals, plates, droppers: seat on what you see
+	else
+		local bcf, size = boundsOf(v)
+		mn, mx = extentsIn(cf, bcf, size)
+	end
+	local shift = Vector3.zero
+	if template:GetAttribute("Seat") ~= false then
+		local cx, cy, cz = (mn.X + mx.X) / 2, (mn.Y + mx.Y) / 2, (mn.Z + mx.Z) / 2
+		if seatAs == "floor" then
+			if def.flush then
+				shift = Vector3.new(-cx, -mx.Y + 0.05, -cz) -- top level with the floor tiles (it sits in a pit)
+			else
+				shift = Vector3.new(-cx, -mn.Y + 0.05, -cz)
+			end
+		elseif seatAs == "ceiling" then
+			shift = Vector3.new(-cx, -mx.Y - 0.05, -cz)
+		elseif seatAs == "wall" then
+			shift = Vector3.new(-cx, -mn.Y, -mx.Z) -- stands on the panel's bottom edge, back against the wall
+		else
+			shift = Vector3.new(-cx, -cy, -mx.Z) -- centred on the panel, back against the surface
+		end
+	end
+	if (def.recess or 0) > 0 then shift += Vector3.new(0, 0, def.recess) end
+	if gooOffset ~= Vector3.zero then shift += cf:VectorToObjectSpace(gooOffset) end
+	local mo = template:GetAttribute("MountOffset")
+	if typeof(mo) == "Vector3" then shift += mo end
+	if shift ~= Vector3.zero then v:PivotTo(v:GetPivot() + cf:VectorToWorldSpace(shift)) end
+
+	-- attachments sitting loose in the model (not in a part) are world-space and don't follow PivotTo:
+	-- carry them along by hand, otherwise lasers / beams fire from where the asset sits in ReplicatedStorage.
+	-- NOT bones: a bone (or attachment) inside another bone is relative to that bone and already moves with the
+	-- mesh. Treating those as world-space flung every child bone across the map, and everything skinned to them
+	-- (button caps, turret arms...) vanished.
+	local loose = {}
+	if v:IsA("Model") then
+		local P, T = v:GetPivot(), template:GetPivot()
+		for _, d in ipairs(v:GetDescendants()) do
+			if d:IsA("Attachment") and not d:IsA("Bone")
+				and not (d.Parent and (d.Parent:IsA("BasePart") or d.Parent:IsA("Attachment"))) then
+				d.CFrame = P * T:ToObjectSpace(d.CFrame)
+				table.insert(loose, d)
+			end
+		end
+	end
+
+	-- stretch two-ended items: move emitter 2 (and everything on its side) out to the chosen length,
+	-- stretch anything that spans the gap. Beams between attachments follow on their own.
+	local spanEnd
+	if def.span and v:IsA("Model") then
+		local a, b = findEnds(v)
+		local L = C.SpanLength(e, opts and opts.air)
+		if a and b and L then
+			local za = cf:PointToObjectSpace(centerOf(a)).Z
+			local zb = cf:PointToObjectSpace(centerOf(b)).Z
+			if za < zb then a, b, za, zb = b, a, zb, za end -- a = the end on the wall
+			local want = -(L * C.CELL) - za -- b as far from the far wall as a is from this one
+			local dz = want - zb
+			if math.abs(dz) > 0.01 then
+				local sep = math.max(math.abs(za - zb), 0.01)
+				local mid = (za + zb) / 2
+				local lv = cf.LookVector
+				local move = cf:VectorToWorldSpace(Vector3.new(0, 0, dz))
+				for _, p in ipairs(piecesOf(v)) do
+					local pcf, psize = boundsOf(p)
+					local pmn, pmx = extentsIn(cf, pcf, psize)
+					if p ~= a and p ~= b and p:IsA("BasePart") and (pmx.Z - pmn.Z) > sep * 0.7 then
+						local r, u, l = math.abs(p.CFrame.RightVector:Dot(lv)), math.abs(p.CFrame.UpVector:Dot(lv)), math.abs(p.CFrame.LookVector:Dot(lv))
+						local grow = (r >= u and r >= l) and Vector3.new(-dz, 0, 0) or (u >= l and Vector3.new(0, -dz, 0) or Vector3.new(0, 0, -dz))
+						local old = p.Size
+						local ns = p.Size + grow
+						p.Size = Vector3.new(math.max(ns.X, 0.05), math.max(ns.Y, 0.05), math.max(ns.Z, 0.05))
+						p.CFrame += move / 2
+						-- attachments on a stretched part (beam ends on a field strip) slide out with its ends
+						local k = p.Size / Vector3.new(math.max(old.X, 0.01), math.max(old.Y, 0.01), math.max(old.Z, 0.01))
+						for _, att in ipairs(p:GetChildren()) do
+							if att:IsA("Attachment") then att.Position = att.Position * k end
+						end
+					elseif p == b or (pmn.Z + pmx.Z) / 2 < mid then
+						p:PivotTo(p:GetPivot() + move)
+					end
+				end
+				for _, att in ipairs(loose) do
+					if cf:PointToObjectSpace(att.Position).Z < mid then att.CFrame += move end
+				end
+			end
+			spanEnd = centerOf(b)
+		end
+		if a and b then
+			local effects = fixSpanBeams(v, a, b)
+			if effects == 0 and e[1] == "laserfield" and not (opts and opts.editor) then fieldFallback(v, a, b) end
+		end
+	end
+	return v, mn.Z + shift.Z, spanEnd, mx.Y - mn.Y
+end
+
+-- tile assets in PortalAssets.EditorAssets (names are matched loosely: case, spaces and "_" don't matter)
+local TILE_NAMES = {
+	wall = { "Wall", "white" },
+	npwall = { "NPWall", "black" },
+	floor = { "Floor", "FloorTile", "FloorTiles" },
+	npfloor = { "NPFloor", "NPFloorTile", "NPFloorTiles" },
+	ceiling = { "Ceiling", "Celling", "CeilingTile", "CeilingTiles", "CellingTile", "CellingTiles" },
+	npceiling = { "NPCeiling", "NPCelling", "NPCeilingTile", "NPCeilingTiles", "NPCellingTile", "NPCellingTiles" },
+}
+local function squashName(n) return (n:lower():gsub("[^%a]", "")) end
+local function tileAsset(kind)
+	local f = assetFolder("EditorAssets")
+	if not f then return nil end
+	for _, n in ipairs(TILE_NAMES[kind]) do
+		local want = squashName(n)
+		for _, c in ipairs(f:GetChildren()) do
+			if c:IsA("BasePart") and squashName(c.Name) == want then return c end
+		end
+	end
+	return nil
+end
+C.TileAsset = tileAsset
+
+-- which tile set a face uses: floor / ceiling tiles on floors and ceilings unless the face is set to wall tiles
+function C.TileKind(portalable, f, style)
+	local surf = "wall"
+	if style ~= "wall" then
+		if f == 4 then surf = "floor" elseif f == 3 then surf = "ceiling" end
+	end
+	return (portalable and "" or "np") .. surf
+end
+
+-- the side of a tile asset that has its texture faces the room
+local FACE_TURN = {
+	[Enum.NormalId.Front] = { CFrame.new(), "z" },
+	[Enum.NormalId.Back] = { CFrame.Angles(0, math.pi, 0), "z" },
+	[Enum.NormalId.Top] = { CFrame.Angles(-math.pi / 2, 0, 0), "y" },
+	[Enum.NormalId.Bottom] = { CFrame.Angles(math.pi / 2, 0, 0), "y" },
+	[Enum.NormalId.Right] = { CFrame.Angles(0, math.pi / 2, 0), "x" },
+	[Enum.NormalId.Left] = { CFrame.Angles(0, -math.pi / 2, 0), "x" },
+}
+-- place a panel: cf = the face frame (-Z into the room), size = tile size, thick = thickness
+function C.PlacePanel(p, cf, size, thick)
+	local turn = FACE_TURN[Enum.NormalId.Front]
+	local tex = p:FindFirstChildWhichIsA("Texture") or p:FindFirstChildWhichIsA("Decal")
+	if tex then turn = FACE_TURN[tex.Face] or turn end
+	if turn[2] == "y" then p.Size = Vector3.new(size, thick, size)
+	elseif turn[2] == "x" then p.Size = Vector3.new(thick, size, size)
+	else p.Size = Vector3.new(size, size, thick) end
+	p.CFrame = cf * turn[1]
+end
+
+local function panelPart(portalable, f, style)
+	local kind = C.TileKind(portalable, f, style)
+	local template = tileAsset(kind) or tileAsset(portalable and "wall" or "npwall")
+	if template and template:IsA("BasePart") then return template:Clone() end
+	local s = portalable and C.SURFACES.white or C.SURFACES.black
+	local p = Instance.new("Part")
+	p.Color, p.Material = s.color, s.material
+	p.TopSurface, p.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+	return p
+end
+
+local function removeNamed(root, name)
+	for _, d in ipairs(root:GetDescendants()) do
+		if d.Name == name and d:IsA("BasePart") then d:Destroy() end
+	end
+end
+
+-- prints what got built for these kinds (Output window). Set to {} once they look right.
+C.DEBUG_BUILD = { turret = true, button = true }
+local function debugBuild(kind, template, v)
+	local tCount, cCount, bones, hidden, notArch = 0, 0, 0, {}, {}
+	eachPart(template, function() tCount += 1 end)
+	for _, d in ipairs(template:GetDescendants()) do
+		if not d.Archivable then table.insert(notArch, d.Name) end
+		if d:IsA("Bone") then bones += 1 end
+	end
+	eachPart(v, function(p)
+		cCount += 1
+		if p.Transparency >= 0.98 then table.insert(hidden, p.Name) end
+	end)
+	print(("[PortalConfig] %s from %s: %d/%d parts, %d bones | invisible: [%s] | Archivable off: [%s]"):format(
+		kind, template:GetFullName(), cCount, tCount, bones, table.concat(hidden, ", "), table.concat(notArch, ", ")))
+end
+
+function C.BuildEntity(e, origin, opts)
+	opts = opts or {}
+	local kind = e[1]
+	local def = C.ENTITY_TYPES[kind]
+	if not def then return nil end
+	local cf = C.EntityCFrame(origin, e)
+	local o = C.Options(e)
+	local m = Instance.new("Model")
+	-- neutral name: the test element scripts recognise models by name, and they should only see the real model inside
+	m.Name = "PeTIItem"
+	m:SetAttribute("Kind", kind)
+	local element = m -- the model the test element scripts run (the asset itself when there is one)
+
+	local template
+	if kind == "cube" then
+		template = C.CubeAsset(e[7])
+	else
+		template = findAsset(def.asset)
+	end
+	if not template and (kind == "entry" or kind == "exit") then
+		template = editorAsset(kind) or editorAsset("spawn")
+	end
+
+	local front = -1 -- local Z of the item's front face
+	local height
+	if template then
+		local v, fz, spanEnd, h = placeTemplate(template, def, cf, e, opts)
+		front, height = fz, h
+		v.Parent = m
+		if C.DEBUG_BUILD[kind] then debugBuild(kind, template, v) end
+		if v:IsA("Model") then element = v end
+		if spanEnd then m:SetAttribute("SpanEnd", spanEnd) end
+	else
+		-- placeholders when the asset is missing
+		local function part(props)
+			local p = Instance.new("Part")
+			p.Anchored = true
+			p.TopSurface = Enum.SurfaceType.Smooth
+			p.BottomSurface = Enum.SurfaceType.Smooth
+			for k, v in pairs(props) do p[k] = v end
+			p.Parent = m
+			return p
+		end
+		if kind == "entry" or kind == "exit" then
+			part({ Name = "Door", Size = Vector3.new(7, 9, 1), CFrame = cf * CFrame.new(0, 4.5, -0.5), Color = Color3.fromRGB(60, 64, 66) })
+			part({ Name = "Ring", Size = Vector3.new(5, 7, 0.3), CFrame = cf * CFrame.new(0, 4.2, -1.1),
+				Color = kind == "entry" and Color3.fromRGB(70, 170, 220) or Color3.fromRGB(240, 140, 50), Material = Enum.Material.Neon })
+			front = -1.25
+		elseif kind == "button" then
+			part({ Name = "Base", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.6, 7, 7),
+				CFrame = cf * CFrame.new(0, 0.3, 0) * CFrame.Angles(0, 0, math.rad(90)), Color = Color3.fromRGB(70, 75, 80) })
+			part({ Name = "Pad", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.6, 5.6, 5.6),
+				CFrame = cf * CFrame.new(0, 0.7, 0) * CFrame.Angles(0, 0, math.rad(90)), Color = Color3.fromRGB(205, 60, 70) })
+		elseif kind == "gate" then
+			-- a little panel: rim colour = gate type, the light shows its output in game
+			local mode = C.GateMode(e)
+			part({ Name = "Body", Size = Vector3.new(4.6, 4.6, 0.5), CFrame = cf * CFrame.new(0, 0, -0.25), Color = Color3.fromRGB(46, 50, 52) })
+			part({ Name = "Rim", Size = Vector3.new(3.8, 3.8, 0.1), CFrame = cf * CFrame.new(0, 0, -0.53), Color = C.GATE_COLORS[mode] })
+			part({ Name = "Light", Size = Vector3.new(2.4, 2.4, 0.1), CFrame = cf * CFrame.new(0, 0, -0.6),
+				Color = opts.editor and C.GATE_COLORS[mode]:Lerp(Color3.new(1, 1, 1), 0.35) or C.ANT_OFF, Material = Enum.Material.Neon })
+			front = -0.65
+		elseif kind == "lasercatcher" then
+			part({ Name = "Body", Size = Vector3.new(6, 6, 1.2), CFrame = cf * CFrame.new(0, 0, -0.6), Color = Color3.fromRGB(70, 76, 80) })
+			part({ Name = "Lens", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.3, 3.6, 3.6),
+				CFrame = cf * CFrame.new(0, 0, -1.25) * CFrame.Angles(0, math.rad(90), 0), Color = Color3.fromRGB(110, 30, 30), Material = Enum.Material.Neon })
+			front = -1.4
+		elseif def.mount == "any" and not def.upright then
+			part({ Name = "Body", Size = Vector3.new(4, 4, 2), CFrame = cf * CFrame.new(0, 0, -1), Color = Color3.fromRGB(120, 130, 140) })
+			front = -2
+		else
+			part({ Name = "Body", Size = Vector3.new(4, 4, 4), CFrame = cf * CFrame.new(0, 2, 0), Color = Color3.fromRGB(120, 130, 140) })
+		end
+	end
+
+	-- doors: the wall tile becomes an alcove (back, sides, floor, top) and the door sits at the back of it
+	local R = def.recess or 0
+	local CELL = C.CELL
+	local function shellWall(name, offset, size)
+		local p = panelPart(false, 1)
+		p.Name = name
+		p.Anchored = true
+		p.Size = size
+		p.CFrame = cf * CFrame.new(offset)
+		p:SetAttribute("Portalable", false)
+		p.Parent = m
+	end
+	if R > 0 then
+		shellWall("AlcoveBack", Vector3.new(0, CELL / 2, R + 0.5), Vector3.new(CELL, CELL, 1))
+		shellWall("AlcoveLeft", Vector3.new(-(CELL / 2 + 0.5), CELL / 2, R / 2), Vector3.new(1, CELL, R))
+		shellWall("AlcoveRight", Vector3.new(CELL / 2 + 0.5, CELL / 2, R / 2), Vector3.new(1, CELL, R))
+		shellWall("AlcoveFloor", Vector3.new(0, -0.5, R / 2), Vector3.new(CELL + 2, 1, R))
+		shellWall("AlcoveTop", Vector3.new(0, CELL + 0.5, R / 2), Vector3.new(CELL + 2, 1, R))
+	end
+
+	-- flush items (faith plates): the floor tile becomes a pit as deep as the model, the model's top is level with
+	-- the floor (cf here is the floor frame: Y = up out of the floor)
+	if def.flush and template and R == 0 then
+		local D = math.max(height or 1, 0.6) + 0.05
+		shellWall("PitFloor", Vector3.new(0, -D - 0.5, 0), Vector3.new(CELL, 1, CELL))
+		shellWall("PitSideA", Vector3.new(0, -D / 2, CELL / 2 + 0.5), Vector3.new(CELL + 2, D, 1))
+		shellWall("PitSideB", Vector3.new(0, -D / 2, -(CELL / 2 + 0.5)), Vector3.new(CELL + 2, D, 1))
+		shellWall("PitSideC", Vector3.new(CELL / 2 + 0.5, -D / 2, 0), Vector3.new(1, D, CELL))
+		shellWall("PitSideD", Vector3.new(-(CELL / 2 + 0.5), -D / 2, 0), Vector3.new(1, D, CELL))
+	end
+
+	if kind == "entry" or kind == "exit" then
+		m:AddTag("PortalChamberDoor")
+		m:SetAttribute("DoorType", kind)
+		m:SetAttribute("Open", false)
+		if kind == "exit" then removeNamed(m, "PlayerSpawn") end
+		if not opts.editor then -- the editor doesn't need the invisible helper parts (they'd get in the way of clicking)
+			if kind == "entry" then
+				if not m:FindFirstChild("PlayerSpawn", true) then
+					local spawn = Instance.new("Part")
+					spawn.Name = "PlayerSpawn"
+					spawn.Size = Vector3.new(4, 0.4, 4)
+					spawn.CFrame = cf * CFrame.new(0, 0.2, math.min(front, R - 0.5) - 3.5)
+					spawn.Transparency = 1
+					spawn.CanCollide = false
+					spawn.CanQuery = false
+					spawn.CanTouch = false
+					spawn.Parent = m
+				end
+			else
+				local trig = m:FindFirstChild("Exit", true)
+				if not (trig and trig:IsA("BasePart")) then
+					trig = Instance.new("Part")
+					trig.Name = "Exit"
+					-- a generous box right in front of the door: you can't walk up to it without being caught
+					trig.Size = Vector3.new(8, 9, 6)
+					trig.CFrame = cf * CFrame.new(0, 4.5, math.min(front, R - 0.5) - 1.5)
+					trig.Transparency = 1
+					trig.CanCollide = false
+					trig.Parent = m
+				end
+				trig.CanQuery = true
+				trig:AddTag("PortalChamberExit")
+			end
+		end
+	elseif kind == "button" then
+		local pad = m:FindFirstChild("Pad", true) or element
+		pad:AddTag("PortalButton")
+		m:AddTag("PeTIFloorButton") -- PortalServer presses it when a player / cube stands on it
+	elseif kind == "cube" then
+		m:SetAttribute("CubeType", e[7] or nil)
+		m:AddTag("PortalCube")
+	elseif kind == "cubedropper" then
+		element:AddTag("CubeDropper")
+	elseif kind == "laser" then
+		element:AddTag("LaserEmitter")
+	elseif kind == "lasercatcher" then
+		element:AddTag("LaserCatcher")
+		m:AddTag("PeTIMirror") -- PortalServer copies its "Pressed" up to the item
+	elseif kind == "laserfield" then
+		element:AddTag("LaserField")
+	elseif kind == "fizzler" then
+		element:AddTag("Fizzler")
+	elseif kind == "lightbridge" then
+		element:AddTag("LightBridge")
+	elseif kind == "tbeam" then
+		element:AddTag("Funnel")
+	elseif kind == "pedestal" then
+		element:AddTag("PedestalButton")
+		m:AddTag("PeTIMirror") -- PedestalButtonServer presses it, PortalServer copies "Pressed" up to the item
+	elseif kind == "turret" then
+		element:AddTag("Turret")
+	elseif kind == "gate" then
+		m:AddTag("PeTIGate")
+	end
+
+	-- item options (set from the editor's right-click menu)
+	if kind == "tbeam" then
+		m:SetAttribute("BaseReversed", o.mode == "Reversed")
+		C.SetAll(m, "Reversed", o.mode == "Reversed")
+	elseif kind == "cubedropper" then
+		C.SetAll(m, "CubeType", type(o.mode) == "string" and o.mode or "Normal")
+		C.SetAll(m, "DropOnStart", o.dropOnStart ~= false)
+	elseif kind == "faithplate" then
+		-- FaithPlateServer reads these off the FaithPlate model
+		local path = C.FaithPath(e, origin, opts.air)
+		element:SetAttribute("StraightUp", path.up == true)
+		if path.up then
+			element:SetAttribute("UpHeight", path.height)
+			element:SetAttribute("AimPoint", nil)
+			element:SetAttribute("ApexY", nil)
+		else
+			element:SetAttribute("AimPoint", path.aim)
+			element:SetAttribute("ApexY", path.apexY)
+		end
+	end
+	if kind == "button" then
+		m:SetAttribute("ButtonType", type(o.mode) == "string" and o.mode or "Weighted")
+	elseif kind == "pedestal" then
+		-- PedestalButtonServer's three mode checkboxes (only one on) + the timer length
+		local mode = C.PedestalMode(e)
+		for _, md in ipairs(C.PEDESTAL_MODES) do element:SetAttribute(md, md == mode) end
+		element:SetAttribute("TimerLength", tonumber(o.timer) or C.PEDESTAL_TIMER)
+	elseif kind == "gate" then
+		m:SetAttribute("GateMode", C.GateMode(e))
+		m:SetAttribute("Pressed", false)
+	end
+	if C.SWITCHABLE[kind] then
+		if type(o.startOn) == "boolean" then m:SetAttribute("StartOpt", o.startOn) end
+		if kind ~= "exit" then C.SetAll(m, "Enabled", C.StartOn(e, false)) end
+	end
+	-- the fallback laser sheet follows the field's on / off state
+	if kind == "laserfield" and not opts.editor then
+		local fb = m:FindFirstChild("FieldFallback", true)
+		if fb then
+			local function upd() fb.Transparency = (element:GetAttribute("Enabled") == false) and 1 or 0.7 end
+			element:GetAttributeChangedSignal("Enabled"):Connect(upd)
+			upd()
+		end
+	end
+
+	if type(e[8]) == "string" then m:SetAttribute("EntId", e[8]) end
+
+	-- parts hanging off a joint (turret arms, button caps, anything rigged) keep the anchoring they have in
+	-- PortalAssets so the item's own animations / scripts can still move them. Everything else is anchored.
+	local jointed = {}
+	if not opts.editor then
+		for _, j in ipairs(m:GetDescendants()) do
+			if (j:IsA("JointInstance") or j:IsA("WeldConstraint")) and j.Part0 and j.Part1 and j.Part1:IsDescendantOf(m) then
+				jointed[j.Part1] = true
+			end
+		end
+	end
+	eachPart(m, function(p)
+		if opts.editor then
+			p.Anchored, p.CanCollide = true, false
+		elseif kind == "cube" then
+			p.Anchored = false
+		elseif not jointed[p] then
+			p.Anchored = true
+		end
+	end)
+
+	-- hidden logic gates: still work, you just can't see them in game
+	if kind == "gate" and not opts.editor and o.hide == true then
+		eachPart(m, function(p)
+			p.Transparency, p.CanCollide, p.CanQuery, p.CanTouch = 1, false, false, false
+		end)
+		m:SetAttribute("Hidden", true)
+	end
+	return m
+end
+
+function C.BuildChamber(data, parent, origin, opts)
+	opts = opts or {}
+	local cell = C.CELL
+	local model = Instance.new("Model")
+	model.Name = "Chamber"
+	local air = {}
+	for _, c in ipairs(data.air or {}) do air[C.Key(c[1], c[2], c[3])] = true end
+	local faces = data.faces or {}
+	local colors = type(data.colors) == "table" and data.colors or {}
+	local holes = C.HoleFaces(data.ents)
+	opts.air = air -- span items reach to the far wall, faith plates check their target
+	local count = 0
+	for _, c in ipairs(data.air or {}) do
+		for f = 1, 6 do
+			local o = C.OFFS[f]
+			if not air[C.Key(c[1] + o[1], c[2] + o[2], c[3] + o[3])] then
+				local normal = -C.DIRS[f]
+				if not holes[C.FaceKey(c[1], c[2], c[3], f)] and not (opts.cullToward and normal:Dot(opts.cullToward) <= 0.01) then
+					count += 1
+					if opts.maxFaces and count > opts.maxFaces then break end
+					local fk = C.FaceKey(c[1], c[2], c[3], f)
+					local portalable, wallTiles = C.FaceInfo(faces[fk])
+					local p = panelPart(portalable, f, wallTiles and "wall" or nil)
+					p.Anchored = true
+					if opts.editor then
+						p.Size = Vector3.new(cell - 0.35, cell - 0.35, 0.3)
+						p.CFrame = C.FaceCFrame(origin, c[1], c[2], c[3], f, 0.15)
+						local rim = Instance.new("Part")
+						rim.Anchored, rim.Size = true, Vector3.new(cell + 0.6, cell + 0.6, 2.4)
+						rim.CFrame = C.FaceCFrame(origin, c[1], c[2], c[3], f, 1.5)
+						rim.Color = portalable and Color3.fromRGB(198, 201, 198) or Color3.fromRGB(96, 104, 101)
+						rim.Parent = model
+					else
+						C.PlacePanel(p, C.FaceCFrame(origin, c[1], c[2], c[3], f, 0.5), cell, 1)
+					end
+					local tint = C.TileTint(tonumber(colors[fk]), portalable)
+					if tint then C.TintPanel(p, tint) end
+					p.Name = "Panel"
+					p:SetAttribute("Portalable", portalable)
+					p:SetAttribute("Face", fk)
+					p.Parent = model
+				end
+			end
+		end
+	end
+	for i, e in ipairs(data.ents or {}) do
+		local ok, ent = pcall(C.BuildEntity, e, origin, opts)
+		if ok and ent then
+			eachPart(ent, function(p) p:SetAttribute("EntIndex", i) end)
+			ent.Parent = model
+		elseif not ok then
+			warn("[PortalConfig] BuildEntity", e[1], ent)
+		end
+	end
+	model.Parent = parent
+	return model
+end
+
+-- ==========================================
+-- ANTLINES (connection lines along the chamber surfaces)
+-- ==========================================
+-- Shortest path over the panels from one item's tile to another's (walking across tiles, round inside corners and
+-- over outside edges). Returns a list of { a = Vector3, b = Vector3, n = normal } segments, panel centre to tile edge to
+-- panel centre, ready to be dotted. lift = how far off the surface.
+local function faceExists(air, x, y, z, f)
+	local o = C.OFFS[f]
+	return air[C.Key(x, y, z)] and not air[C.Key(x + o[1], y + o[2], z + o[3])]
+end
+local function faceIndex(v)
+	for i, d in ipairs(C.DIRS) do
+		if d:Dot(v) > 0.9 then return i end
+	end
+end
+function C.AntlinePath(air, a, b, origin, lift)
+	lift = lift or 0.15
+	if not (faceExists(air, a[1], a[2], a[3], a[4]) and faceExists(air, b[1], b[2], b[3], b[4])) then return nil end
+	local function fkey(x, y, z, f) return x .. "," .. y .. "," .. z .. "," .. f end
+	local startK, goalK = fkey(a[1], a[2], a[3], a[4]), fkey(b[1], b[2], b[3], b[4])
+	local prev, nodes = { [startK] = false }, { [startK] = a }
+	local queue, head = { a }, 1
+	local found = startK == goalK
+	while head <= #queue and not found do
+		local cur = queue[head]
+		head += 1
+		local x, y, z, f = cur[1], cur[2], cur[3], cur[4]
+		local d = C.DIRS[f]
+		for tf = 1, 6 do
+			local t = C.DIRS[tf]
+			if math.abs(t:Dot(d)) < 0.5 then
+				local o = C.OFFS[tf]
+				local nx, ny, nz = x + o[1], y + o[2], z + o[3]
+				local nb
+				if not air[C.Key(nx, ny, nz)] then
+					nb = { x, y, z, tf } -- inside corner: the wall we walked into
+				elseif faceExists(air, nx, ny, nz, f) then
+					nb = { nx, ny, nz, f } -- same plane
+				else
+					local fo = C.OFFS[f]
+					local wrap = faceIndex(-t)
+					nb = { nx + fo[1], ny + fo[2], nz + fo[3], wrap } -- over an outside edge
+					if not faceExists(air, nb[1], nb[2], nb[3], nb[4]) then nb = nil end
+				end
+				if nb then
+					local k = fkey(nb[1], nb[2], nb[3], nb[4])
+					if prev[k] == nil then
+						prev[k] = { from = fkey(x, y, z, f), t = t }
+						nodes[k] = nb
+						if k == goalK then found = true break end
+						table.insert(queue, nb)
+					end
+				end
+			end
+		end
+		if #queue > 12000 then break end
+	end
+	if not found then return nil end
+	-- walk back
+	local chain = {}
+	local k = goalK
+	while k do
+		table.insert(chain, 1, { node = nodes[k], step = prev[k] })
+		k = prev[k] and prev[k].from or nil
+	end
+	local function center(n)
+		return origin + Vector3.new(n[1], n[2], n[3]) * C.CELL + C.DIRS[n[4]] * (C.CELL / 2)
+	end
+	local segs = {}
+	for i = 1, #chain - 1 do
+		local n1, n2 = chain[i].node, chain[i + 1].node
+		local t = chain[i + 1].step.t
+		local c1, c2 = center(n1), center(n2)
+		local nrm1, nrm2 = -C.DIRS[n1[4]], -C.DIRS[n2[4]]
+		local edge = c1 + t * (C.CELL / 2)
+		table.insert(segs, { a = c1 + nrm1 * lift, b = edge + nrm1 * lift, n = nrm1 })
+		table.insert(segs, { a = edge + nrm2 * lift, b = c2 + nrm2 * lift, n = nrm2 })
+	end
+	-- join straight runs
+	local out = {}
+	for _, sg in ipairs(segs) do
+		local last = out[#out]
+		if last and last.n:Dot(sg.n) > 0.99 and (last.b - sg.a).Magnitude < 0.05
+			and (last.b - last.a).Unit:Dot((sg.b - sg.a).Unit) > 0.99 then
+			last.b = sg.b
+		elseif (sg.b - sg.a).Magnitude > 0.01 then
+			table.insert(out, sg)
+		end
+	end
+	return out
+end
+
+-- dots along the path: { cf, corner } (corner / ends get the hollow ring look)
+C.ANTLINE_SPACING = 1.25
+function C.AntlineDots(segs)
+	local dots = {}
+	for i, sg in ipairs(segs) do
+		local len = (sg.b - sg.a).Magnitude
+		local dir = (sg.b - sg.a) / math.max(len, 1e-4)
+		local n = math.max(math.floor(len / C.ANTLINE_SPACING + 0.5), 1)
+		for k = (i == 1) and 0 or 1, n do
+			local p = sg.a + dir * (len * k / n)
+			local corner = (i == 1 and k == 0) or k == n
+			table.insert(dots, { cf = CFrame.lookAt(p, p + sg.n), corner = corner })
+		end
+	end
+	return dots
+end
+
+-- one antline dot (a flat disc lying on the surface)
+function C.AntlineDot(cf, corner, color, parent)
+	local p = Instance.new("Part")
+	p.Name = "AntDot"
+	p.Shape = Enum.PartType.Cylinder
+	p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = true, false, false, false, false
+	p.Material = Enum.Material.Neon
+	p.Color = color
+	local d = corner and 0.75 or 0.5
+	p.Size = Vector3.new(0.04, d, d)
+	p.CFrame = cf * CFrame.Angles(0, math.rad(90), 0) -- cylinder axis (X) along the surface normal
+	p.Parent = parent
+	if corner then -- hollow ring: a darker disc on top
+		local hole = p:Clone()
+		hole.Name = "AntDotHole"
+		hole.Material = Enum.Material.SmoothPlastic
+		hole.Color = Color3.fromRGB(235, 240, 238)
+		hole.Size = Vector3.new(0.05, d * 0.55, d * 0.55)
+		hole.CFrame = cf * CFrame.new(0, 0, -0.01) * CFrame.Angles(0, math.rad(90), 0)
+		hole.Parent = parent
+		return p, hole
+	end
+	return p
+end
+
+-- signage: a small square sign on the item's tile (frame = C.ItemFrame), the inner square shows the state
+function C.BuildSign(frame, parent)
+	local m = Instance.new("Model")
+	m.Name = "ConnectionSign"
+	local cf = frame * CFrame.new(C.CELL * 0.3, C.CELL * 0.3, -0.12)
+	local function plate(name, size, color, z)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = true, false, false, false, false
+		p.Material = Enum.Material.SmoothPlastic
+		p.Size = Vector3.new(size, size, 0.06)
+		p.Color = color
+		p.CFrame = cf * CFrame.new(0, 0, z)
+		p.Parent = m
+		return p
+	end
+	plate("Plate", 1.8, Color3.fromRGB(240, 242, 240), 0)
+	plate("Frame", 1.2, Color3.fromRGB(30, 32, 32), -0.02)
+	plate("Light", 0.75, C.ANT_OFF, -0.04).Material = Enum.Material.Neon
+	m.Parent = parent
+	return m
+end
+C.ANT_OFF = Color3.fromRGB(80, 200, 220)  -- antline / sign off (Portal 2 blue)
+C.ANT_ON = Color3.fromRGB(255, 160, 40)   -- on (orange)
+
+-- ==========================================
+-- FAITH PLATES
+-- ==========================================
+-- e[10]: fx, fy, fz, ff = the panel it throws you at (none = straight up)
+--        arc = studs the arc rises above the higher end (straight up: how high it throws you)
+C.FAITH_ARC = 20
+C.FAITH_LANDING = 3 -- studs off the target panel that the player's middle is aimed at
+
+function C.FaithTarget(e, air)
+	local o = C.Options(e)
+	local x, y, z, f = tonumber(o.fx), tonumber(o.fy), tonumber(o.fz), tonumber(o.ff)
+	if not (x and y and z and f and C.OFFS[f]) then return nil end
+	if air then
+		local off = C.OFFS[f]
+		if not air[C.Key(x, y, z)] or air[C.Key(x + off[1], y + off[2], z + off[3])] then return nil end -- panel's gone
+	end
+	return x, y, z, f
+end
+
+function C.FaithPath(e, origin, air)
+	local arc = tonumber(C.Options(e).arc) or C.FAITH_ARC
+	local p0 = origin + Vector3.new(e[2], e[3], e[4]) * C.CELL + C.DIRS[e[5]] * (C.CELL / 2) + Vector3.new(0, 1, 0)
+	local x, y, z, f = C.FaithTarget(e, air)
+	if not x then
+		return { up = true, p0 = p0, height = arc, apex = p0 + Vector3.new(0, arc, 0) }
+	end
+	local d = C.DIRS[f]
+	local surface = origin + Vector3.new(x, y, z) * C.CELL + d * (C.CELL / 2)
+	local aim = surface - d * C.FAITH_LANDING
+	return { p0 = p0, surface = surface, aim = aim, normal = -d, f = f, arc = arc, apexY = math.max(p0.Y, aim.Y) + arc }
+end
+
+-- launch velocity from p0 that peaks at apexY and comes down through p1. Also returns flight time / time to the top.
+function C.Ballistic(p0, p1, apexY, g)
+	g = g or workspace.Gravity
+	apexY = math.max(apexY, p0.Y + 0.5, p1.Y + 0.5)
+	local vy = math.sqrt(2 * g * (apexY - p0.Y))
+	local tUp = vy / g
+	local t = tUp + math.sqrt(2 * (apexY - p1.Y) / g)
+	return Vector3.new((p1.X - p0.X) / t, vy, (p1.Z - p0.Z) / t), t, tUp
+end
+
+-- points along the arc (for the editor's dashed line) and the top of it (the yellow ball)
+function C.FaithPoints(path, n, g)
+	if path.up then return { path.p0, path.apex }, path.apex end
+	g = g or workspace.Gravity
+	local v, t, tUp = C.Ballistic(path.p0, path.aim, path.apexY, g)
+	local pts = {}
+	for i = 0, n do
+		local s = t * i / n
+		table.insert(pts, path.p0 + v * s - Vector3.new(0, 0.5 * g * s * s, 0))
+	end
+	table.insert(pts, path.surface)
+	local apex = path.p0 + v * tUp - Vector3.new(0, 0.5 * g * tUp * tUp, 0)
+	return pts, apex
+end
+
+function C.DefaultChamber()
+	local air = {}
+	for x = -3, 3 do
+		for z = -3, 3 do
+			for y = 0, 2 do table.insert(air, { x, y, z }) end
+		end
+	end
+	return { v = 2, air = air, faces = {}, colors = {}, ents = {
+		{ "entry", -3, 0, 0, 2, 0, false, "entry000" },
+		{ "exit", 3, 0, 0, 1, 0, false, "exit0000" },
+	} }
+end
+
+function C.Chapter(i) return C.CHAPTERS[i] end
+function C.Achievement(id)
+	for _, a in ipairs(C.ACHIEVEMENTS) do if a.id == id then return a end end
+end
+function C.Item(id)
+	for _, it in ipairs(C.STORE) do if it.id == id then return it end end
+end
+function C.Chamber(id)
+	for _, course in ipairs(C.COURSES) do
+		for _, ch in ipairs(course.chambers) do
+			if ch.id == id then return ch, course end
+		end
+	end
+end
+
+return C

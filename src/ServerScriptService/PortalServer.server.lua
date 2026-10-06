@@ -1,0 +1,1981 @@
+-- PortalServer
+-- ServerScriptService (Script)
+-- Back end for PortalMenu: profiles (DataStore), save slots, chapters/acts, achievements, settings,
+-- co-op (invites + quick match), Workshop (publish / browse / rate / queue), the test chamber editor,
+-- Robot Enrichment store and Challenge Mode leaderboards.
+--
+-- Talks to clients through ReplicatedStorage.PortalNet:
+--   Request (RemoteFunction)  client -> server   Request:InvokeServer(action, arg) -> ok, result
+--   Push    (RemoteEvent)     server -> client   Push.OnClientEvent(kind, data)
+--
+-- Other SERVER scripts can use the API on `shared.PortalData` (see the bottom of this file), e.g. from your portal gun:
+--   shared.PortalData.CountPortal(player)
+--   shared.PortalData.Unlock(player, "WAKE_UP")
+--   shared.PortalData.AddProgress(player, "PORTALS_100", 1)
+--   shared.PortalData.RegisterSaveHook("Portals", saveFn(player) -> table, loadFn(player, table))
+--
+-- Rig changer (gives you the portal gun rig for editor playtests). This script looks for, in order:
+--   shared.RigChanger                          a function(player, action, opts) or a table with .Change / [action]
+--   a BindableFunction / BindableEvent named "RigChange", "RigChanger" or "RigChangerServer"
+--   anywhere in ServerScriptService, ServerStorage or ReplicatedStorage   -> called as (player, action, opts)
+-- action is "Equip". Your rig script should set the character attribute "HasPortalGun" = true when it's done.
+--
+-- Map triggers (CollectionService tags, work inside cloned maps). Detection is overlap-based (not .Touched), so it
+-- catches players who fly through fast, land on them, or stand in them:
+--   PortalChapterEnd   Part (or Model), number attribute "Chapter". Unlocks the next chapter, autosaves, and loads the
+--                      next chapter if bool attribute "AutoAdvance" is true.
+--   PortalAutosave     Part. Autosaves when entered (once per part per player).
+--   PortalAchievement  Part, string attribute "Achievement".
+--   PortalChamberExit  Part. Finishes a Workshop chamber / challenge chamber / editor playtest.
+--
+-- Chamber doors (ChamberLockDoor, tagged PortalChamberDoor by PortalConfig) get these attributes, kept up to date:
+--   Open (bool)        exit door: a player is near AND (it has no inputs connected OR they're all on). entry: false
+--   PlayerNear (bool)  someone is within Config.DOOR_OPEN_RADIUS
+-- Have your door's own script open / close on the "Open" attribute.
+--
+-- Connections (editor chambers): buttons, pedestals, laser catchers and logic gates drive the items they're wired to.
+-- An item with several inputs needs ALL of them on (Portal 2). Logic gates combine inputs (AND / OR / NOT / XOR / NAND /
+-- NOR) and can feed each other. Droppers drop a new cube every time their inputs turn on.
+--
+-- Studio: turn on Game Settings > Security > "Enable Studio Access to API Services" for DataStores / MemoryStores.
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local ServerStorage = game:GetService("ServerStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+local TeleportService = game:GetService("TeleportService")
+local MemoryStoreService = game:GetService("MemoryStoreService")
+local MessagingService = game:GetService("MessagingService")
+local MarketplaceService = game:GetService("MarketplaceService")
+local HttpService = game:GetService("HttpService")
+local TextService = game:GetService("TextService")
+local RunService = game:GetService("RunService")
+
+local Config = require(ReplicatedStorage:WaitForChild("PortalConfig"))
+
+-- ==========================================
+-- NETWORK
+-- ==========================================
+local net = ReplicatedStorage:FindFirstChild("PortalNet") or Instance.new("Folder")
+net.Name = "PortalNet"
+net.Parent = ReplicatedStorage
+local Request = net:FindFirstChild("Request") or Instance.new("RemoteFunction")
+Request.Name = "Request"
+Request.Parent = net
+local Push = net:FindFirstChild("Push") or Instance.new("RemoteEvent")
+Push.Name = "Push"
+Push.Parent = net
+
+-- ==========================================
+-- DATASTORES (all wrapped, so the game still runs without API access)
+-- ==========================================
+local function getStore(name, ordered)
+	local ok, s = pcall(function()
+		return ordered and DataStoreService:GetOrderedDataStore(name) or DataStoreService:GetDataStore(name)
+	end)
+	return ok and s or nil
+end
+local profileStore = getStore("PortalProfile_v1")
+local workshopStore = getStore("PortalWorkshop_v1")
+
+local function retry(fn, tries)
+	for i = 1, tries or 3 do
+		local ok, a, b = pcall(fn)
+		if ok then return true, a, b end
+		if i < (tries or 3) then task.wait(1.5 * i) else warn("[PortalServer] DataStore:", a) end
+	end
+	return false
+end
+
+local function filterText(text, player)
+	local ok, filtered = pcall(function()
+		return TextService:FilterStringAsync(text, player.UserId):GetNonChatStringForBroadcastAsync()
+	end)
+	return ok and filtered or nil
+end
+
+-- ==========================================
+-- PROFILES
+-- ==========================================
+local profiles = {}
+local loadedEvent = {}
+local dirty = {}
+
+local function newProfile()
+	return {
+		v = 1,
+		settings = {},
+		saves = {},
+		maxChapter = 1,
+		achievements = {},
+		progress = {},
+		inventory = {},
+		equipped = { blue = {}, orange = {} },
+		queue = {},
+		follows = {},
+		drafts = {},
+		published = {},
+		stats = { portals = 0, playtime = 0 },
+	}
+end
+
+local function reconcile(p)
+	local template = newProfile()
+	for k, v in pairs(template) do
+		if p[k] == nil then p[k] = v end
+	end
+	local drafts = {}
+	for _, d in ipairs(p.drafts or {}) do
+		if type(d) == "table" and d.id and type(d.data) == "table" and d.data.v == 2 then table.insert(drafts, d) end
+	end
+	p.drafts = drafts
+	p.equipped.blue = p.equipped.blue or {}
+	p.equipped.orange = p.equipped.orange or {}
+	return p
+end
+
+local function saveProfile(player)
+	local p = profiles[player]
+	if not p or not profileStore then return end
+	dirty[player] = nil
+	retry(function()
+		profileStore:UpdateAsync("u_" .. player.UserId, function()
+			return p
+		end)
+	end)
+end
+
+-- waits for the profile even if the client asks before PlayerAdded has run on the server
+local function getProfile(player, timeout)
+	if profiles[player] then return profiles[player] end
+	local t0 = os.clock()
+	while not profiles[player] and player.Parent and os.clock() - t0 < (timeout or 20) do
+		task.wait(0.1)
+	end
+	return profiles[player]
+end
+
+local function markDirty(player) dirty[player] = true end
+
+-- ==========================================
+-- ACHIEVEMENTS
+-- ==========================================
+local function unlock(player, id)
+	local p = getProfile(player, 5)
+	local def = Config.Achievement(id)
+	if not p or not def or p.achievements[id] then return false end
+	p.achievements[id] = os.time()
+	markDirty(player)
+	Push:FireClient(player, "Achievement", { id = id })
+	return true
+end
+
+local function addProgress(player, id, amount)
+	local p = getProfile(player, 5)
+	local def = Config.Achievement(id)
+	if not p or not def then return end
+	p.progress[id] = (p.progress[id] or 0) + (amount or 1)
+	markDirty(player)
+	if def.goal and p.progress[id] >= def.goal then unlock(player, id) end
+end
+
+-- ==========================================
+-- CHARACTERS
+-- ==========================================
+local lastPos = {} -- [player] = Vector3, used by trigger detection (cleared on teleports)
+
+local function charRoot(player)
+	local char = player.Character
+	if not char then return nil end
+	return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart or char:FindFirstChildWhichIsA("BasePart")
+end
+
+local function waitRoot(player, timeout)
+	local t0 = os.clock()
+	while player.Parent and not charRoot(player) and os.clock() - t0 < (timeout or 5) do task.wait() end
+	return charRoot(player)
+end
+
+local function placeCharacter(player, cf)
+	if not cf then return end
+	if not player.Character then player.CharacterAdded:Wait() end
+	local root = waitRoot(player, 5)
+	if not root then return end
+	local char = player.Character
+	root.Anchored = false
+	char:PivotTo(cf)
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.AssemblyLinearVelocity = Vector3.zero
+			part.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+	lastPos[player] = nil -- don't sweep trigger detection across the teleport
+end
+
+local function spawnCF(spawnPart)
+	local look = spawnPart.CFrame.LookVector
+	local flat = Vector3.new(look.X, 0, look.Z)
+	if flat.Magnitude < 0.01 then flat = Vector3.new(0, 0, -1) end
+	local pos = spawnPart.Position + Vector3.new(0, spawnPart.Size.Y / 2 + 3.5, 0)
+	return CFrame.lookAt(pos, pos + flat.Unit)
+end
+
+local function findSpawn(root, color)
+	if not root then return nil end
+	local s = (color and root:FindFirstChild("PlayerSpawn" .. color, true)) or root:FindFirstChild("PlayerSpawn", true)
+	return s and s:IsA("BasePart") and s or nil
+end
+
+local function sendToLobby(player)
+	local s = workspace:FindFirstChild(Config.LOBBY_SPAWN)
+	if s and s:IsA("BasePart") then placeCharacter(player, spawnCF(s)) end
+end
+
+-- ----- rig changer hook -----
+local rigHookCache, rigWarned = nil, false
+local RIG_NAMES = { RigChangerEvent = true, RigChange = true, RigChanger = true, RigChangerServer = true }
+local function findRigHook()
+	local s = shared.RigChanger
+	if type(s) == "function" or type(s) == "table" then return s end
+	if rigHookCache and rigHookCache.Parent then return rigHookCache end
+	rigHookCache = nil
+	for _, root in ipairs({ ServerScriptService, ServerStorage, ReplicatedStorage }) do
+		for _, d in ipairs(root:GetDescendants()) do
+			if RIG_NAMES[d.Name] and (d:IsA("BindableFunction") or d:IsA("BindableEvent")) then
+				rigHookCache = d
+				return d
+			end
+		end
+	end
+	return nil
+end
+
+local lastRig = {}
+local function rigChange(player, action, opts)
+	local hook = findRigHook()
+	if not hook then
+		if not rigWarned then
+			rigWarned = true
+			warn("[PortalServer] no rig changer found (shared.RigChanger or a BindableFunction/Event named RigChange) - playtest continues without it")
+		end
+		return false
+	end
+	lastRig[player] = os.clock()
+	player:SetAttribute("RigWaitFrom", player:GetAttribute("RigChangeDone") or 0)
+	local ok, err = pcall(function()
+		if type(hook) == "function" then
+			hook(player, action, opts)
+		elseif type(hook) == "table" then
+			if type(hook.Change) == "function" then hook.Change(player, action, opts)
+			elseif type(hook[action]) == "function" then hook[action](player, opts) end
+		elseif hook:IsA("BindableFunction") then
+			hook:Invoke(player, action, opts)
+		else
+			hook:Fire(player, action, opts)
+		end
+	end)
+	if not ok then warn("[PortalServer] rig changer:", err) end
+	return ok
+end
+
+-- waits until the rig swap is done: RigChangerServer bumps RigChangeDone when it finishes a request
+-- (other rig scripts: a new character, or the old one got HasPortalGun)
+local function waitForRig(player, oldChar, timeout)
+	local from = player:GetAttribute("RigWaitFrom") or 0
+	local t0 = os.clock()
+	while player.Parent and os.clock() - t0 < (timeout or 5) do
+		local c = player.Character
+		local done = (player:GetAttribute("RigChangeDone") or 0) ~= from
+			or (c and (c ~= oldChar or c:GetAttribute("HasPortalGun")))
+		if done and c and charRoot(player) then return true end
+		task.wait()
+	end
+	return false
+end
+
+-- ==========================================
+-- MAPS
+-- ==========================================
+local activeMapName = nil
+
+local function activeFolder()
+	local f = workspace:FindFirstChild("ActiveMap")
+	if not f then
+		f = Instance.new("Folder")
+		f.Name = "ActiveMap"
+		f.Parent = workspace
+	end
+	return f
+end
+
+local function clearActive()
+	activeFolder():ClearAllChildren()
+	activeMapName = nil
+end
+
+local function loadMap(name, force)
+	if activeMapName == name and not force and #activeFolder():GetChildren() > 0 then
+		return activeFolder()
+	end
+	local maps = ServerStorage:FindFirstChild(Config.MAPS_FOLDER)
+	local src = maps and maps:FindFirstChild(name)
+	clearActive()
+	if not src then
+		warn(("[PortalServer] map '%s' not found in ServerStorage.%s"):format(tostring(name), Config.MAPS_FOLDER))
+		return nil
+	end
+	src:Clone().Parent = activeFolder()
+	activeMapName = name
+	return activeFolder()
+end
+
+-- ==========================================
+-- SAVE GAMES
+-- ==========================================
+local saveHooks = {}
+
+local function summarizeSaves(p)
+	local list = {}
+	for _, s in ipairs(p.saves) do
+		table.insert(list, { id = s.id, time = s.time, chapter = s.chapter, auto = s.auto })
+	end
+	table.sort(list, function(a, b) return a.time > b.time end)
+	return list
+end
+
+local function makeSave(player, slotId, auto)
+	local p = getProfile(player, 5)
+	if not p then return nil, "Profile not loaded" end
+	local root = charRoot(player)
+	local chapter = player:GetAttribute("Chapter")
+	if not chapter then return nil, "You can only save while playing a chapter." end
+	local entry
+	if auto then
+		for _, s in ipairs(p.saves) do if s.auto then entry = s end end
+	elseif slotId then
+		for _, s in ipairs(p.saves) do if s.id == slotId and not s.auto then entry = s end end
+	end
+	if not entry then
+		local manual = 0
+		for _, s in ipairs(p.saves) do if not s.auto then manual += 1 end end
+		if not auto and manual >= Config.MAX_SAVE_SLOTS then return nil, "All save slots are full. Overwrite one instead." end
+		entry = { id = HttpService:GenerateGUID(false), auto = auto or false }
+		table.insert(p.saves, entry)
+	end
+	entry.time = os.time()
+	entry.chapter = chapter
+	entry.map = activeMapName
+	entry.cf = root and { root.CFrame:GetComponents() } or nil
+	entry.hooks = {}
+	for name, h in pairs(saveHooks) do
+		local ok, data = pcall(h.save, player)
+		if ok and data ~= nil then entry.hooks[name] = data end
+	end
+	markDirty(player)
+	if not auto then unlock(player, "FIRST_SAVE") end
+	task.spawn(saveProfile, player)
+	return entry
+end
+
+local function latestSave(p)
+	local best
+	for _, s in ipairs(p.saves) do
+		if not best or s.time > best.time then best = s end
+	end
+	return best
+end
+
+local function startChapter(player, index)
+	local def = Config.Chapter(index)
+	if not def then return false, "That chapter doesn't exist." end
+	if def.placeId then
+		local ok, err = pcall(function()
+			local opts = Instance.new("TeleportOptions")
+			opts:SetTeleportData({ action = "NewGame", chapter = index })
+			TeleportService:TeleportAsync(def.placeId, { player }, opts)
+		end)
+		return ok, err
+	end
+	local root = loadMap(def.map, true)
+	player:SetAttribute("Chapter", index)
+	player:SetAttribute("ChallengeChamber", nil)
+	player:SetAttribute("WorkshopMap", nil)
+	local s = findSpawn(root)
+	if s then placeCharacter(player, spawnCF(s)) end
+	return true
+end
+
+local function loadSave(player, save)
+	if not save then return false, "Save not found." end
+	local def = Config.Chapter(save.chapter)
+	if not def then return false, "That save's chapter no longer exists." end
+	if def.placeId then
+		local ok, err = pcall(function()
+			local opts = Instance.new("TeleportOptions")
+			opts:SetTeleportData({ action = "LoadGame", saveId = save.id })
+			TeleportService:TeleportAsync(def.placeId, { player }, opts)
+		end)
+		return ok, err
+	end
+	local root = loadMap(save.map or def.map, true)
+	player:SetAttribute("Chapter", save.chapter)
+	player:SetAttribute("ChallengeChamber", nil)
+	player:SetAttribute("WorkshopMap", nil)
+	if save.cf then
+		placeCharacter(player, CFrame.new(table.unpack(save.cf)))
+	else
+		local s = findSpawn(root)
+		if s then placeCharacter(player, spawnCF(s)) end
+	end
+	for name, data in pairs(save.hooks or {}) do
+		local h = saveHooks[name]
+		if h and h.load then
+			local ok, err = pcall(h.load, player, data)
+			if not ok then warn("[PortalServer] save hook", name, err) end
+		end
+	end
+	return true
+end
+
+local function finishChapter(player, index)
+	local p = getProfile(player, 5)
+	if not p then return end
+	p.maxChapter = math.max(p.maxChapter, math.min(index + 1, #Config.CHAPTERS))
+	for _, a in ipairs(Config.ACHIEVEMENTS) do
+		if a.chapter == index then unlock(player, a.id) end
+	end
+	markDirty(player)
+	Push:FireClient(player, "ChapterUnlocked", { maxChapter = p.maxChapter })
+end
+
+-- ==========================================
+-- WORKSHOP
+-- ==========================================
+local workshopCache = { t = 0, list = {} }
+local localWorkshop = {}
+
+local function workshopIndex(force)
+	if not force and os.clock() - workshopCache.t < 45 then return workshopCache.list end
+	if workshopStore then
+		local ok, list = retry(function() return workshopStore:GetAsync("index") end, 2)
+		if ok then workshopCache.list = list or {} end
+	else
+		workshopCache.list = localWorkshop.index or {}
+	end
+	workshopCache.t = os.clock()
+	return workshopCache.list
+end
+
+local function updateIndex(fn)
+	if workshopStore then
+		retry(function()
+			workshopStore:UpdateAsync("index", function(list)
+				list = list or {}
+				fn(list)
+				return list
+			end)
+		end)
+	else
+		localWorkshop.index = localWorkshop.index or {}
+		fn(localWorkshop.index)
+	end
+	workshopCache.t = 0
+end
+
+local function getMapData(id)
+	if workshopStore then
+		local ok, data = retry(function() return workshopStore:GetAsync("map_" .. id) end, 2)
+		return ok and data or nil
+	end
+	return localWorkshop["map_" .. id]
+end
+
+-- validates a chamber coming from a client (and keeps the item ids so connections survive)
+local function cleanMap(data)
+	if type(data) ~= "table" then return nil, "Bad data." end
+	local L = Config.EDITOR_LIMITS
+	local out = { v = 2, air = {}, faces = {}, ents = {}, links = {}, coop = data.coop == true }
+	if type(data.air) ~= "table" or #data.air > L.cells then return nil, "That chamber is too big." end
+	local air = {}
+	for _, c in ipairs(data.air) do
+		if type(c) == "table" then
+			local x, y, z = math.floor(tonumber(c[1]) or 0), math.floor(tonumber(c[2]) or 0), math.floor(tonumber(c[3]) or 0)
+			local k = Config.Key(x, y, z)
+			if math.abs(x) <= L.x and math.abs(z) <= L.z and y >= L.yMin and y <= L.yMax and not air[k] then
+				air[k] = true
+				table.insert(out.air, { x, y, z })
+			end
+		end
+	end
+	if #out.air == 0 then return nil, "The chamber is empty." end
+	if type(data.faces) == "table" then
+		local n = 0
+		for k, v in pairs(data.faces) do
+			n += 1
+			if n > L.cells * 6 then break end
+			if type(k) == "string" and (v == 0 or v == 2 or v == 3) and k:match("^%-?%d+,%-?%d+,%-?%d+,[1-6]$") then out.faces[k] = v end
+		end
+	end
+	local uniques, taken, ids = {}, {}, {}
+	if type(data.ents) == "table" then
+		for i, e in ipairs(data.ents) do
+			if i > L.ents then break end
+			local def = type(e) == "table" and Config.ENTITY_TYPES[e[1]]
+			if def then
+				local x, y, z = math.floor(tonumber(e[2]) or 0), math.floor(tonumber(e[3]) or 0), math.floor(tonumber(e[4]) or 0)
+				local f = math.floor(tonumber(e[5]) or 4)
+				local k = Config.Key(x, y, z)
+				local slot = k .. "," .. f
+				local o = Config.OFFS[f]
+				local wallOk = o and not air[Config.Key(x + o[1], y + o[2], z + o[3])]
+				local mountOk = Config.MountOk(def, f)
+				local floorOk = not def.needsFloor or not air[Config.Key(x, y - 1, z)]
+				if air[k] and wallOk and mountOk and floorOk and not taken[slot] and not (def.mandatory and uniques[e[1]]) then
+					taken[slot] = true
+					uniques[e[1]] = true
+					local variant = (e[1] == "cube" and type(e[7]) == "string") and e[7]:sub(1, 50) or false
+					local id = type(e[8]) == "string" and e[8]:sub(1, 16) or HttpService:GenerateGUID(false):gsub("-", ""):sub(1, 8)
+					if ids[id] then id = HttpService:GenerateGUID(false):gsub("-", ""):sub(1, 8) end
+					ids[id] = e[1]
+					local span = def.span and tonumber(e[9]) and math.clamp(math.floor(tonumber(e[9])), 1, 60) or false
+					local oo, opt = type(e[10]) == "table" and e[10] or {}, {}
+					if type(oo.mode) == "string" then opt.mode = oo.mode:sub(1, 40) end
+					if type(oo.startOn) == "boolean" then opt.startOn = oo.startOn end
+					if type(oo.dropOnStart) == "boolean" then opt.dropOnStart = oo.dropOnStart end
+					if type(oo.hide) == "boolean" then opt.hide = oo.hide end
+					if oo.vis == "Antline" or oo.vis == "Signage" or oo.vis == "None" then opt.vis = oo.vis end
+					if tonumber(oo.timer) then opt.timer = math.clamp(math.floor(tonumber(oo.timer)), 1, 30) end
+					for _, gk in ipairs({ "gx0", "gx1", "gz0", "gz1" }) do
+						if tonumber(oo[gk]) then opt[gk] = math.clamp(math.floor(tonumber(oo[gk])), 0, 28) end
+					end
+					if tonumber(oo.fx) and tonumber(oo.fy) and tonumber(oo.fz) and tonumber(oo.ff) then
+						opt.fx = math.clamp(math.floor(tonumber(oo.fx)), -60, 60)
+						opt.fy = math.clamp(math.floor(tonumber(oo.fy)), -60, 60)
+						opt.fz = math.clamp(math.floor(tonumber(oo.fz)), -60, 60)
+						opt.ff = math.clamp(math.floor(tonumber(oo.ff)), 1, 6)
+					end
+					if tonumber(oo.arc) then opt.arc = math.clamp(math.floor(tonumber(oo.arc)), 2, 200) end
+					table.insert(out.ents, { e[1], x, y, z, f, math.floor(tonumber(e[6]) or 0) % 4, variant, id, span, next(opt) and opt or false })
+				end
+			end
+		end
+	end
+	if type(data.links) == "table" then
+		local seen = {}
+		for i, l in ipairs(data.links) do
+			if i > 150 then break end
+			if type(l) == "table" and type(l[1]) == "string" and type(l[2]) == "string" and l[1] ~= l[2] then
+				local a, b = ids[l[1]], ids[l[2]]
+				local pair = l[1] .. ">" .. l[2]
+				if a and b and Config.CanSource(a) and Config.CanTarget(b) and not seen[pair] then
+					seen[pair] = true
+					table.insert(out.links, { l[1], l[2] })
+				end
+			end
+		end
+	end
+	if not (uniques.entry and uniques.exit) then return nil, "The chamber needs its Entry Door and Exit Door." end
+	return out
+end
+
+-- the cube dropper model inside an item (TestElementsServer runs that one)
+local function dropperIn(t)
+	if CollectionService:HasTag(t, "CubeDropper") then return t end
+	for _, d in ipairs(t:GetDescendants()) do
+		if d:IsA("Model") and (CollectionService:HasTag(d, "CubeDropper") or d.Name:lower():find("dropper")) then return d end
+	end
+	return t
+end
+
+-- antlines (dotted lines over the panels) or signs for one link; recoloured blue / orange by the source's state
+local function drawConnection(root, air, ea, eb)
+	local vis = (type(ea[10]) == "table" and ea[10].vis) or "Antline"
+	local parts = {}
+	local folder = root:FindFirstChild("Antlines") or Instance.new("Folder")
+	folder.Name = "Antlines"
+	folder.Parent = root
+	if vis == "Antline" then
+		local segs = Config.AntlinePath(air, { ea[2], ea[3], ea[4], ea[5] }, { eb[2], eb[3], eb[4], eb[5] }, Config.EDITOR_ORIGIN, 0.06)
+		if segs then
+			for _, d in ipairs(Config.AntlineDots(segs)) do
+				table.insert(parts, Config.AntlineDot(d.cf, d.corner, Config.ANT_OFF, folder))
+			end
+		end
+	elseif vis == "Signage" then
+		for _, e in ipairs({ ea, eb }) do
+			local sign = Config.BuildSign(Config.ItemFrame(Config.EDITOR_ORIGIN, e), folder)
+			table.insert(parts, sign:FindFirstChild("Light"))
+		end
+	end
+	return parts
+end
+
+local function isOn(s)
+	return s:GetAttribute("Pressed") == true or s:GetAttribute("PressesButton") == true
+end
+
+-- Wires up a built chamber. Sources report on their item model ("Pressed"). Logic gates work out their output from
+-- their inputs and set their own "Pressed". Every other item turns on when ALL of its inputs are on: flips from its
+-- start state (Config.LINK_DEFAULT_ON / "Start enabled"), flips a funnel's direction, or makes a dropper drop.
+local function wireLinks(root, links, data)
+	if not root or type(links) ~= "table" or #links == 0 then return end
+	local air, entOf = {}, {}
+	for _, c in ipairs(data and data.air or {}) do air[Config.Key(c[1], c[2], c[3])] = true end
+	for _, e in ipairs(data and data.ents or {}) do if e[8] then entOf[e[8]] = e end end
+	local byId = {}
+	for _, d in ipairs(root:GetDescendants()) do
+		local id = d:GetAttribute("EntId")
+		if id and d:IsA("Model") and not byId[id] then byId[id] = d end
+	end
+
+	-- antlines / signs, painted by their source
+	local linkParts = {}
+	for _, l in ipairs(links) do
+		local ea, eb, s = entOf[l[1]], entOf[l[2]], byId[l[1]]
+		if ea and eb and s then
+			local ok, parts = pcall(drawConnection, root, air, ea, eb)
+			if ok then
+				linkParts[s] = linkParts[s] or {}
+				for _, p in ipairs(parts) do table.insert(linkParts[s], p) end
+			else
+				warn("[PortalServer] antline:", parts)
+			end
+		end
+	end
+	for s, parts in pairs(linkParts) do
+		local function paint()
+			local on = isOn(s)
+			for _, p in ipairs(parts) do
+				if p and p.Parent and p.Name ~= "AntDotHole" then p.Color = on and Config.ANT_ON or Config.ANT_OFF end
+			end
+		end
+		s:GetAttributeChangedSignal("Pressed"):Connect(paint)
+		s:GetAttributeChangedSignal("PressesButton"):Connect(paint)
+		paint()
+	end
+
+	-- who drives what
+	local inputsOf, gates, targets = {}, {}, {}
+	for _, d in pairs(byId) do
+		if d:GetAttribute("Kind") == "gate" then
+			inputsOf[d] = {}
+			table.insert(gates, d)
+		end
+	end
+	for _, l in ipairs(links) do
+		local s, t = byId[l[1]], byId[l[2]]
+		if s and t and s ~= t then
+			if not inputsOf[t] then
+				inputsOf[t] = {}
+				table.insert(targets, t)
+			end
+			table.insert(inputsOf[t], s)
+		end
+	end
+
+	-- gate panels: the light shows the output
+	local function paintGate(g)
+		local light = g:FindFirstChild("Light", true)
+		if light and light:IsA("BasePart") and not g:GetAttribute("Hidden") then
+			light.Color = isOn(g) and Config.ANT_ON or Config.ANT_OFF
+		end
+	end
+
+	local state = {}
+	local function apply(t, on)
+		if state[t] == on then return end
+		local first = state[t] == nil
+		state[t] = on
+		local kind = t:GetAttribute("Kind")
+		if kind == "cubedropper" then
+			-- every time the inputs turn on: the old cube fizzles and a new one drops (TestElementsServer)
+			if on and not first then dropperIn(t):SetAttribute("Drop", true) end
+		elseif kind == "tbeam" then
+			Config.SetAll(t, "Reversed", (t:GetAttribute("BaseReversed") == true) ~= on)
+		else
+			local startOpt = t:GetAttribute("StartOpt")
+			local startOn = (startOpt ~= nil) and startOpt or (Config.LINK_DEFAULT_ON[kind] == true)
+			Config.SetAll(t, "Enabled", startOn ~= on)
+		end
+	end
+
+	local busy, again = false, false
+	local function evaluate()
+		if busy then again = true return end
+		busy = true
+		repeat
+			again = false
+			-- gates feeding gates: go round until nothing changes (a loop of gates just stops after 20 passes)
+			for _ = 1, 20 do
+				local changed = false
+				for _, g in ipairs(gates) do
+					local ins = inputsOf[g]
+					local on = 0
+					for _, s in ipairs(ins) do if isOn(s) then on += 1 end end
+					local out = Config.GateResult(g:GetAttribute("GateMode"), on, #ins)
+					if isOn(g) ~= out then
+						g:SetAttribute("Pressed", out)
+						paintGate(g)
+						changed = true
+					end
+				end
+				if not changed then break end
+			end
+			for _, t in ipairs(targets) do
+				if t:GetAttribute("Kind") ~= "gate" then
+					local ins = inputsOf[t]
+					local all = #ins > 0
+					for _, s in ipairs(ins) do
+						if not isOn(s) then all = false break end
+					end
+					apply(t, all)
+				end
+			end
+		until not again
+		busy = false
+	end
+
+	for _, t in ipairs(targets) do t:SetAttribute("Linked", true) end
+	local watched = {}
+	for _, ins in pairs(inputsOf) do
+		for _, s in ipairs(ins) do
+			if not watched[s] and s:GetAttribute("Kind") ~= "gate" then
+				watched[s] = true
+				s:GetAttributeChangedSignal("Pressed"):Connect(evaluate)
+				s:GetAttributeChangedSignal("PressesButton"):Connect(evaluate)
+			end
+		end
+	end
+	for _, g in ipairs(gates) do paintGate(g) end
+	evaluate()
+end
+
+local function buildChamberMap(data, name)
+	clearActive()
+	local model = Config.BuildChamber(data, activeFolder(), Config.EDITOR_ORIGIN, {})
+	activeMapName = name
+	wireLinks(model, data.links, data)
+	return model
+end
+
+local function sortWorkshop(list, sort, player, friendIds)
+	local out = {}
+	local friends = {}
+	for _, id in ipairs(friendIds or {}) do friends[tostring(id)] = true end
+	local p = profiles[player]
+	local follows = {}
+	for _, id in ipairs(p and p.follows or {}) do follows[tostring(id)] = true end
+	for _, m in ipairs(list) do
+		local ok = true
+		if sort == "FriendsFavorites" or sort == "FriendsTopRated" or sort == "FriendsCreations" then
+			ok = friends[tostring(m.authorId)] == true
+		elseif sort == "FollowedMostRecent" then
+			ok = follows[tostring(m.authorId)] == true
+		end
+		if ok then table.insert(out, m) end
+	end
+	local function score(m)
+		local up, down = m.up or 0, m.down or 0
+		return (up + 1) / (up + down + 2)
+	end
+	if sort == "TopRated" or sort == "FriendsTopRated" or sort == "FriendsFavorites" then
+		table.sort(out, function(a, b) return score(a) > score(b) end)
+	elseif sort == "MostPopular" then
+		table.sort(out, function(a, b) return (a.plays or 0) > (b.plays or 0) end)
+	else
+		table.sort(out, function(a, b) return (a.created or 0) > (b.created or 0) end)
+	end
+	local trimmed = {}
+	for i = 1, math.min(#out, 40) do trimmed[i] = out[i] end
+	return trimmed
+end
+
+local function metaById(id)
+	for _, m in ipairs(workshopIndex()) do
+		if m.id == id then return m end
+	end
+end
+
+-- ==========================================
+-- CO-OP
+-- ==========================================
+local pendingInvites = {}
+local queued = {}
+local QUEUE = nil
+pcall(function() QUEUE = MemoryStoreService:GetSortedMap("PortalCoopQueue") end)
+
+local function startCoop(a, b)
+	queued[a], queued[b] = nil, nil
+	if QUEUE then
+		pcall(function() QUEUE:RemoveAsync(tostring(a.UserId)) end)
+		pcall(function() QUEUE:RemoveAsync(tostring(b.UserId)) end)
+	end
+	a:SetAttribute("CoopPartner", b.UserId)
+	b:SetAttribute("CoopPartner", a.UserId)
+	a:SetAttribute("CoopColor", "Blue")
+	b:SetAttribute("CoopColor", "Orange")
+	unlock(a, "COOP_FRIEND")
+	unlock(b, "COOP_FRIEND")
+	Push:FireClient(a, "CoopStart", { partner = b.Name, color = "Blue" })
+	Push:FireClient(b, "CoopStart", { partner = a.Name, color = "Orange" })
+	task.delay(1, function()
+		local root = loadMap(Config.COOP_HUB_MAP, true)
+		for _, pl in ipairs({ a, b }) do
+			pl:SetAttribute("Chapter", nil)
+			local s = findSpawn(root, pl:GetAttribute("CoopColor"))
+			if s then placeCharacter(pl, spawnCF(s)) end
+		end
+	end)
+end
+
+local function endCoop(player)
+	local partnerId = player:GetAttribute("CoopPartner")
+	player:SetAttribute("CoopPartner", nil)
+	player:SetAttribute("CoopColor", nil)
+	if partnerId then
+		local other = Players:GetPlayerByUserId(partnerId)
+		if other then
+			other:SetAttribute("CoopPartner", nil)
+			other:SetAttribute("CoopColor", nil)
+			Push:FireClient(other, "CoopEnded", { partner = player.Name })
+		end
+	end
+end
+
+local MATCH_TOPIC = "PortalCoopMatch"
+task.spawn(pcall, function() -- SubscribeAsync yields; don't hold up the rest of the script (PlayerAdded etc.)
+	MessagingService:SubscribeAsync(MATCH_TOPIC, function(msg)
+		local d = msg.Data
+		if type(d) ~= "table" then return end
+		for _, uid in ipairs({ d.a, d.b }) do
+			local pl = Players:GetPlayerByUserId(uid)
+			if pl and queued[pl] then
+				queued[pl] = nil
+				Push:FireClient(pl, "CoopFound", {})
+				pcall(function()
+					TeleportService:TeleportToPrivateServer(game.PlaceId, d.code, { pl }, nil, { coop = true, a = d.a, b = d.b })
+				end)
+			end
+		end
+	end)
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(2.5)
+		local here = {}
+		for pl in pairs(queued) do
+			if pl.Parent then table.insert(here, pl) else queued[pl] = nil end
+		end
+		while #here >= 2 do
+			local a, b = table.remove(here), table.remove(here)
+			startCoop(a, b)
+		end
+		if QUEUE and #here == 1 then
+			local me = here[1]
+			pcall(function() QUEUE:SetAsync(tostring(me.UserId), { job = game.JobId, t = os.time() }, 120) end)
+			local ok, entries = pcall(function() return QUEUE:GetRangeAsync(Enum.SortDirection.Ascending, 10) end)
+			if ok and entries then
+				for _, e in ipairs(entries) do
+					local other = tonumber(e.key)
+					if other and other ~= me.UserId and type(e.value) == "table" and e.value.job ~= game.JobId then
+						local claimed = false
+						pcall(function()
+							QUEUE:UpdateAsync(e.key, function(v)
+								if v == nil then return nil end
+								claimed = true
+								return nil
+							end, 30)
+							if claimed then QUEUE:RemoveAsync(e.key) end
+						end)
+						if claimed then
+							local okR, code = pcall(function() return TeleportService:ReserveServer(game.PlaceId) end)
+							if okR then
+								pcall(function() MessagingService:PublishAsync(MATCH_TOPIC, { a = me.UserId, b = other, code = code }) end)
+							end
+							break
+						end
+					end
+				end
+			end
+		end
+	end
+end)
+
+local arrivals = {}
+local function checkArrival(player)
+	local data = player:GetJoinData()
+	local td = data and data.TeleportData
+	if type(td) == "table" and td.coop then
+		arrivals[player.UserId] = player
+		local otherId = (td.a == player.UserId) and td.b or td.a
+		local other = arrivals[otherId]
+		if other and other.Parent then
+			arrivals[player.UserId], arrivals[otherId] = nil, nil
+			task.delay(2, startCoop, other, player)
+		end
+	end
+end
+
+-- ==========================================
+-- LEADERBOARDS
+-- ==========================================
+local function lbStore(chamber, kind)
+	return getStore("PortalLB_" .. chamber .. "_" .. kind, true)
+end
+
+local function submitChallenge(player, chamber, portals, seconds)
+	for kind, value in pairs({ portals = portals, time = math.floor(seconds * 100) }) do
+		local store = lbStore(chamber, kind)
+		if store then
+			retry(function()
+				store:UpdateAsync(tostring(player.UserId), function(old)
+					if old and old <= value then return nil end
+					return value
+				end)
+			end, 2)
+		end
+	end
+end
+
+-- ==========================================
+-- STORE
+-- ==========================================
+local function owns(p, id)
+	return table.find(p.inventory, id) ~= nil
+end
+
+local function grantItem(p, item)
+	if item.grants then
+		for _, g in ipairs(item.grants) do table.insert(p.inventory, g) end
+	else
+		table.insert(p.inventory, item.id)
+	end
+end
+
+local productToItem = {}
+for _, it in ipairs(Config.STORE) do
+	if it.productId and it.productId ~= 0 then productToItem[it.productId] = it end
+end
+
+-- NOTE: only ONE script in the game may set ProcessReceipt. If you already have one, move this logic into it.
+MarketplaceService.ProcessReceipt = function(info)
+	local player = Players:GetPlayerByUserId(info.PlayerId)
+	local item = productToItem[info.ProductId]
+	if not player or not item then return Enum.ProductPurchaseDecision.NotProcessedYet end
+	local p = getProfile(player, 10)
+	if not p then return Enum.ProductPurchaseDecision.NotProcessedYet end
+	p.receipts = p.receipts or {}
+	if not p.receipts[info.PurchaseId] then
+		p.receipts[info.PurchaseId] = true
+		grantItem(p, item)
+		saveProfile(player)
+	end
+	Push:FireClient(player, "Inventory", { inventory = p.inventory })
+	return Enum.ProductPurchaseDecision.PurchaseGranted
+end
+
+local function applyCosmetics(player)
+	local p = profiles[player]
+	if not p then return end
+	local color = (player:GetAttribute("CoopColor") or "Blue"):lower()
+	local eq = p.equipped[color] or {}
+	for _, slot in ipairs({ "head", "flag", "gesture", "skin" }) do
+		player:SetAttribute("Cosmetic_" .. slot, eq[slot])
+	end
+end
+
+-- ==========================================
+-- EDITOR HELPERS
+-- ==========================================
+local PARK = Config.EDITOR_ORIGIN + Vector3.new(0, -80, 0)
+local testSpawn = {} -- [player] = CFrame of the entry door spawn for the current playtest
+
+local function findDraft(p, id)
+	for i, d in ipairs(p.drafts) do
+		if d.id == id then return d, i end
+	end
+end
+
+local function park(player)
+	local root = waitRoot(player, 5)
+	if root then
+		placeCharacter(player, CFrame.new(PARK))
+		root = charRoot(player)
+		if root then root.Anchored = true end
+	end
+end
+
+local function draftSummary(d)
+	local m = d.publishedId and metaById(d.publishedId)
+	return {
+		id = d.id, title = d.title, created = d.created, modified = d.modified,
+		publishedId = d.publishedId, publishedAt = d.publishedAt, up = m and m.up or 0, down = m and m.down or 0,
+	}
+end
+
+-- spawn in front of the entry door (its PlayerSpawn part, which PortalConfig puts just outside the door model)
+local function entrySpawnCF(model)
+	if not model then return nil end
+	for _, d in ipairs(model:GetDescendants()) do
+		if d:IsA("Model") and d:GetAttribute("Kind") == "entry" then
+			local s = d:FindFirstChild("PlayerSpawn", true)
+			if s and s:IsA("BasePart") then return spawnCF(s) end
+		end
+	end
+	local s = findSpawn(model)
+	return s and spawnCF(s)
+end
+
+-- ==========================================
+-- REQUEST ACTIONS
+-- ==========================================
+local Actions = {}
+
+function Actions.GetProfile(player)
+	local p = getProfile(player, 25)
+	if not p then return false, "Couldn't load your profile." end
+	return true, {
+		settings = p.settings, saves = summarizeSaves(p), maxChapter = p.maxChapter,
+		achievements = p.achievements, progress = p.progress, inventory = p.inventory,
+		equipped = p.equipped, queue = p.queue, follows = p.follows,
+		chambers = #p.drafts, published = p.published,
+	}
+end
+
+function Actions.SetSettings(player, s)
+	local p = getProfile(player, 5)
+	if not p or type(s) ~= "table" then return false end
+	local clean, n = {}, 0
+	for k, v in pairs(s) do
+		n += 1
+		if n > 64 then break end
+		if type(k) == "string" and #k < 40 and (type(v) == "string" and #v < 60 or type(v) == "number" or type(v) == "boolean") then
+			clean[k] = v
+		end
+	end
+	p.settings = clean
+	markDirty(player)
+	return true
+end
+
+function Actions.ClientAchievement(player, id)
+	local def = Config.Achievement(id)
+	if def and def.client then return true, unlock(player, id) end
+	return false
+end
+
+function Actions.NewGame(player, index)
+	local p = getProfile(player, 5)
+	index = tonumber(index) or 1
+	if not p then return false, "Profile not loaded." end
+	if index > p.maxChapter then return false, "That chapter is still locked." end
+	endCoop(player)
+	return startChapter(player, index)
+end
+
+function Actions.ContinueGame(player)
+	local p = getProfile(player, 5)
+	if not p then return false, "Profile not loaded." end
+	local s = latestSave(p)
+	if s then return loadSave(player, s) end
+	return startChapter(player, 1)
+end
+
+function Actions.LoadGame(player, id)
+	local p = getProfile(player, 5)
+	if not p then return false, "Profile not loaded." end
+	for _, s in ipairs(p.saves) do
+		if s.id == id then return loadSave(player, s) end
+	end
+	return false, "Save not found."
+end
+
+function Actions.LoadLastSave(player)
+	local p = getProfile(player, 5)
+	local s = p and latestSave(p)
+	if not s then return false, "There are no saved games." end
+	return loadSave(player, s)
+end
+
+function Actions.SaveGame(player, id)
+	local entry, err = makeSave(player, id, false)
+	if not entry then return false, err end
+	return true, summarizeSaves(profiles[player])
+end
+
+function Actions.DeleteSave(player, id)
+	local p = getProfile(player, 5)
+	if not p then return false end
+	for i, s in ipairs(p.saves) do
+		if s.id == id then table.remove(p.saves, i) break end
+	end
+	markDirty(player)
+	return true, summarizeSaves(p)
+end
+
+function Actions.DeveloperCommentary(player)
+	player:SetAttribute("Commentary", true)
+	return Actions.NewGame(player, 1)
+end
+
+function Actions.ExitToMainMenu(player)
+	endCoop(player)
+	local wasEditor = player:GetAttribute("InEditor")
+	if wasEditor then
+		-- the editor only lent the gun (RigChangerServer ignores this if you already owned it)
+		player:SetAttribute("InEditor", nil) -- first, so the respawn isn't parked under the editor
+		player:SetAttribute("EditorPlaytest", nil)
+		testSpawn[player] = nil
+		if rigChange(player, "Restore", { source = "Editor" }) then waitForRig(player, player.Character, 4) end
+	end
+	if wasEditor or player:GetAttribute("WorkshopMap") or player:GetAttribute("ChallengeChamber") then
+		local root = charRoot(player)
+		if root then root.Anchored = false end
+		clearActive()
+	end
+	testSpawn[player] = nil
+	player:SetAttribute("Chapter", nil)
+	player:SetAttribute("Commentary", nil)
+	player:SetAttribute("ChallengeChamber", nil)
+	player:SetAttribute("WorkshopMap", nil)
+	player:SetAttribute("InEditor", nil)
+	player:SetAttribute("EditorPlaytest", nil)
+	sendToLobby(player)
+	return true
+end
+
+function Actions.ChallengeMode(player, chamberId)
+	local ch, course = Config.Chamber(chamberId)
+	if not ch then
+		course = Config.COURSES[1]
+		ch = course and course.chambers[1]
+		if not ch then return false, "No challenge chambers set up." end
+	end
+	if course.coop and not player:GetAttribute("CoopPartner") then return false, "This course needs a co-op partner." end
+	local root = loadMap(ch.id, true)
+	player:SetAttribute("Chapter", nil)
+	player:SetAttribute("ChallengeChamber", ch.id)
+	player:SetAttribute("ChallengeStart", os.clock())
+	player:SetAttribute("ChallengePortals", 0)
+	local s = findSpawn(root, player:GetAttribute("CoopColor"))
+	if s then placeCharacter(player, spawnCF(s)) end
+	return true
+end
+Actions.CoopChallenge = Actions.ChallengeMode
+
+function Actions.GetLeaderboard(player, arg)
+	if type(arg) ~= "table" or not Config.Chamber(arg.chamber) then return false end
+	local kind = arg.kind == "time" and "time" or "portals"
+	local store = lbStore(arg.chamber, kind)
+	local out = { top = {}, mine = nil }
+	if not store then return true, out end
+	local ok, pages = retry(function() return store:GetSortedAsync(true, 100) end, 2)
+	if ok and pages then
+		for rank, e in ipairs(pages:GetCurrentPage()) do
+			table.insert(out.top, { userId = tonumber(e.key), value = e.value, rank = rank })
+		end
+	end
+	local okMine, mine = retry(function() return store:GetAsync(tostring(player.UserId)) end, 1)
+	if okMine then out.mine = mine end
+	return true, out
+end
+
+function Actions.CoopInvite(player, targetUserId)
+	local target = Players:GetPlayerByUserId(tonumber(targetUserId) or 0)
+	if not target then return false, "notHere" end
+	if target == player then return false, "You can't invite yourself." end
+	pendingInvites[target.UserId] = { from = player.UserId, t = os.clock() }
+	Push:FireClient(target, "CoopInvite", { from = player.UserId, name = player.DisplayName })
+	return true
+end
+
+function Actions.CoopRespond(player, arg)
+	if type(arg) ~= "table" then return false end
+	local inv = pendingInvites[player.UserId]
+	pendingInvites[player.UserId] = nil
+	if not inv or inv.from ~= arg.from or os.clock() - inv.t > 120 then return false, "That invite expired." end
+	local from = Players:GetPlayerByUserId(inv.from)
+	if not from then return false, "Your partner left." end
+	if not arg.accept then
+		Push:FireClient(from, "CoopDeclined", { name = player.DisplayName })
+		return true
+	end
+	startCoop(from, player)
+	return true
+end
+
+function Actions.CoopQuickMatch(player)
+	queued[player] = true
+	return true
+end
+
+function Actions.CoopCancel(player)
+	queued[player] = nil
+	if QUEUE then pcall(function() QUEUE:RemoveAsync(tostring(player.UserId)) end) end
+	return true
+end
+
+function Actions.WorkshopBrowse(player, arg)
+	arg = type(arg) == "table" and arg or {}
+	local list = workshopIndex()
+	local filtered = {}
+	for _, m in ipairs(list) do
+		if (arg.coop == true) == (m.coop == true) then table.insert(filtered, m) end
+	end
+	if arg.sort == "Queue" then
+		local p = getProfile(player, 5)
+		local out = {}
+		for _, id in ipairs(p and p.queue or {}) do
+			local m = metaById(id)
+			if m then table.insert(out, m) end
+		end
+		return true, out
+	elseif arg.sort == "Mine" then
+		local out = {}
+		for _, m in ipairs(list) do
+			if m.authorId == player.UserId then table.insert(out, m) end
+		end
+		return true, out
+	end
+	return true, sortWorkshop(filtered, arg.sort or "MostRecent", player, arg.friends)
+end
+
+function Actions.WorkshopGetMap(_player, id)
+	if type(id) ~= "string" then return false end
+	local data = getMapData(id)
+	return data ~= nil, data
+end
+
+function Actions.CommunitySingle(player, id)
+	if type(id) ~= "string" then return false, "No chamber picked." end
+	local data = getMapData(id)
+	if not data then return false, "Couldn't download that chamber." end
+	local model = buildChamberMap(data, "workshop_" .. id)
+	player:SetAttribute("Chapter", nil)
+	player:SetAttribute("WorkshopMap", id)
+	player:SetAttribute("ChallengeStart", os.clock())
+	player:SetAttribute("ChamberDone", nil)
+	local cf = entrySpawnCF(model)
+	if cf then placeCharacter(player, cf) end
+	updateIndex(function(list)
+		for _, m in ipairs(list) do if m.id == id then m.plays = (m.plays or 0) + 1 end end
+	end)
+	return true
+end
+Actions.CommunityCoop = Actions.CommunitySingle
+
+function Actions.WorkshopRate(player, arg)
+	if type(arg) ~= "table" or type(arg.id) ~= "string" then return false end
+	local p = getProfile(player, 5)
+	if not p then return false end
+	p.rated = p.rated or {}
+	local before = p.rated[arg.id]
+	local now = arg.up and "up" or "down"
+	if before == now then return true end
+	p.rated[arg.id] = now
+	markDirty(player)
+	updateIndex(function(list)
+		for _, m in ipairs(list) do
+			if m.id == arg.id then
+				if before then m[before] = math.max((m[before] or 1) - 1, 0) end
+				m[now] = (m[now] or 0) + 1
+			end
+		end
+	end)
+	return true
+end
+
+function Actions.QueueAdd(player, id)
+	local p = getProfile(player, 5)
+	if not p or type(id) ~= "string" then return false end
+	if not table.find(p.queue, id) then table.insert(p.queue, id) end
+	markDirty(player)
+	return true, p.queue
+end
+
+function Actions.QueueRemove(player, id)
+	local p = getProfile(player, 5)
+	if not p then return false end
+	local i = table.find(p.queue, id)
+	if i then table.remove(p.queue, i) end
+	markDirty(player)
+	return true, p.queue
+end
+
+function Actions.Follow(player, authorId)
+	local p = getProfile(player, 5)
+	if not p then return false end
+	local key = tostring(authorId)
+	if not table.find(p.follows, key) then table.insert(p.follows, key) end
+	markDirty(player)
+	return true
+end
+
+-- editor
+function Actions.EditorList(player)
+	local p = getProfile(player, 5)
+	if not p then return false end
+	local out = {}
+	for _, d in ipairs(p.drafts) do table.insert(out, draftSummary(d)) end
+	return true, out
+end
+
+function Actions.EditorGet(player, id)
+	local p = getProfile(player, 5)
+	local d = p and findDraft(p, id)
+	return d ~= nil, d and d.data
+end
+
+function Actions.CommunityCreate(player, id)
+	local p = getProfile(player, 5)
+	if not p then return false, "Profile not loaded." end
+	local d = id and findDraft(p, id)
+	if not d then
+		if #p.drafts >= 30 then return false, "You have 30 test chambers. Delete one first." end
+		d = { id = HttpService:GenerateGUID(false), title = "Untitled Chamber", created = os.time(), modified = os.time(), data = Config.DefaultChamber() }
+		table.insert(p.drafts, 1, d)
+		markDirty(player)
+	end
+	endCoop(player)
+	testSpawn[player] = nil
+	player:SetAttribute("Chapter", nil)
+	player:SetAttribute("InEditor", true)
+	player:SetAttribute("EditorPlaytest", false)
+	clearActive()
+	park(player)
+	unlock(player, "EDITOR")
+	task.delay(0.2, function()
+		Push:FireClient(player, "EditorStart", { id = d.id, title = d.title, data = d.data })
+	end)
+	return true
+end
+
+function Actions.EditorSave(player, arg)
+	local p = getProfile(player, 5)
+	if not p or type(arg) ~= "table" then return false end
+	local d = findDraft(p, arg.id)
+	if not d then return false, "Chamber not found." end
+	local clean, err = cleanMap(arg.data)
+	if not clean then return false, err end
+	d.data = clean
+	d.modified = os.time()
+	if type(arg.title) == "string" and arg.title ~= "" then
+		local filtered = filterText(arg.title:sub(1, 40), player)
+		if filtered then d.title = filtered end
+	end
+	markDirty(player)
+	return true, d.title
+end
+
+function Actions.EditorSaveAs(player, arg)
+	local p = getProfile(player, 5)
+	if not p or type(arg) ~= "table" then return false end
+	local clean, err = cleanMap(arg.data)
+	if not clean then return false, err end
+	if #p.drafts >= 30 then return false, "You have 30 test chambers. Delete one first." end
+	local title = type(arg.title) == "string" and arg.title:sub(1, 40) or "Untitled Chamber"
+	local d = { id = HttpService:GenerateGUID(false), title = filterText(title, player) or "Untitled Chamber", created = os.time(), modified = os.time(), data = clean }
+	table.insert(p.drafts, 1, d)
+	markDirty(player)
+	return true, d.id
+end
+
+-- build the chamber in the world and drop the player in at the entry door
+function Actions.EditorTest(player, arg)
+	if type(arg) ~= "table" then return false end
+	if not player:GetAttribute("InEditor") then return false, "You're not in the editor." end
+	local clean, err = cleanMap(arg.data)
+	if not clean then return false, err end
+	local okBuild, model = pcall(buildChamberMap, clean, "editor_test")
+	if not okBuild then
+		warn("[PortalServer] building chamber:", model)
+		return false, "Couldn't build the chamber."
+	end
+	local cf = entrySpawnCF(model)
+	if not cf then return false, "Place an Entry Door first." end
+
+	-- set these first so a respawn from the rig swap lands at the entry door too
+	testSpawn[player] = cf
+	player:SetAttribute("EditorPlaytest", true)
+	player:SetAttribute("ChallengeStart", os.clock())
+	player:SetAttribute("ChamberDone", nil)
+
+	local root = charRoot(player)
+	if root then root.Anchored = false end
+	local oldChar = player.Character
+	if rigChange(player, "Equip", { source = "Editor", silent = true }) then
+		waitForRig(player, oldChar, 4)
+	end
+	root = charRoot(player)
+	if root then root.Anchored = false end
+	placeCharacter(player, cf)
+	return true
+end
+
+function Actions.EditorEdit(player)
+	clearActive()
+	testSpawn[player] = nil
+	player:SetAttribute("EditorPlaytest", false)
+	park(player)
+	return true
+end
+
+function Actions.EditorExit(player)
+	testSpawn[player] = nil
+	player:SetAttribute("InEditor", nil)
+	player:SetAttribute("EditorPlaytest", nil)
+	if rigChange(player, "Restore", { source = "Editor" }) then waitForRig(player, player.Character, 4) end
+	local root = charRoot(player)
+	if root then root.Anchored = false end
+	clearActive()
+	sendToLobby(player)
+	return true
+end
+
+function Actions.EditorDelete(player, id)
+	local p = getProfile(player, 5)
+	if not p then return false end
+	local _, i = findDraft(p, id)
+	if i then table.remove(p.drafts, i) markDirty(player) end
+	return true
+end
+
+function Actions.EditorPublish(player, arg)
+	if type(arg) ~= "table" then return false end
+	local p = getProfile(player, 5)
+	local d = p and findDraft(p, arg.id)
+	if not d then return false, "Save the chamber first." end
+	local clean, err = cleanMap(arg.data)
+	if not clean then return false, err end
+	local title = type(arg.title) == "string" and arg.title:sub(1, 40) or d.title
+	title = filterText(title, player) or "Untitled Chamber"
+	clean.title = title
+	clean.coop = arg.coop == true
+	local id = d.publishedId or HttpService:GenerateGUID(false):gsub("-", ""):sub(1, 16)
+	if workshopStore then
+		local ok = retry(function() workshopStore:SetAsync("map_" .. id, clean) end)
+		if not ok then return false, "Upload failed, try again." end
+	else
+		localWorkshop["map_" .. id] = clean
+	end
+	local isUpdate = d.publishedId ~= nil
+	updateIndex(function(list)
+		for _, m in ipairs(list) do
+			if m.id == id then
+				m.title, m.coop, m.updated = title, clean.coop, os.time()
+				return
+			end
+		end
+		table.insert(list, 1, {
+			id = id, title = title, author = player.DisplayName, authorId = player.UserId,
+			coop = clean.coop, created = os.time(), up = 0, down = 0, plays = 0,
+		})
+		while #list > 500 do table.remove(list) end
+	end)
+	d.publishedId, d.publishedAt, d.title, d.data, d.modified = id, os.time(), title, clean, os.time()
+	if not isUpdate then table.insert(p.published, id) end
+	markDirty(player)
+	unlock(player, "PUBLISH")
+	return true, id
+end
+
+function Actions.CommunityWorkshop(player)
+	return Actions.WorkshopBrowse(player, { sort = "Mine" })
+end
+
+-- store
+function Actions.StoreClaim(player, id)
+	local p = getProfile(player, 5)
+	local item = Config.Item(id)
+	if not p or not item then return false end
+	if item.productId and item.productId ~= 0 then
+		MarketplaceService:PromptProductPurchase(player, item.productId)
+		return true, "prompted"
+	end
+	if #p.inventory >= Config.BACKPACK_SLOTS then return false, "Your backpack is full." end
+	grantItem(p, item)
+	markDirty(player)
+	return true, p.inventory
+end
+
+function Actions.StoreEquip(player, arg)
+	local p = getProfile(player, 5)
+	if not p or type(arg) ~= "table" then return false end
+	local bot = arg.bot == "orange" and "orange" or "blue"
+	local slot = arg.slot
+	if not table.find({ "head", "flag", "gesture", "skin" }, slot) then return false end
+	if arg.id == nil then
+		p.equipped[bot][slot] = nil
+	else
+		local item = Config.Item(arg.id)
+		if not item or item.slot ~= slot or not owns(p, arg.id) then return false end
+		if item.bots ~= "both" and item.bots ~= bot then return false, "That item doesn't fit this bot." end
+		p.equipped[bot][slot] = arg.id
+	end
+	markDirty(player)
+	applyCosmetics(player)
+	return true, p.equipped
+end
+
+function Actions.StoreDelete(player, index)
+	local p = getProfile(player, 5)
+	index = tonumber(index)
+	if not p or not index or not p.inventory[index] then return false end
+	local id = table.remove(p.inventory, index)
+	if not owns(p, id) then
+		for _, bot in pairs(p.equipped) do
+			for slot, v in pairs(bot) do if v == id then bot[slot] = nil end end
+		end
+	end
+	markDirty(player)
+	applyCosmetics(player)
+	return true, { inventory = p.inventory, equipped = p.equipped }
+end
+
+-- ==========================================
+-- REQUEST DISPATCH (with a small rate limit)
+-- ==========================================
+local lastCall = {}
+Request.OnServerInvoke = function(player, action, arg)
+	local fn = type(action) == "string" and Actions[action]
+	if not fn then return false, "Unknown action " .. tostring(action) end
+	local now = os.clock()
+	local key = player.UserId .. action
+	if lastCall[key] and now - lastCall[key] < 0.15 then return false, "Slow down." end
+	lastCall[key] = now
+	local ok, a, b = pcall(fn, player, arg)
+	if not ok then
+		warn("[PortalServer]", action, a)
+		return false, "Something went wrong."
+	end
+	return a, b
+end
+
+-- ==========================================
+-- TRIGGERS (overlap detection instead of .Touched)
+-- ==========================================
+-- Every frame each player's character box is swept from where it was to where it is now and tested against all
+-- trigger parts, so fast flings, portal exits and standing still inside a trigger all register.
+local CHAR_BOX = Vector3.new(4, 6, 4)  -- generous character size
+local MAX_SWEEP = 30                  -- moving further than this in one frame = teleport / portal, don't sweep the gap
+
+local triggerOwners = {} -- [part] = { { tag = , inst = }, ... }
+local triggerParts = {}
+local triggerDirty = true
+local overlap = OverlapParams.new()
+overlap.FilterType = Enum.RaycastFilterType.Include
+overlap.MaxParts = 50
+
+local function addTriggerPart(part, tag, inst)
+	triggerOwners[part] = triggerOwners[part] or {}
+	for _, t in ipairs(triggerOwners[part]) do
+		if t.tag == tag and t.inst == inst then return end
+	end
+	table.insert(triggerOwners[part], { tag = tag, inst = inst })
+	part.CanQuery = true
+	triggerDirty = true
+end
+
+local function registerTrigger(inst, tag)
+	if inst:IsA("BasePart") then
+		addTriggerPart(inst, tag, inst)
+	elseif inst:IsA("Model") then
+		for _, d in ipairs(inst:GetDescendants()) do
+			if d:IsA("BasePart") then addTriggerPart(d, tag, inst) end
+		end
+	end
+end
+
+local function rebuildTriggerList()
+	table.clear(triggerParts)
+	for part in pairs(triggerOwners) do
+		if part.Parent and part:IsDescendantOf(workspace) then
+			table.insert(triggerParts, part)
+		elseif not part.Parent then
+			triggerOwners[part] = nil
+		end
+	end
+	overlap.FilterDescendantsInstances = triggerParts
+	triggerDirty = false
+end
+
+local TRIGGERS = {} -- [tag] = { once = bool, fn = function(player, inst) }
+local inside = {}   -- [player] = { [tag] = { [inst] = true } }
+local fired = {}    -- [player] = { [tag] = { [inst] = true } } for once-only triggers
+
+local function hookTrigger(tag, once, fn)
+	TRIGGERS[tag] = { once = once, fn = fn }
+	for _, inst in ipairs(CollectionService:GetTagged(tag)) do registerTrigger(inst, tag) end
+	CollectionService:GetInstanceAddedSignal(tag):Connect(function(inst) registerTrigger(inst, tag) end)
+	CollectionService:GetInstanceRemovedSignal(tag):Connect(function() triggerDirty = true end)
+end
+
+local function checkPlayerTriggers(player)
+	local root = charRoot(player)
+	local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if not root or (hum and hum.Health <= 0) then lastPos[player] = nil return end
+	local pos = root.Position
+	local from = lastPos[player] or pos
+	lastPos[player] = pos
+	local dist = (pos - from).Magnitude
+	local steps = (dist > MAX_SWEEP) and 1 or math.clamp(math.ceil(dist / 2), 1, 15)
+	local hitParts = {}
+	for i = 1, steps do
+		local p = steps == 1 and pos or from:Lerp(pos, i / steps)
+		for _, part in ipairs(workspace:GetPartBoundsInBox(CFrame.new(p), CHAR_BOX, overlap)) do
+			hitParts[part] = true
+		end
+	end
+	local now = {}
+	for part in pairs(hitParts) do
+		for _, t in ipairs(triggerOwners[part] or {}) do
+			now[t.tag] = now[t.tag] or {}
+			now[t.tag][t.inst] = true
+		end
+	end
+	local was = inside[player] or {}
+	fired[player] = fired[player] or {}
+	for tag, insts in pairs(now) do
+		local def = TRIGGERS[tag]
+		for inst in pairs(insts) do
+			local entered = not (was[tag] and was[tag][inst])
+			local done = def and def.once and fired[player][tag] and fired[player][tag][inst]
+			if def and entered and not done then
+				if def.once then
+					fired[player][tag] = fired[player][tag] or {}
+					fired[player][tag][inst] = true
+				end
+				task.spawn(def.fn, player, inst)
+			end
+		end
+	end
+	inside[player] = now
+end
+
+-- chamber doors: keep Open / PlayerNear up to date
+local function updateDoors()
+	local roots = {}
+	for _, pl in ipairs(Players:GetPlayers()) do
+		local r = charRoot(pl)
+		if r then table.insert(roots, r.Position) end
+	end
+	for _, door in ipairs(CollectionService:GetTagged("PortalChamberDoor")) do
+		if door:IsDescendantOf(workspace) then
+			local center = door:IsA("Model") and door:GetPivot().Position or door.Position
+			local near = false
+			for _, p in ipairs(roots) do
+				if (p - center).Magnitude <= Config.DOOR_OPEN_RADIUS then near = true break end
+			end
+			local open = false
+			if door:GetAttribute("DoorType") == "exit" then
+				open = near and (not door:GetAttribute("Linked") or door:GetAttribute("Enabled") == true)
+			end
+			if door:GetAttribute("PlayerNear") ~= near then door:SetAttribute("PlayerNear", near) end
+			if door:GetAttribute("Open") ~= open then door:SetAttribute("Open", open) end
+		end
+	end
+end
+
+-- ==========================================
+-- BUTTONS (chamber floor buttons, pedestals, laser catchers)
+-- ==========================================
+-- Floor button: pressed while a player or a cube is on it. The item's top model gets "Pressed" (true / false).
+-- If the button asset has its own script that sets "Pressed" / "PressesButton" on something inside it, that counts too.
+-- Pedestals (PedestalButtonServer) and laser catchers (TestElementsServer) set "Pressed" on the model inside the item;
+-- that's copied up to the item, which is what the connections listen to.
+local BUTTON_SOUNDS = { down = { "button_down", "buttondown", "button_press" }, up = { "button_up", "buttonup", "button_release" } }
+
+local function findSounds(frags)
+	local root = ReplicatedStorage:FindFirstChild("PortalAssets")
+	root = root and root:FindFirstChild("Sounds")
+	if not root then return nil end
+	for _, f in ipairs(frags) do
+		for _, d in ipairs(root:GetDescendants()) do
+			if d:IsA("Sound") and d.Name:lower():find(f, 1, true) then return d end
+		end
+	end
+	return nil
+end
+local buttonDownSound, buttonUpSound = findSounds(BUTTON_SOUNDS.down), findSounds(BUTTON_SOUNDS.up)
+
+local function playAt(sound, model)
+	local part = model and model:FindFirstChildWhichIsA("BasePart", true)
+	if not sound or not part then return end
+	local s = sound:Clone()
+	s.Parent = part
+	s:Play()
+	s.Ended:Once(function() s:Destroy() end)
+end
+
+local function isCube(part)
+	local node = part
+	for _ = 1, 5 do
+		if not node or node == workspace then break end
+		local ct = node:GetAttribute("CubeType")
+		if ct or node:GetAttribute("Grabbable") or CollectionService:HasTag(node, "PortalCube")
+			or node.Name:lower():find("cube") or node.Name:lower():find("sphere") or node.Name:lower():find("edgeless") then
+			local n = (tostring(ct or "") .. node.Name):lower()
+			return true, (n:find("edgeless") or n:find("sphere") or n:find("ball")) and "Sphere" or "Cube"
+		end
+		node = node.Parent
+	end
+	return false
+end
+
+local function innerPressed(m)
+	for _, d in ipairs(m:GetDescendants()) do
+		if (d:IsA("Model") or d:IsA("BasePart")) and (d:GetAttribute("Pressed") == true or d:GetAttribute("PressesButton") == true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function setPressed(m, on)
+	if (m:GetAttribute("Pressed") == true) == on then return end
+	m:SetAttribute("Pressed", on)
+	playAt(on and buttonDownSound or buttonUpSound, m)
+end
+
+local buttonParams = OverlapParams.new()
+buttonParams.FilterType = Enum.RaycastFilterType.Exclude
+local function updateButtons()
+	for _, m in ipairs(CollectionService:GetTagged("PeTIFloorButton")) do
+		if m:IsDescendantOf(workspace) then
+			local cf, size = m:GetBoundingBox()
+			local top = cf.Position + Vector3.new(0, size.Y / 2 + 1.2, 0)
+			buttonParams.FilterDescendantsInstances = { m }
+			local on = false
+			local btype = m:GetAttribute("ButtonType") or "Weighted"
+			for _, part in ipairs(workspace:GetPartBoundsInBox(CFrame.new(top), Vector3.new(size.X * 0.8, 3, size.Z * 0.8), buttonParams)) do
+				local mdl = part:FindFirstAncestorOfClass("Model")
+				local hum = mdl and mdl:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Health > 0 then
+					if btype == "Weighted" then on = true break end
+				elseif not part.Anchored then
+					local cube, shape = isCube(part)
+					if cube and (btype == "Weighted" or btype == shape) then on = true break end
+				end
+			end
+			setPressed(m, on or innerPressed(m))
+		end
+	end
+end
+
+-- pedestals / laser catchers: copy "Pressed" from the model inside up to the item (no prompt - the pedestal's own
+-- click from PedestalButtonClient / PedestalButtonServer presses it, in whatever mode the editor set)
+local function setupMirror(m)
+	if not m:IsDescendantOf(workspace) or m:GetAttribute("MirrorHooked") then return end
+	-- no asset (placeholder): the item IS the pedestal / catcher and sets "Pressed" on itself already
+	if CollectionService:HasTag(m, "LaserCatcher") or CollectionService:HasTag(m, "PedestalButton") then return end
+	m:SetAttribute("MirrorHooked", true)
+	local old = m:FindFirstChild("PressPrompt", true)
+	if old then old:Destroy() end
+	local function sync()
+		local on = innerPressed(m)
+		if (m:GetAttribute("Pressed") == true) ~= on then m:SetAttribute("Pressed", on) end
+	end
+	local function hook(d)
+		if d:IsA("Model") or d:IsA("BasePart") then
+			d:GetAttributeChangedSignal("Pressed"):Connect(sync)
+			d:GetAttributeChangedSignal("PressesButton"):Connect(sync)
+		end
+	end
+	for _, d in ipairs(m:GetDescendants()) do hook(d) end
+	m.DescendantAdded:Connect(hook)
+	sync()
+end
+for _, tag in ipairs({ "PeTIMirror", "PeTIPedestal" }) do
+	for _, m in ipairs(CollectionService:GetTagged(tag)) do task.spawn(setupMirror, m) end
+	CollectionService:GetInstanceAddedSignal(tag):Connect(function(m) task.defer(setupMirror, m) end)
+end
+
+local doorClock, pruneClock = 0, 0
+RunService.Heartbeat:Connect(function(dt)
+	pruneClock += dt
+	if triggerDirty or pruneClock > 2 then
+		pruneClock = 0
+		rebuildTriggerList()
+	end
+	if #triggerParts > 0 then
+		for _, pl in ipairs(Players:GetPlayers()) do checkPlayerTriggers(pl) end
+	end
+	doorClock += dt
+	if doorClock > 0.1 then
+		doorClock = 0
+		updateDoors()
+		updateButtons()
+	end
+end)
+
+hookTrigger("PortalAutosave", true, function(pl)
+	if pl:GetAttribute("Chapter") then makeSave(pl, nil, true) Push:FireClient(pl, "Autosaved", {}) end
+end)
+
+hookTrigger("PortalAchievement", true, function(pl, inst)
+	local id = inst:GetAttribute("Achievement")
+	if type(id) == "string" then unlock(pl, id) end
+end)
+
+hookTrigger("PortalChapterEnd", false, function(pl, inst)
+	local ch = inst:GetAttribute("Chapter") or pl:GetAttribute("Chapter")
+	if type(ch) ~= "number" then return end
+	finishChapter(pl, ch)
+	if ch < #Config.CHAPTERS then
+		makeSave(pl, nil, true)
+		if inst:GetAttribute("AutoAdvance") then
+			Push:FireClient(pl, "LoadChapter", { chapter = ch + 1 })
+		end
+	else
+		Push:FireClient(pl, "GameFinished", {})
+	end
+end)
+
+hookTrigger("PortalChamberExit", false, function(pl)
+	if pl:GetAttribute("ChamberDone") then return end -- one finish per run
+	local started = pl:GetAttribute("ChallengeStart") or os.clock()
+	local seconds = os.clock() - started
+	local chamber = pl:GetAttribute("ChallengeChamber")
+	local mapId = pl:GetAttribute("WorkshopMap")
+	if chamber then
+		pl:SetAttribute("ChamberDone", true)
+		local portals = pl:GetAttribute("ChallengePortals") or 0
+		submitChallenge(pl, chamber, portals, seconds)
+		Push:FireClient(pl, "ChamberComplete", { chamber = chamber, portals = portals, time = seconds })
+	elseif mapId then
+		pl:SetAttribute("ChamberDone", true)
+		unlock(pl, "WORKSHOP_PLAY")
+		Push:FireClient(pl, "ChamberComplete", { mapId = mapId, time = seconds })
+	elseif pl:GetAttribute("InEditor") and pl:GetAttribute("EditorPlaytest") then
+		pl:SetAttribute("ChamberDone", true)
+		Push:FireClient(pl, "ChamberComplete", { editor = true, time = seconds })
+	end
+end)
+
+-- ==========================================
+-- PLAYER LIFECYCLE
+-- ==========================================
+local function onCharacterAdded(player, char)
+	lastPos[player] = nil
+	inside[player] = nil
+	task.spawn(function()
+		local root = waitRoot(player, 5)
+		if not root or player.Character ~= char then return end
+		if player:GetAttribute("EditorPlaytest") and testSpawn[player] then
+			-- died / respawned while testing: back to the entry door
+			task.wait(0.1)
+			placeCharacter(player, testSpawn[player])
+			task.delay(1, function()
+				if player.Character == char and char.Parent and not char:GetAttribute("HasPortalGun")
+					and player:GetAttribute("EditorPlaytest") and os.clock() - (lastRig[player] or 0) > 6 then
+					rigChange(player, "Equip", { source = "Editor", silent = true })
+				end
+			end)
+		elseif player:GetAttribute("InEditor") then
+			park(player)
+		end
+	end)
+end
+
+local function onPlayerAdded(player)
+	loadedEvent[player] = true
+	player.CharacterAdded:Connect(function(char) onCharacterAdded(player, char) end)
+	local data
+	if profileStore then
+		local ok, d = retry(function() return profileStore:GetAsync("u_" .. player.UserId) end)
+		if ok then data = d end
+	end
+	if not player.Parent then return end
+	profiles[player] = reconcile(type(data) == "table" and data or newProfile())
+	applyCosmetics(player)
+	checkArrival(player)
+	local jd = player:GetJoinData()
+	local td = jd and jd.TeleportData
+	if type(td) == "table" and td.action then
+		task.delay(1, function()
+			if td.action == "NewGame" then startChapter(player, td.chapter or 1)
+			elseif td.action == "LoadGame" then Actions.LoadGame(player, td.saveId) end
+			Push:FireClient(player, "SkipMenu", {})
+		end)
+	end
+end
+
+Players.PlayerAdded:Connect(onPlayerAdded)
+for _, pl in ipairs(Players:GetPlayers()) do task.spawn(onPlayerAdded, pl) end
+
+Players.PlayerRemoving:Connect(function(player)
+	endCoop(player)
+	queued[player] = nil
+	if QUEUE then pcall(function() QUEUE:RemoveAsync(tostring(player.UserId)) end) end
+	saveProfile(player)
+	profiles[player] = nil
+	loadedEvent[player] = nil
+	dirty[player] = nil
+	lastPos[player], inside[player], fired[player] = nil, nil, nil
+	testSpawn[player], lastRig[player] = nil, nil
+	for k in pairs(lastCall) do
+		if k:sub(1, #tostring(player.UserId)) == tostring(player.UserId) then lastCall[k] = nil end
+	end
+end)
+
+game:BindToClose(function()
+	local threads = 0
+	for _, pl in ipairs(Players:GetPlayers()) do
+		threads += 1
+		task.spawn(function()
+			saveProfile(pl)
+			threads -= 1
+		end)
+	end
+	local t0 = os.clock()
+	while threads > 0 and os.clock() - t0 < 25 do task.wait() end
+end)
+
+task.spawn(function()
+	local sinceAuto = 0
+	while true do
+		task.wait(60)
+		sinceAuto += 1
+		for _, pl in ipairs(Players:GetPlayers()) do
+			local p = profiles[pl]
+			if p then p.stats.playtime = (p.stats.playtime or 0) + 60 end
+			if Config.AUTOSAVE_MINUTES > 0 and sinceAuto >= Config.AUTOSAVE_MINUTES and pl:GetAttribute("Chapter") and not pl:GetAttribute("InMenu") then
+				makeSave(pl, nil, true)
+				Push:FireClient(pl, "Autosaved", {})
+			end
+			if dirty[pl] then task.spawn(saveProfile, pl) end
+		end
+		if sinceAuto >= Config.AUTOSAVE_MINUTES then sinceAuto = 0 end
+	end
+end)
+
+-- ==========================================
+-- API FOR YOUR OTHER SERVER SCRIPTS
+-- ==========================================
+shared.PortalData = {
+	GetProfile = function(player) return profiles[player] end,
+	Unlock = unlock,
+	AddProgress = addProgress,
+	FinishChapter = finishChapter,
+	StartChapter = startChapter,
+	Autosave = function(player) return makeSave(player, nil, true) end,
+	LoadMap = loadMap,
+	PlaceCharacter = placeCharacter,
+	RegisterSaveHook = function(name, saveFn, loadFn)
+		saveHooks[name] = { save = saveFn, load = loadFn }
+	end,
+	CountPortal = function(player)
+		local p = profiles[player]
+		if p then p.stats.portals = (p.stats.portals or 0) + 1 end
+		addProgress(player, "PORTALS_100", 1)
+		addProgress(player, "PORTALS_1000", 1)
+		if player:GetAttribute("ChallengeChamber") then
+			player:SetAttribute("ChallengePortals", (player:GetAttribute("ChallengePortals") or 0) + 1)
+		end
+	end,
+	Push = function(player, kind, data) Push:FireClient(player, kind, data) end,
+}
