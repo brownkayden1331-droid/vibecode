@@ -204,12 +204,22 @@ local DEBUG_HUD = false
 
 local assets = ReplicatedStorage:WaitForChild("PortalAssets")
 local ost = assets:WaitForChild("OST")
-local p1Folder = ost:WaitForChild("Portal 1", 10)
-local segFolder = ost:WaitForChild("Short Segments", 10)
+-- NOT waited for: waiting up to 10 s each on these used to hold the whole script (menu music included) for 20 s
+-- when a folder was missing or named a little differently. They're looked up again later if they arrive late.
+local function findLoose(root, name)
+	local want = string.lower((string.gsub(name, "[^%w]", "")))
+	for _, c in ipairs(root:GetDescendants()) do
+		if string.lower((string.gsub(c.Name, "[^%w]", ""))) == want then return c end
+	end
+	return nil
+end
+local p1Folder = ost:FindFirstChild("Portal 1") or findLoose(ost, "Portal 1")
+local segFolder = ost:FindFirstChild("Short Segments") or findLoose(ost, "Short Segments")
 local voiceFolder = assets:FindFirstChild("GLaDOSVL")
 local portalsFolder = workspace:FindFirstChild("Portals")
 
 local function log(...) if DEBUG then print("[Music]", ...) end end
+local diagnoseMenu -- (below)
 local function squash(s) return string.lower((string.gsub(s, "[%s_]", ""))) end
 local function approach(cur, target, up, down, dt)
 	if target > cur then return math.min(cur + up * dt, target) end
@@ -219,7 +229,11 @@ end
 -------------------------------------------------------------- track lists
 local bgTracks = { Calm = {}, Neutral = {}, Tense = {} }
 local combatTracks = {}
-if p1Folder then
+local function buildP1()
+	p1Folder = p1Folder or ost:FindFirstChild("Portal 1") or findLoose(ost, "Portal 1")
+	if not p1Folder then return end
+	bgTracks.Calm, bgTracks.Neutral, bgTracks.Tense = {}, {}, {}
+	table.clear(combatTracks)
 	for _, s in ipairs(p1Folder:GetDescendants()) do
 		if s:IsA("Sound") then
 			local n = string.lower(s.Name)
@@ -235,12 +249,13 @@ if p1Folder then
 			end
 		end
 	end
-end
-for _, m in ipairs({ "Calm", "Neutral", "Tense" }) do
-	if #bgTracks[m] == 0 then
-		bgTracks[m] = (#bgTracks.Neutral > 0 and bgTracks.Neutral) or (#bgTracks.Calm > 0 and bgTracks.Calm) or bgTracks.Tense
+	for _, m in ipairs({ "Calm", "Neutral", "Tense" }) do
+		if #bgTracks[m] == 0 then
+			bgTracks[m] = (#bgTracks.Neutral > 0 and bgTracks.Neutral) or (#bgTracks.Calm > 0 and bgTracks.Calm) or bgTracks.Tense
+		end
 	end
 end
+buildP1()
 
 -- main menu music: ReplicatedStorage > PortalAssets > OST > "Main Menu" (a Folder of Sounds or one Sound).
 -- Looked up again whenever the list is empty and whenever something new lands in OST: the menu is the very first
@@ -248,12 +263,8 @@ end
 local menuTracks = {}
 local function refreshMenuTracks()
 	table.clear(menuTracks)
-	local menuFolder = ost:FindFirstChild("Main Menu")
-	if not menuFolder then
-		for _, c in ipairs(ost:GetChildren()) do
-			if squash(c.Name) == "mainmenu" then menuFolder = c break end
-		end
-	end
+	-- "Main Menu", "MainMenu", "main_menu"... directly in OST or deeper, else anywhere in PortalAssets
+	local menuFolder = ost:FindFirstChild("Main Menu") or findLoose(ost, "Main Menu") or findLoose(assets, "Main Menu")
 	if not menuFolder then return end
 	if menuFolder:IsA("Sound") then
 		table.insert(menuTracks, menuFolder)
@@ -266,12 +277,17 @@ local function refreshMenuTracks()
 end
 refreshMenuTracks()
 ost.DescendantAdded:Connect(function(d)
-	if d:IsA("Sound") or squash(d.Name) == "mainmenu" then task.defer(refreshMenuTracks) end
+	if d:IsA("Sound") or d:IsA("Folder") then
+		task.defer(refreshMenuTracks)
+		segFolder = segFolder or ost:FindFirstChild("Short Segments") or findLoose(ost, "Short Segments")
+		if #combatTracks == 0 and #bgTracks.Neutral == 0 then task.defer(buildP1) end
+	end
 end)
 
 local segCache = {}
 local function segments(folderName)
 	local key = squash(folderName)
+	segFolder = segFolder or ost:FindFirstChild("Short Segments")
 	if segCache[key] and #segCache[key] > 0 then return segCache[key] end
 	local list = {}
 	if segFolder then
@@ -300,7 +316,11 @@ eq.Priority = 1
 eq.Parent = musicGroup
 
 local function makeSound(original, looped)
+	-- Clone() gives nil for a Sound with Archivable off (that used to error every frame and kill all music)
+	local wasArchivable = original.Archivable
+	original.Archivable = true
 	local s = original:Clone()
+	original.Archivable = wasArchivable
 	s.Looped = looped
 	s.Volume = 0
 	s.SoundGroup = musicGroup -- set before parenting, so PortalMenu's sound routing leaves it alone
@@ -553,6 +573,28 @@ end
 local function bar(x)
 	local n = math.floor(x * 20 + 0.5)
 	return string.rep("#", n) .. string.rep(".", 20 - n)
+end
+
+------------------------------------------------------------ diagnostics
+-- On the main menu and still silent? This says why in the Output window (once each).
+local menuSince, saidNoTracks, saidNotLoaded = nil, false, false
+diagnoseMenu = function(now)
+	menuSince = menuSince or now
+	if now - menuSince < 6 then return end
+	if #menuTracks == 0 and not saidNoTracks then
+		saidNoTracks = true
+		local names = {}
+		for _, c in ipairs(ost:GetChildren()) do table.insert(names, c.Name .. " (" .. c.ClassName .. ")") end
+		warn("[MusicDirector] No main menu music found. Put a Sound, or a Folder of Sounds, named \"Main Menu\" in "
+			.. ost:GetFullName() .. ". OST has: " .. (#names > 0 and table.concat(names, ", ") or "nothing"))
+	end
+	local s = slots.menu.sound
+	if s and not s.IsLoaded and now - menuSince > 12 and not saidNotLoaded then
+		saidNotLoaded = true
+		warn("[MusicDirector] The menu track " .. s.Name .. " (" .. s.SoundId .. ") won't load. Check Output for "
+			.. "'not authorized' / 'failed to load': the audio has to be public, or yours / your group's with permission "
+			.. "granted to this experience (Creator Hub > the audio > Permissions).")
+	end
 end
 
 ---------------------------------------------------------------- main loop
@@ -841,6 +883,7 @@ RunService.Heartbeat:Connect(function(dt)
 	if inMainMenu then
 		target.menu = "Menu"
 		vol.menu = MENU_VOLUME
+		diagnoseMenu(now)
 	elseif inLoading then
 		-- silence: nothing wants any slot, so everything fades out
 	elseif alive then
