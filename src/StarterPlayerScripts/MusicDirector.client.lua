@@ -663,6 +663,8 @@ RunService.Heartbeat:Connect(function(dt)
 	local menuMode = player:GetAttribute("MenuMode")
 	local inMainMenu = menuMode == "main"
 	local inLoading = menuMode == "loading"
+	-- a chip in an editor chamber is playing its own music (PortalMenu sets ChipMusic): fade ours out meanwhile
+	local chipMusic = player:GetAttribute("ChipMusic") == true and not inMainMenu
 	if menuMode ~= lastMenuMode then
 		-- coming out of the menus: give the game a moment before Portal 1 background comes back
 		if lastMenuMode == "main" or lastMenuMode == "loading" then
@@ -924,7 +926,7 @@ RunService.Heartbeat:Connect(function(dt)
 		target.menu = "Menu"
 		vol.menu = MENU_VOLUME
 		diagnoseMenu(now)
-	elseif inLoading then
+	elseif inLoading or chipMusic then
 		-- silence: nothing wants any slot, so everything fades out
 	elseif alive then
 		if solo then

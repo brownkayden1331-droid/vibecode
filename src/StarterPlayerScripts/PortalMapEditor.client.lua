@@ -2776,6 +2776,11 @@ do
 									a.var = a.var or "score"
 									a.value = a.value or (op == "add" and "1" or "0")
 								end
+								if op == "music" or op == "sound" then a.text = (a.text and a.text ~= "") and a.text or (Config.ChipSoundNames(op)[1] or "") end
+								if op == "title" then a.text = a.text or "Test complete!" end
+								if op == "shake" then a.n = a.n or 1 end
+								if op == "tint" then a.text = Config.CHIP_TINTS[a.text or ""] ~= nil and a.text or "blue" end
+								if op == "countdown" then a.n = a.n or 30 end
 								if op == "if" then
 									a.lhs, a.cmp, a.rhs = a.lhs or "score", a.cmp or ">=", a.rhs or "1"
 									a.act = a.act or { op = "open", target = Config.LabelKinds(E.ents).exit and "exit" or nil }
@@ -2802,6 +2807,37 @@ do
 					label(row, x + 98, y, 80, "seconds")
 				elseif a.op == "say" then
 					field(row, x, y, w, a.text or "", function(v) a.text = v end, false)
+				elseif a.op == "music" or a.op == "sound" then
+					-- a song / sound from the game (menu), or type a name / asset id
+					local names = Config.ChipSoundNames(a.op)
+					field(row, x, y, w - 46, a.text or "", function(v) a.text = v end, false).PlaceholderText = "name or asset id"
+					tinyButton(row, x + w - 40, y, 36, "▾", function()
+						local list = {}
+						if a.op == "music" then table.insert(list, { text = "stop", icon = "radio", checked = a.text == "stop", fn = function() a.text = "stop" render() end }) end
+						for _, n in ipairs(names) do
+							table.insert(list, { text = n, icon = "radio", checked = a.text == n, fn = function() a.text = n render() end })
+						end
+						if #list == 0 then list = { { text = "No sounds in PortalAssets." .. (a.op == "music" and "OST" or "Sounds"), disabled = true, fn = function() end } } end
+						local pos = (row.AbsolutePosition - canvas.AbsolutePosition) / uiScale.Scale
+						popupMenu(pos.X + x + w - 40, pos.Y + y + 32, { { items = list } })
+					end)
+				elseif a.op == "title" then
+					field(row, x, y, w, a.text or "", function(v) a.text = v end, false)
+				elseif a.op == "shake" then
+					field(row, x, y, 90, a.n or 1, function(v) a.n = math.clamp(v, 0.1, 5) end, true)
+					label(row, x + 98, y, 80, "seconds")
+				elseif a.op == "countdown" then
+					field(row, x, y, 90, a.n or 30, function(v) a.n = math.clamp(math.floor(v), 0, 600) end, true)
+					label(row, x + 98, y, 200, "seconds (0 = stop)")
+				elseif a.op == "tint" then
+					dropdown(row, x, y, 180, a.text or "none", function()
+						local list = {}
+						for _, c in ipairs(Config.CHIP_TINT_ORDER) do
+							table.insert(list, { text = c, swatch = Config.CHIP_TINTS[c] or nil, icon = Config.CHIP_TINTS[c] and nil or "radio",
+								checked = a.text == c, fn = function() a.text = c render() end })
+						end
+						return list
+					end)
 				elseif a.op == "set" or a.op == "add" then
 					local nameBox = field(row, x, y, 130, a.var or "score", function(v)
 						v = v:gsub("%s", "")

@@ -1854,11 +1854,23 @@ end
 -- pressed / on / open, else 0. Lines starting with -- or # are comments.
 C.CHIP_EVENTS = { "pressed", "released", "start", "every" }
 C.CHIP_EVENT_LABELS = { pressed = "is pressed", released = "is released", start = "chamber starts", every = "every ... seconds" }
-C.CHIP_ACTIONS = { "open", "close", "toggle", "enable", "disable", "drop", "reverse", "wait", "say", "set", "add", "if" }
+C.CHIP_ACTIONS = { "open", "close", "toggle", "enable", "disable", "drop", "reverse", "wait", "say", "set", "add", "if",
+	"music", "sound", "shake", "title", "tint", "countdown" }
+-- effects: only the players in that chamber see / hear them (you, or you and your co-op partner). Never touch gameplay.
+C.CHIP_FX = { music = true, sound = true, shake = true, title = true, tint = true, countdown = true }
+C.CHIP_TINTS = {
+	none = false, red = Color3.fromRGB(255, 90, 80), orange = Color3.fromRGB(255, 160, 60), yellow = Color3.fromRGB(255, 225, 90),
+	green = Color3.fromRGB(110, 220, 110), cyan = Color3.fromRGB(90, 220, 235), blue = Color3.fromRGB(90, 140, 255),
+	purple = Color3.fromRGB(180, 110, 255), pink = Color3.fromRGB(255, 120, 200), white = Color3.fromRGB(255, 255, 255),
+	dark = Color3.fromRGB(60, 60, 70),
+}
+C.CHIP_TINT_ORDER = { "none", "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white", "dark" }
 C.CHIP_ACTION_LABELS = {
 	open = "open", close = "close", toggle = "toggle", enable = "turn on", disable = "turn off",
 	drop = "drop a cube from", reverse = "reverse", wait = "wait (seconds)", say = "show message",
 	set = "set variable", add = "add to variable", ["if"] = "if ... then",
+	music = "play music", sound = "play a sound", shake = "shake the screen", title = "show a title", tint = "tint the screen",
+	countdown = "show a countdown",
 }
 C.CHIP_COMPARE = { "==", "!=", "<", ">", "<=", ">=" }
 -- what each line expects (the editor shows it while you type, like a code editor's parameter hints)
@@ -1876,10 +1888,16 @@ C.CHIP_HINTS = {
 	set = "set <variable> <number | true | false | variable>",
 	add = "add <variable> <number>   (a negative number takes away)",
 	["if"] = "if <variable | item> <== != < > <= >=> <value> then <action>",
+	music = "music <song name | asset id>   plays for everyone in the chamber   ·   music stop",
+	sound = "sound <sound name | asset id>   a one-shot sound effect",
+	shake = "shake <seconds>   shakes everyone's screen (up to 5)",
+	title = "title <text>   big text in the middle of the screen ({name} = a variable)",
+	tint = "tint <none red orange yellow green cyan blue purple pink white dark>   colours the screen",
+	countdown = "countdown <seconds>   a timer on screen   ·   countdown stop",
 }
 local CHIP_TARGET = { open = true, close = true, toggle = true, enable = true, disable = true, drop = true, reverse = true }
 C.CHIP_TARGET = CHIP_TARGET
-local CHIP_KEYWORDS = { ["when"] = true, ["then"] = true, ["true"] = true, ["false"] = true, start = true, every = true, pressed = true, released = true }
+local CHIP_KEYWORDS = { ["when"] = true, ["then"] = true, ["true"] = true, ["false"] = true, start = true, every = true, pressed = true, released = true, stop = true }
 for _, a in ipairs(C.CHIP_ACTIONS) do CHIP_KEYWORDS[a] = true end
 function C.ValidVarName(n)
 	return type(n) == "string" and #n <= 24 and n:match("^[%a_][%w_]*$") ~= nil and not CHIP_KEYWORDS[n:lower()]
@@ -1904,6 +1922,26 @@ local function parseAction(word, rest, allowIf)
 	elseif word == "say" then
 		local msg = rest:match('^"(.*)"$') or rest
 		return { op = "say", text = msg:sub(1, 120) }
+	elseif word == "music" or word == "sound" then
+		local what = (rest:match('^"(.*)"$') or rest):gsub("^%s+", ""):gsub("%s+$", "")
+		if what == "" then return nil, ("'%s' needs a name or an asset id, like '%s Still Alive'"):format(word, word) end
+		return { op = word, text = what:sub(1, 80) }
+	elseif word == "shake" then
+		local n = tonumber(rest)
+		if not n then return nil, "'shake' needs a number of seconds, like 'shake 1'" end
+		return { op = "shake", n = math.clamp(n, 0.1, 5) }
+	elseif word == "title" then
+		local msg = rest:match('^"(.*)"$') or rest
+		return { op = "title", text = msg:sub(1, 80) }
+	elseif word == "tint" then
+		local c = (rest:match("^(%S+)") or ""):lower()
+		if C.CHIP_TINTS[c] == nil then return nil, "'tint' needs a colour: " .. table.concat(C.CHIP_TINT_ORDER, " ") end
+		return { op = "tint", text = c }
+	elseif word == "countdown" then
+		if rest:lower():match("^stop") then return { op = "countdown", n = 0 } end
+		local n = tonumber(rest)
+		if not n then return nil, "'countdown' needs a number of seconds (or 'countdown stop')" end
+		return { op = "countdown", n = math.clamp(math.floor(n), 1, 600) }
 	elseif word == "set" or word == "add" then
 		local var, value = rest:match("^(%S+)%s*(%S*)")
 		if not C.ValidVarName(var) then return nil, ("'%s' needs a variable name (letters, numbers, _), like '%s score 1'"):format(word, word) end
@@ -1971,6 +2009,11 @@ end
 
 local function actionText(a)
 	if a.op == "wait" then return "wait " .. tostring(a.n or 1) end
+	if a.op == "music" or a.op == "sound" then return a.op .. " " .. (a.text or "") end
+	if a.op == "shake" then return "shake " .. tostring(a.n or 1) end
+	if a.op == "title" then return ('title "%s"'):format((a.text or ""):gsub('"', "'")) end
+	if a.op == "tint" then return "tint " .. (a.text or "none") end
+	if a.op == "countdown" then return (a.n or 0) <= 0 and "countdown stop" or ("countdown " .. tostring(a.n)) end
 	if a.op == "say" then return ('say "%s"'):format((a.text or ""):gsub('"', "'")) end
 	if a.op == "set" or a.op == "add" then return ("%s %s %s"):format(a.op, a.var or "?", tostring(a.value or "0")) end
 	if a.op == "if" then
@@ -2002,6 +2045,45 @@ local function eachAction(rules, fn)
 	end
 end
 C.ChipEachAction = eachAction
+
+-- music / sound names the game has (PortalAssets.OST and PortalAssets.Sounds), for suggestions
+function C.ChipSoundNames(kind)
+	local names, seen = {}, {}
+	local assets = ReplicatedStorage:FindFirstChild("PortalAssets")
+	local folder = assets and assets:FindFirstChild(kind == "music" and "OST" or "Sounds")
+	if folder then
+		for _, d in ipairs(folder:GetDescendants()) do
+			if d:IsA("Sound") and not seen[d.Name] then
+				seen[d.Name] = true
+				table.insert(names, d.Name)
+			end
+		end
+	end
+	table.sort(names)
+	return names
+end
+-- finds a Sound by the name a chip used (or makes one from an asset id). Client side.
+function C.ChipFindSound(kind, what)
+	if type(what) ~= "string" then return nil end
+	local id = what:match("^%s*(%d+)%s*$") or what:match("rbxassetid://(%d+)")
+	if id then
+		local s = Instance.new("Sound")
+		s.Name = "Asset " .. id
+		s.SoundId = "rbxassetid://" .. id
+		return s, true
+	end
+	local assets = ReplicatedStorage:FindFirstChild("PortalAssets")
+	local want = what:lower():gsub("[^%w]", "")
+	for _, fname in ipairs(kind == "music" and { "OST", "Sounds" } or { "Sounds", "OST" }) do
+		local folder = assets and assets:FindFirstChild(fname)
+		if folder then
+			for _, d in ipairs(folder:GetDescendants()) do
+				if d:IsA("Sound") and d.Name:lower():gsub("[^%w]", "") == want then return d, false end
+			end
+		end
+	end
+	return nil
+end
 
 -- the variables a program uses (set / add)
 function C.ChipVariables(rules)
@@ -2145,7 +2227,8 @@ function C.ChipAutocorrect(src, labels)
 			return ("if %s %s %s %s"):format(lhs, cmp, rhs, thenW) .. (w2 and (" " .. fixAction(w2, r2, false)) or "")
 		elseif first == "say" or first == "wait" or not ACTION_SET[first] then
 			return first .. (rest ~= "" and (" " .. rest) or "")
-		elseif first == "set" or first == "add" then
+		elseif first == "set" or first == "add" or C.CHIP_FX[first] then
+			if first == "tint" and rest ~= "" then rest = fixWord(rest, C.CHIP_TINT_ORDER, 2) end
 			return first .. (rest ~= "" and (" " .. rest) or "")
 		end
 		local target = rest:match("^(%S+)")
@@ -2219,12 +2302,14 @@ function C.ChipHighlight(src, kinds)
 					kind = "when"
 				elseif (idx == 1 or prev == "then") and ACTION_SET[lw] then
 					kind = "action"
-					isSay = lw == "say"
+					isSay = lw == "say" or lw == "title" or lw == "music" or lw == "sound"
 				elseif EVENTS[lw] then
 					kind = "event"
 				elseif COMPARE[lw] or lw == "=" or lw == "~=" then
 					kind = "op"
-				elseif tonumber(w) or lw == "true" or lw == "false" then
+				elseif prev == "tint" and C.CHIP_TINTS[lw] ~= nil then
+					kind = "event"
+				elseif tonumber(w) or lw == "true" or lw == "false" or (prev == "countdown" and lw == "stop") then
 					kind = "number"
 				elseif kinds and kinds[lw] then
 					kind = "label"
@@ -2264,7 +2349,11 @@ function C.ChipSuggest(line, kinds, varList)
 	local function actionArgs(op, at)
 		if at == 1 then
 			if CHIP_TARGET[op] then labelsWhere(function(k) return C.ChipTargetOk(op, k) end)
-			elseif op == "set" or op == "add" then for _, v in ipairs(varList or {}) do add(v, "variable") end end
+			elseif op == "set" or op == "add" then for _, v in ipairs(varList or {}) do add(v, "variable") end
+			elseif op == "music" then add("stop", "value") for _, n in ipairs(C.ChipSoundNames("music")) do add(n, "value") end
+			elseif op == "sound" then for _, n in ipairs(C.ChipSoundNames("sound")) do add(n, "value") end
+			elseif op == "tint" then for _, c in ipairs(C.CHIP_TINT_ORDER) do add(c, "value") end
+			elseif op == "countdown" then add("stop", "value") end
 		end
 	end
 	if n <= 1 then
@@ -2387,6 +2476,30 @@ Items are called by their <b>label</b> (right-click an item to see or change it)
   Compare with == != &lt; &gt; &lt;= &gt;=. An item in an if counts as 1 when it's pressed / on / open, else 0: <font color="#8E44AD">if</font> button2 == 1 <font color="#8E44AD">then</font> ...
 
 Lines starting with -- or # are comments.]] },
+	{ "Chips: effects", [[
+Effects are seen and heard <b>only by the players in this chamber</b>: you, or you and your co-op partner. They never change the puzzle.
+  <font color="#1F6FD0">music</font> Still Alive   plays a song from PortalAssets.OST (or an asset id) and the game's own music steps aside
+  <font color="#1F6FD0">music</font> stop   fades it out
+  <font color="#1F6FD0">sound</font> buttondown   a one-shot sound from PortalAssets.Sounds (or an asset id)
+  <font color="#1F6FD0">shake</font> 1   shakes the screen for 1 second (up to 5)
+  <font color="#1F6FD0">title</font> "Chamber 07"   big text in the middle of the screen ({score} works here too)
+  <font color="#1F6FD0">tint</font> blue   colours the screen: none red orange yellow green cyan blue purple pink white dark
+  <font color="#1F6FD0">countdown</font> 30   a timer at the top   ·   <font color="#1F6FD0">countdown</font> stop
+
+Effects stop when you leave the chamber, rebuild it or go back to editing. A chip can send at most 20 effects a second.
+
+<b>Example: a timed run</b>
+when start
+    title "You have 30 seconds"
+    music Self Esteem Fund
+    countdown 30
+    wait 30
+    if exit == 0 then say "Too slow! Try again."
+when button1 pressed
+    sound buttondown
+    open exit
+    countdown stop
+    tint green]] },
 	{ "Chips: examples", [[
 <b>Hold the button to keep the exit open</b>
 when button1 pressed

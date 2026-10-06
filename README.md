@@ -44,6 +44,7 @@ Events: `when <item> pressed|released`, `when start`, `when every <seconds>`.
 Actions: `open|close|enable|disable|toggle <item>`, `drop <dropper>`, `reverse <funnel>`, `wait <seconds>`, `say <text>`.
 In the LINES view words are coloured (keywords, items, numbers, text, comments; unknown words in red), and typos are fixed when you press Enter or click away (e.g. `opne exitt` → `open exit`), with actions indented under their `when`.
 Chips also have **variables** (`set score 0`, `add score 1`, `say "Score: {score}"`) and one-line **if** (`if score >= 3 then open exit`). In the LINES view suggestions pop up as you type (Tab takes the top one) and the bar under the text shows what the line expects.
+**Effects** (look and sound only, for the players in that chamber: you, or you and your co-op partner): `music <song | id>` / `music stop` (the game's own music steps aside while it plays), `sound <name | id>`, `shake <seconds>`, `title "text"`, `tint <colour>`, `countdown <seconds>` / `countdown stop`. They stop when you leave, rebuild or go back to editing; a chip can send at most 20 a second. Songs come from `PortalAssets.OST`, sounds from `PortalAssets.Sounds`.
 Items are named by label (right-click an item in Advanced mode). **To My Chips** stores a chip in your profile so you can use it in any chamber.
 
 ## Exit door

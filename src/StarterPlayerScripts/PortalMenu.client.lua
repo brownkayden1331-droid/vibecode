@@ -3734,6 +3734,126 @@ end)
 
 end
 -- ==========================================
+-- CHIP EFFECTS (Advanced editor chips: music / sound / shake / title / tint / countdown)
+-- ==========================================
+-- PortalServer sends these only to the players in that chamber (you, or you + your co-op partner). They're look and
+-- sound only. While chip music plays, the player attribute ChipMusic is true and MusicDirector fades its own music out.
+local chipFX
+do
+	local fxGui = new("ScreenGui", { Name = "PortalChipFX", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 80,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = playerGui })
+	local title = new("TextLabel", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.38), Size = UDim2.fromScale(0.8, 0.12),
+		BackgroundTransparency = 1, Text = "", FontFace = F_TITLE, TextScaled = true, TextColor3 = rgb(245), TextStrokeColor3 = rgb(0),
+		TextTransparency = 1, TextStrokeTransparency = 1, Parent = fxGui })
+	new("UITextSizeConstraint", { MaxTextSize = 72, Parent = title })
+	local timerLabel = new("TextLabel", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 70), Size = UDim2.fromOffset(240, 60),
+		BackgroundColor3 = rgb(20, 24, 26), BackgroundTransparency = 0.35, Text = "", Font = Enum.Font.Code, TextSize = 44,
+		TextColor3 = rgb(240, 90, 90), Visible = false, Parent = fxGui })
+	new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = timerLabel })
+	local tintFX = new("ColorCorrectionEffect", { Name = "PortalChipTint", Enabled = false, Parent = Lighting })
+	local music, musicToken, timerToken, titleToken = nil, 0, 0, 0
+	local shakeUntil, shakeAmount = 0, 0
+
+	local function group()
+		return SoundService:FindFirstChild("Music") or musicGroup
+	end
+	local function stopMusic(fade)
+		musicToken += 1
+		local m = music
+		music = nil
+		player:SetAttribute("ChipMusic", nil)
+		if m then
+			if fade then
+				tween(m, 1.5, { Volume = 0 }).Completed:Connect(function() m:Destroy() end)
+			else
+				m:Destroy()
+			end
+		end
+	end
+
+	RunService:BindToRenderStep("PortalChipShake", Enum.RenderPriority.Camera.Value + 1, function()
+		local left = shakeUntil - os.clock()
+		if left <= 0 then return end
+		local cam = workspace.CurrentCamera
+		if not cam then return end
+		local k = shakeAmount * math.min(left, 1)
+		cam.CFrame *= CFrame.Angles(math.rad((math.random() - 0.5) * k), math.rad((math.random() - 0.5) * k), 0)
+	end)
+
+	chipFX = function(d)
+		local op = d.op
+		if op == "reset" then
+			stopMusic(false)
+			tintFX.Enabled = false
+			timerToken += 1
+			timerLabel.Visible = false
+			titleToken += 1
+			title.TextTransparency, title.TextStrokeTransparency = 1, 1
+			shakeUntil = 0
+		elseif op == "music" then
+			if tostring(d.text):lower() == "stop" then stopMusic(true) return end
+			local src, made = Config.ChipFindSound("music", d.text)
+			if not src then warn("[PortalMenu] chip music: no song called '" .. tostring(d.text) .. "' in PortalAssets.OST") return end
+			stopMusic(false)
+			local s = made and src or src:Clone()
+			s.Looped = true
+			s.Volume = 0
+			s.SoundGroup = group()
+			s.Parent = SoundService
+			s:Play()
+			music = s
+			player:SetAttribute("ChipMusic", true)
+			tween(s, 1.5, { Volume = math.clamp(src.Volume > 0 and src.Volume or 0.5, 0.05, 1) })
+		elseif op == "sound" then
+			local src, made = Config.ChipFindSound("sound", d.text)
+			if not src then warn("[PortalMenu] chip sound: no sound called '" .. tostring(d.text) .. "'") return end
+			local s = made and src or src:Clone()
+			s.Looped = false
+			s.SoundGroup = sfxGroup
+			s.Parent = SoundService
+			s:Play()
+			s.Ended:Once(function() s:Destroy() end)
+			task.delay(30, function() if s.Parent then s:Destroy() end end)
+		elseif op == "shake" then
+			shakeUntil = os.clock() + math.clamp(tonumber(d.n) or 1, 0.1, 5)
+			shakeAmount = 2.2
+		elseif op == "title" then
+			titleToken += 1
+			local my = titleToken
+			title.Text = tostring(d.text or "")
+			tween(title, 0.4, { TextTransparency = 0, TextStrokeTransparency = 0.4 })
+			task.delay(3.2, function()
+				if my == titleToken then tween(title, 0.8, { TextTransparency = 1, TextStrokeTransparency = 1 }) end
+			end)
+		elseif op == "tint" then
+			local c = Config.CHIP_TINTS[tostring(d.text or "none")]
+			if not c then
+				tween(tintFX, 0.6, { TintColor = rgb(255) }).Completed:Connect(function() tintFX.Enabled = false end)
+			else
+				tintFX.Enabled = true
+				tween(tintFX, 0.6, { TintColor = rgb(255):Lerp(c, 0.55) })
+			end
+		elseif op == "countdown" then
+			timerToken += 1
+			local my = timerToken
+			local secs = math.floor(tonumber(d.n) or 0)
+			if secs <= 0 then timerLabel.Visible = false return end
+			timerLabel.Visible = true
+			task.spawn(function()
+				for left = secs, 0, -1 do
+					if my ~= timerToken then return end
+					timerLabel.Text = ("%d:%02d"):format(left // 60, left % 60)
+					timerLabel.TextColor3 = left <= 5 and rgb(255, 70, 70) or rgb(240, 240, 240)
+					if left > 0 then task.wait(1) end
+				end
+				task.wait(1.5)
+				if my == timerToken then timerLabel.Visible = false end
+			end)
+		end
+	end
+end
+
+-- ==========================================
 -- SERVER PUSHES
 -- ==========================================
 
@@ -3748,6 +3868,7 @@ function Push.ChapterUnlocked(d)
 	if ch then toast(("Chapter %d: %s"):format(d.maxChapter, ch.title), "Chapter unlocked", "good") end
 end
 function Push.Toast(d) toast(d.text, d.title, d.kind) end
+function Push.ChipFX(d) chipFX(d) end
 function Push.Inventory(d) P.inventory = d.inventory end
 function Push.LoadChapter(d) startGame("NewGame", d.chapter) end
 function Push.SkipMenu() if mode ~= "none" then closeAll() end end

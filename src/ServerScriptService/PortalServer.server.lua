@@ -923,6 +923,7 @@ runChips = function(root, data, byId, slot)
 
 	-- variables: shared by every chip in this chamber, start at 0
 	local vars = {}
+	local fxWindow, fxCount = 0, 0
 	local function value(word)
 		if word == nil then return 0 end
 		local n = tonumber(word)
@@ -957,6 +958,17 @@ runChips = function(root, data, byId, slot)
 			return
 		elseif a.op == "wait" then
 			return a.n or 0 -- the caller waits
+		elseif Config.CHIP_FX[a.op] then
+			-- effects: sent only to the players in this chamber (you, or you + your co-op partner); never gameplay
+			local now = os.clock()
+			if now - fxWindow > 1 then fxWindow, fxCount = now, 0 end
+			fxCount += 1
+			if fxCount > 20 then return end -- a chip spamming effects every frame gets cut off
+			local text = a.text and a.text:gsub("{([%a_][%w_]*)}", function(n) return tostring(value(n)) end) or nil
+			for _, pl in ipairs(slotPlayers(slot)) do
+				Push:FireClient(pl, "ChipFX", { op = a.op, text = text, n = a.n })
+			end
+			return
 		end
 		local t = item(a.target)
 		local kind = t and t:GetAttribute("Kind")
@@ -1265,6 +1277,7 @@ end
 
 local function buildChamberMap(data, name, player)
 	preloadToolbox(data)
+	for _, pl in ipairs(slotPlayers(acquireSlot(player))) do Push:FireClient(pl, "ChipFX", { op = "reset" }) end
 	clearActive(player)
 	local slot = acquireSlot(player)
 	local origin = Config.ChamberOrigin(slot)
@@ -1655,6 +1668,7 @@ function Actions.DeveloperCommentary(player)
 end
 
 function Actions.ExitToMainMenu(player)
+	Push:FireClient(player, "ChipFX", { op = "reset" })
 	endCoop(player)
 	local wasEditor = player:GetAttribute("InEditor")
 	if wasEditor then
@@ -1947,6 +1961,7 @@ function Actions.EditorTest(player, arg)
 end
 
 function Actions.EditorEdit(player)
+	Push:FireClient(player, "ChipFX", { op = "reset" }) -- chip music / tint / countdown stop when you go back to editing
 	clearActive(player)
 	testSpawn[player] = nil
 	player:SetAttribute("EditorPlaytest", false)
@@ -1989,7 +2004,7 @@ function Actions.EditorPublish(player, arg)
 		local rules = Config.ParseChip(chip.src)
 		local changed = false
 		Config.ChipEachAction(rules, function(a) -- (says inside an "if" too)
-			if a.op == "say" and a.text ~= "" then
+			if (a.op == "say" or a.op == "title") and a.text ~= "" then
 				a.text = filterText(a.text, player) or ""
 				changed = true
 			end
