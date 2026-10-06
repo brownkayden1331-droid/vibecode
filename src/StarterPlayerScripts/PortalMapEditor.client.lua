@@ -1712,6 +1712,7 @@ do
 	Pal.wrap = palWrap
 
 	local palette = ui(new("Frame", { Position = L(27, 163), Size = px(375, 753), BackgroundColor3 = C.PAL_BG, BorderSizePixel = 0, Active = true, ZIndex = 5, Parent = palWrap }))
+	Pal.body = palette
 	new("UIStroke", { Color = C.PAL_EDGE, Thickness = 1, Parent = palette })
 
 	local itemName = new("TextLabel", { Position = px(8, 733), Size = px(359, 18), BackgroundTransparency = 1, Text = "", FontFace = FONT.UI_REG,
@@ -1959,10 +1960,10 @@ do
 
 	-- ----- TEXTURES + MESHES: Toolbox (Creator Store) search, or what's in PortalAssets -----
 	-- each page: search box, TOOLBOX / IN GAME switch, a results grid, then its own id boxes and buttons
-	local function sourcePage(id, placeholder)
+	local function sourcePage(id, placeholder, libraryOnly)
 		local pg = page(id)
-		local st = { src = "toolbox", query = "", page = 0, token = 0 }
-		st.grid = grid(pg, 74, 508, 104)
+		local st = { src = libraryOnly and "library" or "toolbox", query = "", page = 0, token = 0 }
+		st.grid = libraryOnly and grid(pg, 42, 540, 104) or grid(pg, 74, 508, 104)
 		st.status = note(pg, px(14, 84), px(340, 80), "")
 		st.status.ZIndex = 8
 		st.search = searchBox(pg, placeholder, function(q)
@@ -1977,7 +1978,7 @@ do
 			end
 		end)
 		st.buttons = {}
-		for i, sdef in ipairs({ { "toolbox", "TOOLBOX" }, { "library", "IN GAME" } }) do
+		for i, sdef in ipairs(libraryOnly and {} or { { "toolbox", "TOOLBOX" }, { "library", "IN GAME" } }) do
 			local b = smallButton(pg, px(7 + (i - 1) * 183, 42), px(178, 26), sdef[2], function()
 				if st.src == sdef[1] then return end
 				st.src = sdef[1]
@@ -2115,62 +2116,38 @@ do
 		tex.run(false)
 	end
 
-	-- ----- MESHES -----
-	local meshPage, mesh = sourcePage("meshes", "Search models (Toolbox)...")
-	local meshId = inputBox(meshPage, px(7, 590), px(178, 30), "Mesh / model asset id")
+	-- ----- MESHES (MeshParts) -----
+	-- the game's own MeshParts / models, or any Mesh asset id: the server turns it into a real MeshPart
+	local meshPage, mesh = sourcePage("meshes", "Search meshes...", true)
+	local meshId = inputBox(meshPage, px(7, 590), px(178, 30), "Mesh asset id")
 	local meshTex = inputBox(meshPage, px(190, 590), px(178, 30), "Texture id (optional)")
-	note(meshPage, px(9, 668), px(359, 60), "Drag a mesh into the room. Right-click it to resize it (and nudge it in Advanced mode). IN GAME lists ReplicatedStorage.PortalAssets.Meshes.")
+	note(meshPage, px(9, 668), px(359, 60), "Drag a mesh into the room, or paste a Mesh id. Right-click a placed mesh to resize it. Your own go in ReplicatedStorage.PortalAssets.Meshes.")
 
-	-- a model from the Toolbox: the server loads it (scripts stripped), then you carry it like any item
-	local function pickToolboxMesh(r)
-		if E.carry then return end
-		local variant = "asset:" .. r.id
-		if Config.ToolboxModel(r.id) then
-			Pal.startCarry({ kind = "prop", variant = variant, name = r.name })
-			sfx("Click")
-			return
-		end
-		flash("Loading " .. r.name .. "...")
-		task.spawn(function()
-			local ok, res = netCall("ToolboxLoad", { kind = "meshes", id = r.id })
-			if not ok then flash(tostring(res or "Couldn't load that model.")) sfx("Error") return end
-			local f = ReplicatedStorage:WaitForChild(Config.TOOLBOX_FOLDER, 10)
-			if f and f:WaitForChild(tostring(r.id), 10) and E.active and not E.carry then
-				Pal.startCarry({ kind = "prop", variant = variant, name = r.name })
-				flash("Click in the room to place " .. r.name .. ".")
-			end
-		end)
-	end
-	smallButton(meshPage, px(7, 628), px(361, 30), "PICK UP ID", function()
+	smallButton(meshPage, px(7, 628), px(361, 30), "PICK UP MESH ID", function()
 		local id = meshId.Text:match("(%d+)")
-		if not id then flash("Paste a mesh or model asset id first.") sfx("Error") return end
+		if not id then flash("Paste a Mesh asset id first.") sfx("Error") return end
 		local tid = meshTex.Text:match("(%d+)")
-		if tid then
-			-- mesh id + texture id: a SpecialMesh
-			Pal.startCarry({ kind = "prop", variant = "mesh:" .. id .. ":" .. tid, name = "Mesh " .. id })
-			return
-		end
-		-- a model id loads like a Toolbox model; a bare mesh id falls back to a SpecialMesh
+		local key = Config.MeshKey(id, tid)
+		local variant = "mesh:" .. id .. (tid and (":" .. tid) or "")
+		local function carry() if E.active and not E.carry then Pal.startCarry({ kind = "prop", variant = variant, name = "Mesh " .. id }) end end
+		if Config.ToolboxModel(key) then carry() return end
+		flash("Making the MeshPart...")
 		task.spawn(function()
-			local ok = netCall("ToolboxLoad", { kind = "meshes", id = tonumber(id) })
-			local f = ok and ReplicatedStorage:WaitForChild(Config.TOOLBOX_FOLDER, 10)
-			if f and f:WaitForChild(id, 10) then
-				Pal.startCarry({ kind = "prop", variant = "asset:" .. id, name = "Model " .. id })
-			else
-				Pal.startCarry({ kind = "prop", variant = "mesh:" .. id, name = "Mesh " .. id })
+			local ok, res = netCall("ToolboxLoad", { kind = "mesh", id = tonumber(id), tex = tonumber(tid) })
+			if not ok then flash(tostring(res or "Couldn't load that mesh.")) sfx("Error") return end
+			local f = ReplicatedStorage:WaitForChild(Config.TOOLBOX_FOLDER, 10)
+			if f and f:WaitForChild(key, 10) then
+				carry()
+				flash("Click in the room to place the mesh.")
 			end
 		end)
 	end, true)
 
 	function mesh.run(more)
-		if mesh.src == "toolbox" then
-			toolboxSearch(mesh, "meshes", more, pickToolboxMesh)
-			return
-		end
 		mesh.token += 1
 		mesh.clear()
 		local list = Config.MeshList()
-		mesh.status.Text = #list == 0 and "No meshes in the game yet. Put models / MeshParts in ReplicatedStorage.PortalAssets.Meshes, or use TOOLBOX." or ""
+		mesh.status.Text = #list == 0 and "No meshes in the game yet. Put MeshParts in ReplicatedStorage.PortalAssets.Meshes, or paste a Mesh id below." or ""
 		for i, it in ipairs(list) do
 			local tile = paletteTile(mesh.grid, i, it.name .. " " .. (it.folder or ""))
 			new("TextLabel", { Position = px(3, 78), Size = px(84, 24), BackgroundTransparency = 1, Text = it.name, FontFace = FONT.UI_REG, TextSize = 11,
@@ -3117,14 +3094,20 @@ local function start(payload)
 	task.spawn(function()
 		local want = {}
 		for _, e in ipairs(E.ents) do
-			local aid = e[1] == "prop" and type(e[7]) == "string" and e[7]:match("^asset:(%d+)$")
-			if aid and not Config.ToolboxModel(aid) then want[aid] = true end
+			local v = e[1] == "prop" and type(e[7]) == "string" and e[7] or ""
+			local aid = v:match("^asset:(%d+)$")
+			if aid and not Config.ToolboxModel(aid) then want[aid] = { kind = "meshes", id = tonumber(aid), key = aid } end
+			local mid, tid = v:match("^mesh:(%d+):?(%d*)$")
+			tid = tid ~= "" and tid or nil
+			if mid and not Config.ToolboxModel(Config.MeshKey(mid, tid)) then
+				want[v] = { kind = "mesh", id = tonumber(mid), tex = tonumber(tid), key = Config.MeshKey(mid, tid) }
+			end
 		end
 		local any = false
-		for aid in pairs(want) do
-			local ok = netCall("ToolboxLoad", { kind = "meshes", id = tonumber(aid) })
+		for _, w in pairs(want) do
+			local ok = netCall("ToolboxLoad", { kind = w.kind, id = w.id, tex = w.tex })
 			local f = ok and ReplicatedStorage:WaitForChild(Config.TOOLBOX_FOLDER, 10)
-			if f and f:WaitForChild(aid, 10) then any = true end
+			if f and f:WaitForChild(w.key, 10) then any = true end
 		end
 		if any and E.active then rebuildEnts() end
 	end)
@@ -3136,6 +3119,7 @@ local function start(payload)
 	RunService:BindToRenderStep("PortalEditor", Enum.RenderPriority.Last.Value + 20, editLoop)
 	editLoopBound = true
 	if E.guest then flash("You joined the team. Everything you build is shared.") end
+	task.delay(1.5, function() if E.active and not E.playtest then X.tutorial(false) end end)
 	task.spawn(function()
 		while E.active do
 			task.wait(60)
@@ -3286,7 +3270,7 @@ local MENUS = {
 	Help = function() return {
 		{ text = "Tips...", fn = function() tipIndex = tipIndex % #SET.TIPS + 1 flash(SET.TIPS[tipIndex]) end },
 		{ text = "Controls...", fn = Dlg.controls },
-		{ text = "Tutorial...", fn = function() menuRequest("Tutorial", "editor") end },
+		{ text = "Tutorial...", fn = function() X.tutorial(true) end },
 		} end,
 }
 -- File / Edit / Help: x is where the word starts in the footage
@@ -3295,6 +3279,7 @@ for _, def in ipairs({ { "File", 16, 46 }, { "Edit", 89, 48 }, { "Help", 166, 52
 	local b = ui(new("TextButton", { Position = L(tx - 6, 2), Size = px(w + 12, 30), BackgroundTransparency = 1, AutoButtonColor = false,
 		Text = name, FontFace = FONT.UI, TextSize = 20, TextColor3 = C.MENU_TEXT, Selectable = false, ZIndex = 4, Parent = menuRow }))
 	local open = false
+	if name == "File" then X.fileBtn = b end
 	table.insert(menuButtons, { reset = function() open = false b.TextColor3 = C.MENU_TEXT end })
 	hoverable(b, function() b.TextColor3 = C.MENU_HI sound("SOUND_HOVER") end, function() if not open then b.TextColor3 = C.MENU_TEXT end end)
 	onClick(b, function()
@@ -3326,10 +3311,178 @@ local function toolButton(cx, w, h, image, tip, fn)
 	end)
 	return icon
 end
-toolButton(-73, 23, 19, SET.ICONS.play, "Build and play (F9)", function() sfx("Click") task.spawn(buildAndPlay) end) -- stretched a bit wider
+X.playBtn = toolButton(-73, 23, 19, SET.ICONS.play, "Build and play (F9)", function() sfx("Click") task.spawn(buildAndPlay) end).Parent -- stretched a bit wider
 toolButton(-25, 30, 24, SET.ICONS.undo, "Undo (Ctrl+Z)", undo)
 toolButton(24, 30, 24, SET.ICONS.redo, "Redo (Ctrl+Y)", redo)
 eyeIcon = toolButton(73, 32, 22, SET.ICONS.eye, function() return E.gameView and "Switch to editor view (Tab)" or "Switch to game view (Tab)" end, toggleGameView)
+X.eyeBtn = eyeIcon.Parent
+
+-- ==========================================
+-- TUTORIAL (points at the real GUI; Options > Gameplay > Tutorials turns it off, Help > Tutorial shows it again)
+-- ==========================================
+-- Each step outlines what it talks about (the palette, the tabs your editor mode has, play, game view, File) or lights
+-- up an item in the room (the exit door). The steps follow the editor mode, so you never get told about tabs you
+-- don't have.
+do
+	local layer = new("Frame", { Name = "Tutorial", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false, ZIndex = 90, Parent = canvas })
+	local ring = new("Frame", { BackgroundTransparency = 1, Visible = false, ZIndex = 91, Parent = layer })
+	local ringStroke = new("UIStroke", { Color = rgb(40, 210, 235), Thickness = 4, Parent = ring })
+	new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = ring })
+	local card = ui(new("Frame", { Size = px(470, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = rgb(28, 32, 34), BackgroundTransparency = 0.05,
+		BorderSizePixel = 0, Active = true, ZIndex = 95, Parent = layer }))
+	new("UICorner", { CornerRadius = UDim.new(0, 8), Parent = card })
+	new("UIStroke", { Color = rgb(40, 210, 235), Thickness = 2, Transparency = 0.3, Parent = card })
+	new("UIPadding", { PaddingLeft = UDim.new(0, 18), PaddingRight = UDim.new(0, 18), PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 14), Parent = card })
+	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = card })
+	local head = new("TextLabel", { Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "", FontFace = FONT.P2_MED, TextSize = 15,
+		TextColor3 = rgb(40, 210, 235), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 1, ZIndex = 96, Parent = card })
+	local title = new("TextLabel", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, Text = "", FontFace = FONT.P2, TextSize = 28,
+		TextColor3 = rgb(240, 246, 244), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 2, ZIndex = 96, Parent = card })
+	local body = new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = "",
+		FontFace = FONT.P2_MED, TextSize = 21, TextWrapped = true, TextColor3 = rgb(222, 230, 228), TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = 3, ZIndex = 96, Parent = card })
+	local row = new("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, LayoutOrder = 4, ZIndex = 96, Parent = card })
+	local steps, idx, conn = nil, 1, nil
+	local shown = false
+	local render, close
+
+	local function button(x, w, text, fn, blue)
+		local b = new("TextButton", { Position = px(x, 4), Size = px(w, 30), BorderSizePixel = 0, AutoButtonColor = true,
+			BackgroundColor3 = blue and rgb(77, 128, 151) or rgb(70, 76, 78), Text = text, FontFace = FONT.P2, TextSize = 17,
+			TextColor3 = rgb(240), ZIndex = 97, Parent = row })
+		new("UICorner", { CornerRadius = UDim.new(0, 4), Parent = b })
+		hoverable(b, function() sound("SOUND_HOVER") end, function() end)
+		onClick(b, function() sfx("Click") fn() end)
+		return b
+	end
+
+	-- what the steps point at (functions: the GUI exists by the time a step shows)
+	local function tabButton(id) return function() Pal.set(true) return Pal.tabs[id] and Pal.tabs[id].button end end
+	local function exitIndex()
+		for i, e in ipairs(E.ents) do if e[1] == "exit" then return i end end
+	end
+	local function buildSteps()
+		local lvl = Pal.level()
+		local touch = E.pointerMode == "touch"
+		local pad = E.pointerMode == "pad"
+		local list = {
+			{ "The test chamber editor", "You build a test chamber here, then play it. NEXT walks you through the screen, SKIP closes this." },
+			{ "Selecting surfaces", touch and "Tap a panel to select it (it turns yellow). Drag across a wall to select an area."
+				or pad and "Move the cursor with the left stick, A selects a panel. Hold A and move to select an area."
+				or "Click a panel to select it (it turns yellow). Drag across a wall to select an area, Shift+click to add everything in between." },
+			{ "Shaping the room", touch and "Use PULL + and PUSH - on the toolbar to move the selected panels. One finger orbits, two fingers pan and zoom."
+				or pad and "D-pad up / down pulls or pushes the selected panels. The right stick orbits, LB / RB zoom."
+				or "+ pulls the selected panels toward you, - pushes them away. Middle-drag orbits, right-drag pans, the wheel zooms, WASD / Q E move.",
+				target = touch and function() return touchBar end or nil },
+			{ "Items", (touch and "Tap the strip on the left" or pad and "Press Y" or "Move to the strip on the left")
+				.. " to open this palette, then drag an item onto a panel. Right-click an item (X on a controller) for its options.",
+				target = function() Pal.set(true) return Pal.body end },
+			{ "The exit door", "The exit stays locked until something opens it. Select a button, press C (L3), then click the exit door. Or right-click the exit > Open without a button.",
+				item = exitIndex },
+		}
+		if lvl >= 2 then
+			table.insert(list, { "Textures", "Select surfaces in the room, then click a texture here, or paste an image id.", target = tabButton("textures") })
+			table.insert(list, { "Meshes", "MeshParts from your game, or paste any Mesh id to make one. Drag it in, right-click it to resize.", target = tabButton("meshes") })
+		end
+		if lvl >= 3 then
+			table.insert(list, { "My Chips", "Little programs: \"when button1 pressed\" -> \"open exit\". Build them from blocks or type them as lines (with colours and auto correct).",
+				target = tabButton("chips") })
+		else
+			table.insert(list, { "More tools", "File > Editor mode (or Options > Editor) switches to Intermediate for Textures and Meshes, or Advanced for My Chips too.",
+				target = function() return X.fileBtn end })
+		end
+		table.insert(list, { "Build and play", "This button (or " .. (pad and "Back / View" or "F9") .. ") builds your chamber and drops you in. Pause > Exit To Editor comes back.",
+			target = function() return X.playBtn end })
+		table.insert(list, { "Game view", "The eye (or " .. (pad and "R3" or "Tab") .. ") shows how the chamber will look in game, without building it.",
+			target = function() return X.eyeBtn end })
+		table.insert(list, { "Saving and more", "File has Save, Open, Publish and Editor mode. Help > Tutorial shows this again.",
+			target = function() return X.fileBtn end })
+		return list
+	end
+
+	-- canvas-space rect of a GUI object
+	local function rectOf(o)
+		local p = (o.AbsolutePosition - canvas.AbsolutePosition) / uiScale.Scale
+		local s = o.AbsoluteSize / uiScale.Scale
+		return p, s
+	end
+
+	local function place()
+		if not steps then return end
+		local st = steps[idx]
+		local target = st.target and st.target()
+		local cw = canvasWidth()
+		local cs = card.AbsoluteSize / uiScale.Scale
+		if target and target.Parent and target.AbsoluteSize.X > 0 then
+			local p, s = rectOf(target)
+			ring.Visible = true
+			ring.Position, ring.Size = px(p.X - 6, p.Y - 6), px(s.X + 12, s.Y + 12)
+			-- next to the target: to its right if there's room, else under it, else above it
+			local x, y
+			if p.X + s.X + 24 + cs.X < cw then
+				x, y = p.X + s.X + 24, math.clamp(p.Y, 60, REF_H - cs.Y - 20)
+			elseif p.Y + s.Y + 24 + cs.Y < REF_H then
+				x, y = math.clamp(p.X, 20, cw - cs.X - 20), p.Y + s.Y + 24
+			else
+				x, y = math.clamp(p.X, 20, cw - cs.X - 20), math.max(p.Y - cs.Y - 24, 20)
+			end
+			card.Position = px(x, y)
+		else
+			ring.Visible = false
+			card.Position = px(math.floor((cw - cs.X) / 2), REF_H - cs.Y - 120)
+		end
+		ringStroke.Transparency = 0.15 + 0.35 * (0.5 + 0.5 * math.sin(os.clock() * 5))
+		E.chromeHold = os.clock() + 0.5 -- keep the frame (File, play, eye) visible while it's being pointed at
+	end
+
+	close = function()
+		steps = nil
+		layer.Visible = false
+		if conn then conn:Disconnect() conn = nil end
+		if H.highlight then H.highlight(nil) end
+	end
+	render = function()
+		local st = steps[idx]
+		head.Text = ("TUTORIAL  %d / %d"):format(idx, #steps)
+		title.Text = st[1]
+		body.Text = st[2]
+		X.tutNext.Text = idx >= #steps and "DONE" or "NEXT"
+		local item = st.item and st.item()
+		if H.highlight then H.highlight(item, rgb(40, 210, 235)) end
+		place()
+	end
+	button(0, 90, "BACK", function() if steps and idx > 1 then idx -= 1 render() end end)
+	X.tutNext = button(98, 90, "NEXT", function()
+		if not steps then return end
+		if idx < #steps then idx += 1 render() else close() end
+	end, true)
+	button(196, 70, "SKIP", function() close() end)
+	button(274, 160, "DON'T SHOW AGAIN", function()
+		close()
+		menuRequest("SetSetting", { key = "tutorial", value = "Disabled" })
+		flash("Tutorials are off. Turn them back on in Options > Gameplay.")
+	end)
+
+	-- force = Help > Tutorial (shows even if tutorials are turned off)
+	function X.tutorial(force)
+		if not E.active or E.playtest then return end
+		if not force and (shown or ES("tutorial", "Enabled") == "Disabled") then return end
+		shown = true
+		closeMenus()
+		steps, idx = buildSteps(), 1
+		layer.Visible = true
+		render()
+		if conn then conn:Disconnect() end
+		conn = RunService.RenderStepped:Connect(function()
+			if not E.active or E.playtest then close() return end
+			place()
+		end)
+	end
+	X.closeTutorial = close
+	player:GetAttributeChangedSignal("Setting_tutorial"):Connect(function()
+		if ES("tutorial", "Enabled") == "Disabled" then close() end
+	end)
+end
 
 end
 -- ==========================================

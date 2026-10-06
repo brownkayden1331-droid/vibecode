@@ -983,8 +983,8 @@ do
 	local function check()
 		local T = Config.TUTORIALS or {}
 		if player:GetAttribute("InEditor") then
-			if player:GetAttribute("EditorPlaytest") then showTutorial("playtest", T.playtest)
-			else showTutorial("editor", T.editor) end
+			-- (the editor shows its own tutorial, pointing at its GUI)
+			if player:GetAttribute("EditorPlaytest") then showTutorial("playtest", T.playtest) end
 		elseif player:GetAttribute("ChallengeChamber") then
 			showTutorial("challenge", T.challenge)
 		elseif player:GetAttribute("WorkshopMap") then

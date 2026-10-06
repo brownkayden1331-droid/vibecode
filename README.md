@@ -6,6 +6,8 @@
 | `src/ServerScriptService/PortalServer.server.lua` | ServerScriptService › Script `PortalServer` |
 | `src/StarterPlayerScripts/PortalMenu.client.lua` | StarterPlayerScripts › LocalScript `PortalMenu` |
 | `src/StarterPlayerScripts/PortalMapEditor.client.lua` | StarterPlayerScripts › LocalScript `PortalMapEditor` |
+| `src/StarterPlayerScripts/MusicDirector.client.lua` | StarterPlayerScripts › LocalScript `MusicDirector` |
+| `src/ServerScriptService/RigChangerServer.server.lua` | ServerScriptService › Script `RigChangerServer` |
 
 ## Editor modes and tabs
 Options › Editor › **Editor Mode** (also File › Editor mode inside the editor):
@@ -13,8 +15,8 @@ Options › Editor › **Editor Mode** (also File › Editor mode inside the edi
 - **Simple** – Items palette (the original editor).
 - **Intermediate** – adds **Textures** and **Meshes** tabs. Each searches the **Toolbox** (Creator Store) by default; **IN GAME** switches to your own assets.
   - Textures: Toolbox decals, `ReplicatedStorage.PortalAssets.Textures`, or a pasted id. Select surfaces, then click a texture.
-  - Meshes: Toolbox models, `ReplicatedStorage.PortalAssets.Meshes`, or a pasted model / mesh id. Drag into the room; right-click › Size.
-  - **Toolbox setup:** in Studio select **InsertService** in the Explorer and tick **AllowInsertFreeModels**, or models/decals won't load. Loaded models are stripped of scripts and cached in `ReplicatedStorage.PortalToolbox`.
+  - Meshes: **MeshParts** only. Your own from `ReplicatedStorage.PortalAssets.Meshes` (searchable), or paste any **Mesh** asset id (+ optional texture id): the server makes a real MeshPart with `AssetService:CreateMeshPartAsync` and caches it in `ReplicatedStorage.PortalToolbox`. Drag into the room; right-click › Size. (Roblox has no in-game API to search the Creator Store for meshes, so search covers your own MeshParts.)
+  - **Textures setup:** Toolbox decal search needs InsertService › **AllowInsertFreeModels** ticked in Studio to load the image.
 - **Advanced** – adds **My Chips**, item labels, mesh nudge/turn, and a coordinates readout.
 
 ### Chips
@@ -63,7 +65,14 @@ Other scripts: `PlayerGui.PortalMenu.MenuRequest:Fire("Toast", { title = "...", 
 Tab (or the eye button) shows the chamber exactly as it will look in game (real tiles, textures, item models, antlines) without building it or leaving the editor. Tab again to keep editing.
 
 ## Tutorials
-A tutorial card appears when a level starts: every chapter, challenges, Workshop chambers, co-op, the editor and editor playtests. Enter = next, Backspace = skip. Turn them off in Options › Gameplay › **Tutorials** (or Options › Editor). A chapter can have its own steps: `tutorial = { { "Title", "Text" }, ... }` in `PortalConfig.CHAPTERS`. Editor: Help › Tutorial shows it again.
+The editor runs its own tutorial that outlines the real GUI as it explains it (palette, the tabs your mode has, play, game view, File) and lights up the exit door in the room. Help › Tutorial shows it again.
+Elsewhere a tutorial card appears when a level starts: every chapter, challenges, Workshop chambers, co-op, the editor and editor playtests. Enter = next, Backspace = skip. Turn them off in Options › Gameplay › **Tutorials** (or Options › Editor). A chapter can have its own steps: `tutorial = { { "Title", "Text" }, ... }` in `PortalConfig.CHAPTERS`. Editor: Help › Tutorial shows it again.
 
 ## Version check
 `PortalConfig.VERSION` must match what the other scripts expect (3). If you update the scripts but not PortalConfig, the Output window says so.
+
+## Co-op: Atlas and P-body
+In co-op the blue player becomes **Atlas** and the orange player **P-body** (RigChangerServer, rigs `Atlas` and `PBody` in `ReplicatedStorage.PortalAssets.Rigs`; names are matched loosely, so `P-Body` works). If a rig is missing it warns once and uses Chell. Leaving co-op puts you back the way you were. Change the names in `PortalConfig.COOP_RIGS` / `COOP_RIGS` in RigChangerServer.
+
+## Menu music
+MusicDirector plays `ReplicatedStorage.PortalAssets.OST["Main Menu"]` (a Sound, or a folder of Sounds) on the main menu. It used to read that folder once, before it had replicated, and stayed silent; it now picks the tracks up whenever they arrive.

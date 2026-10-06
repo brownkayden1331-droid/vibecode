@@ -6,6 +6,8 @@ C.VERSION = 3 -- PortalServer / PortalMenu / PortalMapEditor check this (they ne
 C.MAPS_FOLDER = "PortalMaps"
 C.LOBBY_SPAWN = "MenuSpawn"
 C.COOP_HUB_MAP = "CoopHub"
+-- co-op characters (rig names in PortalAssets.Rigs, used by RigChangerServer): blue = Atlas, orange = P-body
+C.COOP_RIGS = { Blue = "Atlas", Orange = "PBody" }
 C.EDITOR_ORIGIN = Vector3.new(0, 600, 0)
 
 -- ==========================================
@@ -510,11 +512,18 @@ function C.ToolboxModel(id)
 	local f = ReplicatedStorage:FindFirstChild(C.TOOLBOX_FOLDER)
 	return f and f:FindFirstChild(tostring(id)) or nil
 end
+-- name of the MeshPart PortalServer makes from a mesh id (+ texture id)
+function C.MeshKey(id, tex)
+	return "mesh_" .. tostring(id) .. ((tex and tex ~= "") and ("_" .. tostring(tex)) or "")
+end
 function C.MeshTemplate(v)
 	if type(v) ~= "string" then return nil end
 	local aid = v:match("^asset:(%d+)$")
 	if aid then return C.ToolboxModel(aid) end
 	local mid, tid = v:match("^mesh:(%d+):?(%d*)$")
+	-- the real MeshPart once the server has made it; a SpecialMesh stand-in until then
+	local real = mid and C.ToolboxModel(C.MeshKey(mid, tid))
+	if real then return real end
 	if mid then
 		-- MeshPart.MeshId can't be set while the game runs, a SpecialMesh can
 		local p = Instance.new("Part")

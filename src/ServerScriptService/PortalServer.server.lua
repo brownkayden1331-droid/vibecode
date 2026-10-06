@@ -1028,6 +1028,41 @@ local function loadToolboxAsset(id)
 	return model
 end
 
+-- Meshes tab: a real MeshPart from a mesh asset id (AssetService:CreateMeshPartAsync works while the game runs),
+-- optionally with a texture id. Kept in ReplicatedStorage.PortalToolbox as Config.MeshKey(id, tex).
+local AssetService = game:GetService("AssetService")
+local meshFailed = {}
+local function loadMeshPart(id, tex)
+	id = math.floor(tonumber(id) or 0)
+	tex = tonumber(tex) and math.floor(tonumber(tex)) or nil
+	if id <= 0 then return nil, "That isn't a mesh id." end
+	local key = Config.MeshKey(id, tex)
+	local have = toolboxFolder:FindFirstChild(key)
+	if have then return have end
+	if meshFailed[key] then return nil, meshFailed[key] end
+	local t0 = os.clock()
+	while toolboxLoading[key] and os.clock() - t0 < 20 do task.wait(0.1) end
+	have = toolboxFolder:FindFirstChild(key)
+	if have then return have end
+	toolboxLoading[key] = true
+	local ok, mp = pcall(function()
+		return AssetService:CreateMeshPartAsync("rbxassetid://" .. id, {
+			CollisionFidelity = Enum.CollisionFidelity.Hull, RenderFidelity = Enum.RenderFidelity.Automatic,
+		})
+	end)
+	toolboxLoading[key] = nil
+	if not ok or not mp then
+		warn("[PortalServer] CreateMeshPartAsync", id, mp)
+		meshFailed[key] = "Couldn't make a MeshPart from that id. Use a Mesh asset id (not a model or decal id)."
+		return nil, meshFailed[key]
+	end
+	if tex then pcall(function() mp.TextureID = "rbxassetid://" .. tex end) end
+	mp.Anchored = true
+	mp.Name = key
+	mp.Parent = toolboxFolder
+	return mp
+end
+
 local function toolboxSearch(player, arg)
 	arg = type(arg) == "table" and arg or {}
 	local kind = arg.kind == "textures" and "textures" or "meshes"
@@ -1058,6 +1093,11 @@ end
 
 local function toolboxLoad(player, arg)
 	if type(arg) ~= "table" then return false end
+	if arg.kind == "mesh" then
+		local mp, merr = loadMeshPart(arg.id, arg.tex)
+		if not mp then return false, merr end
+		return true, { value = "mesh:" .. math.floor(tonumber(arg.id)) .. (tonumber(arg.tex) and (":" .. math.floor(tonumber(arg.tex))) or "") }
+	end
 	local m, err = loadToolboxAsset(arg.id)
 	if not m then return false, err end
 	if arg.kind == "textures" then
@@ -1073,8 +1113,11 @@ end
 -- Toolbox meshes a chamber uses have to be loaded before it's built
 local function preloadToolbox(data)
 	for _, e in ipairs(data and data.ents or {}) do
-		local aid = e[1] == "prop" and type(e[7]) == "string" and e[7]:match("^asset:(%d+)$")
+		local v = e[1] == "prop" and type(e[7]) == "string" and e[7] or ""
+		local aid = v:match("^asset:(%d+)$")
 		if aid then loadToolboxAsset(aid) end
+		local mid, tid = v:match("^mesh:(%d+):?(%d*)$")
+		if mid then loadMeshPart(mid, tid ~= "" and tid or nil) end
 	end
 end
 
@@ -1155,23 +1198,38 @@ local function startCoop(a, b)
 		joinSlot(b, acquireSlot(a))
 		local root = loadMap(Config.COOP_HUB_MAP, true, a)
 		for _, pl in ipairs({ a, b }) do
-			pl:SetAttribute("Chapter", nil)
-			local s = findSpawn(root, pl:GetAttribute("CoopColor"))
-			if s then placeCharacter(pl, spawnCF(s)) end
+			task.spawn(function()
+				pl:SetAttribute("Chapter", nil)
+				local color = pl:GetAttribute("CoopColor")
+				-- blue plays Atlas, orange plays P-body (RigChangerServer), then goes to their colour's spawn
+				local oldChar = pl.Character
+				if rigChange(pl, "Equip", { rig = Config.COOP_RIGS[color], source = "Coop", silent = true }) then
+					waitForRig(pl, oldChar, 6)
+				end
+				local s = findSpawn(root, color)
+				if s and pl.Parent then placeCharacter(pl, spawnCF(s)) end
+			end)
 		end
 	end)
 end
 
-local function endCoop(player)
+-- leaving: true when the player is leaving the game (no point changing their character back)
+local function endCoop(player, leaving)
 	local partnerId = player:GetAttribute("CoopPartner")
 	if partnerId then leaveSlot(player) end -- the partner keeps the shared instance, this player gets a fresh one
 	player:SetAttribute("CoopPartner", nil)
 	player:SetAttribute("CoopColor", nil)
 	if partnerId then
+		-- no longer Atlas / P-body: back to Chell (or the normal character if co-op gave them the gun)
+		if not leaving then
+			local oldChar = player.Character
+			if rigChange(player, "Restore", { source = "Coop" }) then waitForRig(player, oldChar, 5) end
+		end
 		local other = Players:GetPlayerByUserId(partnerId)
 		if other then
 			other:SetAttribute("CoopPartner", nil)
 			other:SetAttribute("CoopColor", nil)
+			rigChange(other, "Restore", { source = "Coop" })
 			Push:FireClient(other, "CoopEnded", { partner = player.Name })
 		end
 	end
@@ -2359,7 +2417,7 @@ Players.PlayerAdded:Connect(onPlayerAdded)
 for _, pl in ipairs(Players:GetPlayers()) do task.spawn(onPlayerAdded, pl) end
 
 Players.PlayerRemoving:Connect(function(player)
-	endCoop(player)
+	endCoop(player, true)
 	queued[player] = nil
 	if QUEUE then pcall(function() QUEUE:RemoveAsync(tostring(player.UserId)) end) end
 	saveProfile(player)
