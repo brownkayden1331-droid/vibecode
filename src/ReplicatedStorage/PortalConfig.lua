@@ -17,13 +17,25 @@ C.EDITOR_ORIGIN = Vector3.new(0, 600, 0)
 C.INSTANCE_SPACING = 6000 -- studs between two neighbouring slots
 C.INSTANCE_GRID = 8       -- slots per row (8 x 8 = 64 slots, the furthest is ~21000 studs out)
 C.OFFSET_CHAPTER_MAPS = true -- false = chapter / challenge maps stay where they are in ServerStorage (shared spot)
+local slotCells -- grid cells, nearest the lobby first (few players = everything stays fairly close to the origin)
 function C.InstanceOffset(slot)
-	local i = math.max((slot or 1) - 1, 0)
 	local n = C.INSTANCE_GRID
-	local half = (n - 1) / 2 -- half-integer: no slot lands on the lobby
-	local gx, gz = i % n, math.floor(i / n) % n
-	local layer = math.floor(i / (n * n)) -- more players than slots: stack another grid far below
-	return Vector3.new((gx - half) * C.INSTANCE_SPACING, -layer * 2000, (gz - half) * C.INSTANCE_SPACING)
+	if not slotCells then
+		slotCells = {}
+		local half = (n - 1) / 2 -- half-integer offsets: no slot lands on the lobby
+		for gx = 0, n - 1 do
+			for gz = 0, n - 1 do table.insert(slotCells, { gx - half, gz - half }) end
+		end
+		table.sort(slotCells, function(a, b)
+			local da, db = a[1] * a[1] + a[2] * a[2], b[1] * b[1] + b[2] * b[2]
+			if da ~= db then return da < db end
+			return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
+		end)
+	end
+	local i = math.max((slot or 1) - 1, 0)
+	local cell = slotCells[i % #slotCells + 1]
+	local layer = math.floor(i / #slotCells) -- more players than slots: another grid far below
+	return Vector3.new(cell[1] * C.INSTANCE_SPACING, -layer * 2000, cell[2] * C.INSTANCE_SPACING)
 end
 function C.ChamberOrigin(slot)
 	return C.InstanceOffset(slot) + C.EDITOR_ORIGIN
@@ -401,7 +413,10 @@ end
 -- TEXTURES TAB (data.textures[faceKey] = a name in PortalAssets.Textures or "id:<assetId>")
 -- ==========================================
 -- PortalAssets.Textures can hold Textures, Decals, or parts with a Texture / Decal on them (sub-folders are fine).
+local libraryCache = {} -- [folderName] = { t = os.clock(), list = ... } (building a chamber looks things up a lot)
 local function libraryItems(folderName, accept)
+	local cached = libraryCache[folderName]
+	if cached and os.clock() - cached.t < 3 then return cached.list end
 	local f = assetFolder(folderName)
 	local list, seen = {}, {}
 	if not f then return list end
@@ -419,6 +434,10 @@ local function libraryItems(folderName, accept)
 	end
 	walk(f, 0)
 	table.sort(list, function(a, b) return a.name:lower() < b.name:lower() end)
+	local byName = {}
+	for _, it in ipairs(list) do byName[it.name] = it end
+	list.byName = byName
+	libraryCache[folderName] = { t = os.clock(), list = list }
 	return list
 end
 local function textureOf(inst)
@@ -434,13 +453,9 @@ function C.TextureImage(v)
 	if type(v) ~= "string" then return "" end
 	local id = v:match("^id:(%d+)$")
 	if id then return "rbxassetid://" .. id end
-	for _, it in ipairs(C.TextureList()) do
-		if it.name == v then
-			local t = textureOf(it.inst)
-			return t and t.Texture or ""
-		end
-	end
-	return ""
+	local it = C.TextureList().byName[v]
+	local t = it and textureOf(it.inst)
+	return t and t.Texture or ""
 end
 function C.ValidTextureValue(v)
 	return type(v) == "string" and #v <= 60 and (v:match("^id:%d+$") ~= nil or v:match("^[%w _%-%.%(%)]+$") ~= nil)
@@ -454,13 +469,9 @@ function C.TextureTemplate(v)
 		t.StudsPerTileU, t.StudsPerTileV = C.CELL, C.CELL
 		return t
 	end
-	for _, it in ipairs(C.TextureList()) do
-		if it.name == v then
-			local t = textureOf(it.inst)
-			return t and t:Clone()
-		end
-	end
-	return nil
+	local it = C.TextureList().byName[v]
+	local t = it and textureOf(it.inst)
+	return t and t:Clone() or nil
 end
 -- the side of part p that faces direction dir
 function C.NormalTo(p, dir)
@@ -507,10 +518,8 @@ function C.MeshTemplate(v)
 		sm.Parent = p
 		return p
 	end
-	for _, it in ipairs(C.MeshList()) do
-		if it.name == v then return it.inst end
-	end
-	return nil
+	local it = C.MeshList().byName[v]
+	return it and it.inst or nil
 end
 
 -- ==========================================

@@ -93,6 +93,10 @@ local SET = {
 		"Drag a faith plate's yellow ball onto any surface to aim it, then drag the ball up or down to change the arc.",
 		"File > Invite team builder lets friends in this server build the chamber with you.",
 		"On a controller: Y opens the Items palette, X opens the menu for whatever is under the cursor.",
+		"The exit door is locked until something opens it. Connect a button to it, or right-click it > Open without a button.",
+		"Switch to Intermediate or Advanced in Options > Editor (or File > Editor mode) for the Textures, Meshes and My Chips tabs.",
+		"Textures tab: select surfaces, then click a texture (or paste an asset id) to put it on them.",
+		"My Chips (Advanced): build little programs like \"when button1 pressed: open exit\" from blocks, or type them as lines.",
 	},
 }
 
@@ -277,7 +281,7 @@ FONT.P2_MED = Font.new("rbxasset://fonts/families/RobotoCondensed.json", Enum.Fo
 local E = {
 	active = false, playtest = false, building = false, cancel = false,
 	id = nil, title = "Untitled Chamber", coop = false,
-	air = {}, faces = {}, colors = {}, ents = {}, links = {},
+	air = {}, faces = {}, colors = {}, textures = {}, ents = {}, links = {}, chips = {},
 	sel = {}, selItem = nil, anchor = nil, linking = nil,
 	undo = {}, redo = {}, dirty = false, stale = true, gameView = false,
 	-- camera: yaw / pitch / dist / target are where it WANTS to be, c* is where it is (smoothed toward the goal)
@@ -291,6 +295,10 @@ local E = {
 	team = nil, guest = false, rev = 0, sentRev = 0, lastSync = 0, pendingRemote = nil, lastCursorSend = 0,
 }
 local dialog -- open popup dialog (forward)
+local Pal = { open = true, awayT = nil, tab = "items", pages = {}, tabs = {}, built = {} } -- the palette (built below)
+local X = {} -- extras: toasts, the coordinates readout
+function X.toast(text, title, kind) menuRequest("Toast", { text = text, title = title, kind = kind }) end
+local Dlg = {} -- popup dialogs (rename / publish / controls / open / save as / invite / chips)
 local controls
 task.spawn(function()
 	local ps = player:WaitForChild("PlayerScripts", 10)
@@ -352,13 +360,15 @@ do
 end
 
 -- editor lighting: saved / swapped in while editing, put back for testing and when you leave
+local setEditing
+do
 local EDIT_LIGHTING = {
 	ClockTime = 14, Brightness = 2, Ambient = rgb(138, 140, 138), OutdoorAmbient = rgb(150, 152, 150),
 	FogStart = 0, FogEnd = 100000, GlobalShadows = true, ExposureCompensation = 0,
 	EnvironmentDiffuseScale = 0.4, EnvironmentSpecularScale = 0.3,
 }
 local editing, envSaved = false, nil
-local function setEditing(on)
+setEditing = function(on)
 	if on == editing then return end
 	editing = on
 	local Lighting = game:GetService("Lighting")
@@ -405,6 +415,7 @@ local function setEditing(on)
 		UserInputService.MouseIconEnabled = true
 		envSaved = nil
 	end
+end
 end
 
 -- everything 2D lives on a 1918 x 1072 reference canvas (the footage size) scaled to the screen height
@@ -608,6 +619,10 @@ new("TextLabel", { Position = px(12, 6), Size = px(700, 40), BackgroundTranspare
 new("TextLabel", { Position = px(12, 50), Size = px(700, 30), BackgroundTransparency = 1, Text = "Rebuild your test chamber to view recent changes", FontFace = FONT.P2_MED, TextSize = 24,
 	TextColor3 = rgb(236), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6, Parent = staleBox })
 
+-- Advanced mode: what's under the pointer (cell, face, item label)
+X.coords = new("TextLabel", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 40, 1, -26), Size = px(600, 22), BackgroundTransparency = 1, Text = "",
+	FontFace = FONT.UI_REG, TextSize = 16, TextColor3 = rgb(90, 94, 94), TextXAlignment = Enum.TextXAlignment.Left, Visible = false, ZIndex = 6, Parent = canvas })
+
 -- controller cursor + controller hint line
 local padCursor = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = px(30, 30), BackgroundTransparency = 1, Visible = false, ZIndex = 80, Parent = canvas })
 do
@@ -665,6 +680,8 @@ end
 --   sub() -> items        opens a submenu to the right on hover / click (">" arrow)
 --   hover(on)             called when the row is hovered / left (used to highlight an item in the room)
 --   timer = { value, set(v), min, max }   the red LED timer row with up / down arrows
+local popupMenu
+do
 local TextService = game:GetService("TextService")
 local subMenu -- the open submenu frame (one level)
 local function rowTextWidth(text)
@@ -820,11 +837,12 @@ buildMenuFrame = function(x, y, sections, isSub)
 	return frames
 end
 
-local function popupMenu(x, y, sections)
+popupMenu = function(x, y, sections)
 	closeMenus()
 	subMenu = nil
 	for _, f in ipairs(buildMenuFrame(x, y, sections, false)) do table.insert(openMenus, f) end
 	focusFirst(openMenus[1])
+end
 end
 
 local function overUI()
@@ -840,13 +858,15 @@ end
 -- CHAMBER DATA
 -- ==========================================
 local function serialize()
-	local data = { v = 2, air = {}, faces = {}, colors = {}, ents = {}, links = {}, coop = E.coop }
+	local data = { v = 2, air = {}, faces = {}, colors = {}, textures = {}, ents = {}, links = {}, chips = {}, coop = E.coop }
 	for k in pairs(E.air) do
 		local x, y, z = parse(k)
 		table.insert(data.air, { x, y, z })
 	end
 	for k, v in pairs(E.faces) do data.faces[k] = v end
 	for k, v in pairs(E.colors) do data.colors[k] = v end
+	for k, v in pairs(E.textures) do data.textures[k] = v end
+	for _, c in ipairs(E.chips) do table.insert(data.chips, { name = c.name, src = c.src }) end
 	for _, e in ipairs(E.ents) do
 		local c = table.clone(e)
 		c[7] = c[7] or false -- no holes in the array (variant is nil for most items)
@@ -862,7 +882,10 @@ local function snapshot()
 	local ents, links = {}, {}
 	for i, e in ipairs(E.ents) do ents[i] = table.clone(e) end
 	for i, l in ipairs(E.links) do links[i] = table.clone(l) end
-	return { air = table.clone(E.air), faces = table.clone(E.faces), colors = table.clone(E.colors), ents = ents, links = links }
+	local chips = {}
+	for i, c in ipairs(E.chips) do chips[i] = table.clone(c) end
+	return { air = table.clone(E.air), faces = table.clone(E.faces), colors = table.clone(E.colors), textures = table.clone(E.textures),
+		ents = ents, links = links, chips = chips }
 end
 
 local function isFace(x, y, z, f)
@@ -1045,6 +1068,10 @@ local function rebuild()
 					Color = panelColor(fp), Material = Enum.Material.SmoothPlastic, Transparency = tr, CanQuery = show and not hole, Parent = roomFolder,
 				})
 				panel:SetAttribute("Face", fk)
+				if E.textures[fk] then
+					fp.tex = Config.ApplyTexture(panel, E.textures[fk], normal)
+					if fp.tex then fp.tex.Transparency = tr end
+				end
 				local rim = new("Part", {
 					Anchored = true, CanCollide = false, CanQuery = false, CastShadow = false, Size = Vector3.new(CELL, CELL, 0.2),
 					CFrame = Config.FaceCFrame(W, x, y, z, f, 0.4), Color = portal and C.RIM_WHITE or C.RIM_BLACK,
@@ -1084,6 +1111,7 @@ updateCull = function()
 			fp.shown = show
 			if not fp.hole then
 				for _, p in ipairs(fp.parts) do p.Transparency = show and 0 or 1 end
+				if fp.tex then fp.tex.Transparency = show and 0 or 1 end
 				fp.panel.CanQuery = show
 			end
 		end
@@ -1244,6 +1272,7 @@ end
 -- what's under it: darker on white tiles, lighter on black tiles, full colour + white ring on items, full colour + dark
 -- ring out in the grey void. Behind a wall from your view it goes see-through; idle (no pointer) it shrinks.
 local Team = { markers = {} }
+do
 local teamBox -- the list in the top right (built below)
 local function memberInfo(userId)
 	for _, m in ipairs(E.team and E.team.members or {}) do
@@ -1348,6 +1377,13 @@ local function refreshTeamBox()
 			TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 8, Parent = row })
 	end
 end
+Team.memberInfo = memberInfo
+Team.teamSize = teamSize
+Team.clearMarkers = clearMarkers
+Team.markerFor = markerFor
+Team.updateMarkers = updateMarkers
+Team.refreshTeamBox = refreshTeamBox
+end
 
 local function slotTaken(x, y, z, f, ignore)
 	for i, e in ipairs(E.ents) do
@@ -1381,6 +1417,8 @@ end
 
 local function restore(sn)
 	E.air, E.faces, E.colors, E.ents, E.links = sn.air, sn.faces, sn.colors or {}, sn.ents, sn.links or {}
+	E.textures, E.chips = sn.textures or {}, sn.chips or {}
+	if Pal.refreshChips and Pal.tab == "chips" then Pal.refreshChips() end
 	E.sel, E.selItem, E.anchor = {}, nil, nil
 	rebuild()
 end
@@ -1465,11 +1503,12 @@ local function moveSurfaces(sign)
 			return
 		end
 	end
-	local newFaces, newColors = {}, {}
+	local newFaces, newColors, newTex = {}, {}, {}
 	for fk, v in pairs(E.faces) do newFaces[moves[fk] or fk] = v end
 	for fk, v in pairs(E.colors) do newColors[moves[fk] or fk] = v end
+	for fk, v in pairs(E.textures) do newTex[moves[fk] or fk] = v end
 	pushUndo(before)
-	E.air, E.ents, E.faces, E.colors = newAir, newEnts, newFaces, newColors
+	E.air, E.ents, E.faces, E.colors, E.textures = newAir, newEnts, newFaces, newColors, newTex
 	E.sel, E.selItem, E.anchor = {}, nil, nil
 	for _, nk in pairs(moves) do
 		local x, y, z, f = parseFace(nk)
@@ -1633,97 +1672,118 @@ local function selectAll()
 end
 
 -- ==========================================
--- ITEMS PALETTE (slides in from the left strip)
+-- PALETTE (slides in from the left strip): Items / Textures / Meshes / My Chips tabs
 -- ==========================================
-local palOpen = true
-local palAwayT = nil
-local palWrap = new("Frame", { Name = "Palette", Position = L(0, 0), Size = px(420, REF_H), BackgroundTransparency = 1, ZIndex = 5, Parent = canvas })
-
-local palette = ui(new("Frame", { Position = L(27, 163), Size = px(375, 753), BackgroundColor3 = C.PAL_BG, BorderSizePixel = 0, Active = true, ZIndex = 5, Parent = palWrap }))
-new("UIStroke", { Color = C.PAL_EDGE, Thickness = 1, Parent = palette })
-
+-- Which tabs you get depends on the editor mode (Options > Editor > Editor Mode, or File > Editor mode):
+--   Simple        Items
+--   Intermediate  Items, Textures, Meshes
+--   Advanced      Items, Textures, Meshes, My Chips (+ item labels and nudging in the item menu)
+-- Textures come from ReplicatedStorage.PortalAssets.Textures (Textures / Decals / parts with one) or an asset id.
+-- Meshes come from ReplicatedStorage.PortalAssets.Meshes (models / parts) or a mesh asset id (+ optional texture id).
 do
-	local tab = ui(new("Frame", { Position = L(27, 136), Size = px(96, 28), BackgroundColor3 = C.PAL_BG, BorderSizePixel = 0, Active = true, ZIndex = 5, Parent = palWrap }))
-	new("UIStroke", { Color = C.PAL_EDGE, Thickness = 1, Parent = tab })
-	new("Frame", { Position = px(0, 26), Size = px(96, 4), BackgroundColor3 = C.PAL_BG, BorderSizePixel = 0, ZIndex = 7, Parent = tab })
-	new("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "Items", FontFace = FONT.UI_REG, TextSize = 15,
-		TextColor3 = rgb(40), ZIndex = 7, Parent = tab })
-end
+	local palWrap = new("Frame", { Name = "Palette", Position = L(0, 0), Size = px(420, REF_H), BackgroundTransparency = 1, ZIndex = 5, Parent = canvas })
+	Pal.wrap = palWrap
 
-local scroller = new("ScrollingFrame", { Position = px(7, 5), Size = px(364, 728), BackgroundTransparency = 1, BorderSizePixel = 0,
-	ScrollBarThickness = 4, ScrollBarImageColor3 = rgb(170, 176, 172), AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = px(0, 0),
-	ScrollingDirection = Enum.ScrollingDirection.Y, SelectionGroup = true, ZIndex = 6, Parent = palette })
-new("UIGridLayout", { CellSize = px(90, 91), CellPadding = px(0, 0), SortOrder = Enum.SortOrder.LayoutOrder, Parent = scroller })
+	local palette = ui(new("Frame", { Position = L(27, 163), Size = px(375, 753), BackgroundColor3 = C.PAL_BG, BorderSizePixel = 0, Active = true, ZIndex = 5, Parent = palWrap }))
+	new("UIStroke", { Color = C.PAL_EDGE, Thickness = 1, Parent = palette })
 
-local itemName = new("TextLabel", { Position = px(8, 733), Size = px(359, 18), BackgroundTransparency = 1, Text = "", FontFace = FONT.UI_REG,
-	TextSize = 12, TextColor3 = rgb(30), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6, Parent = palette })
+	local itemName = new("TextLabel", { Position = px(8, 733), Size = px(359, 18), BackgroundTransparency = 1, Text = "", FontFace = FONT.UI_REG,
+		TextSize = 12, TextColor3 = rgb(30), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6, Parent = palette })
+	Pal.itemName = itemName
 
--- the grip strip on the palette's right side (click to tuck it away)
-local palGrip = ui(new("TextButton", { Position = L(402, 163), Size = px(12, 759), BackgroundColor3 = C.STRIP_OPEN, BorderSizePixel = 0,
-	AutoButtonColor = false, Text = "", Selectable = false, ZIndex = 5, Parent = palWrap }))
-for i = 0, 1 do new("Frame", { Position = px(4 + i * 3, 368), Size = px(1, 24), BackgroundColor3 = C.GRIP, BorderSizePixel = 0, ZIndex = 6, Parent = palGrip }) end
+	local function page(id)
+		local f = new("Frame", { Name = id, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = id == "items", ZIndex = 6, Parent = palette })
+		Pal.pages[id] = f
+		return f
+	end
 
-local palTween
-local function setPalette(open)
-	palAwayT = nil
-	if palOpen == open then return end
-	palOpen = open
-	if palTween then palTween:Cancel() end
-	palTween = TweenService:Create(palWrap, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{ Position = L(open and 0 or -430, 0) })
-	palTween:Play()
-	for _, p in ipairs(stripParts) do p.BackgroundColor3 = open and C.STRIP_OPEN or C.STRIP_SHUT end
-	if not open then
+	-- ----- tabs -----
+	local TABS = {
+		{ id = "items", text = "Items", mode = 1 },
+		{ id = "textures", text = "Textures", mode = 2 },
+		{ id = "meshes", text = "Meshes", mode = 2 },
+		{ id = "chips", text = "My Chips", mode = 3 },
+	}
+	local MODE_LEVEL = { Simple = 1, Intermediate = 2, Advanced = 3 }
+	function Pal.level() return MODE_LEVEL[ES("edMode", "Simple")] or 1 end
+	for _, t in ipairs(TABS) do
+		local b = ui(new("TextButton", { Size = px(90, 28), BackgroundColor3 = C.PAL_BG, BorderSizePixel = 0, AutoButtonColor = false, Text = "",
+			Selectable = false, ZIndex = 5, Parent = palWrap }))
+		new("UIStroke", { Color = C.PAL_EDGE, Thickness = 1, Parent = b })
+		local cover = new("Frame", { Position = px(0, 26), Size = px(90, 4), BackgroundColor3 = C.PAL_BG, BorderSizePixel = 0, ZIndex = 7, Parent = b })
+		local label = new("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = t.text, FontFace = FONT.UI_REG, TextSize = 15,
+			TextColor3 = rgb(40), ZIndex = 7, Parent = b })
+		Pal.tabs[t.id] = { button = b, cover = cover, label = label, def = t }
+		hoverable(b, function() if Pal.tab ~= t.id then b.BackgroundColor3 = rgb(232) end sound("SOUND_HOVER") end,
+			function() if Pal.tab ~= t.id then b.BackgroundColor3 = rgb(206, 208, 206) end end)
+		onClick(b, function() Pal.select(t.id) sfx("Click") end)
+	end
+
+	function Pal.layoutTabs()
+		local lvl = Pal.level()
+		local x = 27
+		for _, t in ipairs(TABS) do
+			local tb = Pal.tabs[t.id]
+			local shown = lvl >= t.mode
+			tb.button.Visible = shown
+			if shown then
+				tb.button.Position = L(x, 136)
+				x += 94
+			end
+			local on = Pal.tab == t.id
+			tb.button.BackgroundColor3 = on and C.PAL_BG or rgb(206, 208, 206)
+			tb.cover.Visible = on
+			tb.label.TextColor3 = on and rgb(40) or rgb(105)
+		end
+		if lvl < (Pal.tabs[Pal.tab] and Pal.tabs[Pal.tab].def.mode or 1) then Pal.select("items") end
+	end
+
+	function Pal.select(id)
+		if not Pal.pages[id] then return end
+		Pal.tab = id
+		for pid, f in pairs(Pal.pages) do f.Visible = pid == id end
 		itemName.Text = ""
-		local so = GuiService.SelectedObject
-		if so and so:IsDescendantOf(palWrap) then GuiService.SelectedObject = nil end
+		Pal.layoutTabs()
+		if Pal.onShow[id] then Pal.onShow[id]() end
 	end
-end
-local function paletteSelecting()
-	local so = GuiService.SelectedObject
-	return so ~= nil and so:IsDescendantOf(palWrap)
-end
-leftStrip.MouseEnter:Connect(function()
-	if E.active and not E.carry and not palOpen and E.pointerMode == "mouse" then setPalette(true) sound("SOUND_HOVER") end
-end)
-onClick(leftStrip, function() setPalette(not palOpen) sfx("Click") end)
-onClick(palGrip, function() setPalette(false) sfx("Click") end)
+	Pal.onShow = {}
 
-local function startCarry(item)
-	if E.carry then return end
-	E.carry = item
-	itemName.Text = string.upper(item.name)
-	if E.pointerMode == "pad" or GuiService.SelectedObject ~= nil then
-		-- controller: the item now follows the cursor, A places it. The A press that picked it doesn't count.
-		usePad()
-		E.carryArm = padDown(Enum.KeyCode.ButtonA)
-		GuiService.SelectedObject = nil
-		setPalette(false)
-		local vp = viewportSize()
-		if E.pointer.X < vp.X * 0.3 then E.pointer = vp / 2 end
-	else
-		E.carryArm = nil
+	-- search box at the top of a page: calls filter(query) as you type
+	local function searchBox(parent, placeholder, filter)
+		local box = new("TextBox", { Position = px(7, 6), Size = px(361, 30), BackgroundColor3 = rgb(255), BorderSizePixel = 0, Text = "",
+			PlaceholderText = placeholder, FontFace = FONT.UI_REG, TextSize = 16, TextColor3 = rgb(25), PlaceholderColor3 = rgb(150),
+			TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false, ZIndex = 7, Parent = parent })
+		new("UIStroke", { Color = C.TILE_LINE, Thickness = 1, Parent = box })
+		new("UIPadding", { PaddingLeft = UDim.new(0, 30), Parent = box })
+		new("TextLabel", { Position = px(-24, 0), Size = px(20, 30), BackgroundTransparency = 1, Text = "⌕", FontFace = FONT.UI, TextSize = 20,
+			TextColor3 = rgb(130), ZIndex = 8, Parent = box })
+		box:GetPropertyChangedSignal("Text"):Connect(function() filter(box.Text:lower()) end)
+		return box
 	end
-end
-
-local function togglePadPalette()
-	if paletteSelecting() then
-		GuiService.SelectedObject = nil
-		setPalette(false)
-		sfx("Click")
-		return
+	local function grid(parent, y, h, cellH)
+		local sc = new("ScrollingFrame", { Position = px(7, y), Size = px(364, h), BackgroundTransparency = 1, BorderSizePixel = 0,
+			ScrollBarThickness = 4, ScrollBarImageColor3 = rgb(170, 176, 172), AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = px(0, 0),
+			ScrollingDirection = Enum.ScrollingDirection.Y, SelectionGroup = true, ZIndex = 6, Parent = parent })
+		new("UIGridLayout", { CellSize = px(90, cellH or 91), CellPadding = px(0, 0), SortOrder = Enum.SortOrder.LayoutOrder, Parent = sc })
+		return sc
 	end
-	setPalette(true)
-	local first
-	for _, c in ipairs(scroller:GetChildren()) do
-		if c:IsA("GuiButton") and (not first or c.LayoutOrder < first.LayoutOrder) then first = c end
+	local function smallButton(parent, pos, size, text, fn, blue)
+		local b = new("TextButton", { Position = pos, Size = size, BackgroundColor3 = blue and rgb(77, 128, 151) or rgb(214, 218, 216), BorderSizePixel = 0,
+			AutoButtonColor = true, Text = text, FontFace = FONT.P2, TextSize = 16, TextColor3 = blue and rgb(245) or rgb(25), ZIndex = 7, Parent = parent })
+		hoverable(b, function() sound("SOUND_HOVER") end, function() end)
+		onClick(b, function() sfx("Click") fn() end)
+		return b
 	end
-	if first then GuiService.SelectedObject = first end
-	sfx("Click")
-end
-
-local buildPalette
-do
+	local function inputBox(parent, pos, size, placeholder)
+		local b = new("TextBox", { Position = pos, Size = size, BackgroundColor3 = rgb(255), BorderSizePixel = 0, Text = "", PlaceholderText = placeholder,
+			FontFace = FONT.UI_REG, TextSize = 15, TextColor3 = rgb(25), PlaceholderColor3 = rgb(150), ClearTextOnFocus = false, ZIndex = 7, Parent = parent })
+		new("UIStroke", { Color = C.TILE_LINE, Thickness = 1, Parent = b })
+		return b
+	end
+	local function note(parent, pos, size, text)
+		return new("TextLabel", { Position = pos, Size = size, BackgroundTransparency = 1, Text = text, FontFace = FONT.UI_REG, TextSize = 13,
+			TextColor3 = rgb(95), TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 7, Parent = parent })
+	end
 	local function frameModel(vp, model)
 		local vcam = new("Camera", { FieldOfView = 30, Parent = vp })
 		vp.CurrentCamera = vcam
@@ -1731,8 +1791,110 @@ do
 		local dir = Vector3.new(1, 0.75, 1).Unit
 		vcam.CFrame = CFrame.lookAt(cf.Position + dir * (size.Magnitude * 1.9 + 2), cf.Position)
 	end
+	local function paletteTile(parent, order, name)
+		local tile = new("TextButton", { BackgroundColor3 = C.TILE, BorderSizePixel = 0, AutoButtonColor = false, Text = "", LayoutOrder = order, ZIndex = 6, Parent = parent })
+		tile:SetAttribute("PalTile", true)
+		tile:SetAttribute("Search", name:lower())
+		new("UIStroke", { Color = C.TILE_LINE, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = tile })
+		return tile
+	end
+	local function filterTiles(sc, q)
+		for _, c in ipairs(sc:GetChildren()) do
+			if c:IsA("GuiButton") and c:GetAttribute("Search") then
+				c.Visible = q == "" or string.find(c:GetAttribute("Search"), q, 1, true) ~= nil
+			end
+		end
+	end
 
-	buildPalette = function()
+	-- ----- ITEMS -----
+	local itemsPage = page("items")
+	local scroller = grid(itemsPage, 5, 728)
+	Pal.scroller = scroller
+
+	local function setPalette(open)
+		Pal.awayT = nil
+		if Pal.open == open then return end
+		Pal.open = open
+		if Pal.tween then Pal.tween:Cancel() end
+		Pal.tween = TweenService:Create(palWrap, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ Position = L(open and 0 or -430, 0) })
+		Pal.tween:Play()
+		for _, p in ipairs(stripParts) do p.BackgroundColor3 = open and C.STRIP_OPEN or C.STRIP_SHUT end
+		if not open then
+			itemName.Text = ""
+			local so = GuiService.SelectedObject
+			if so and so:IsDescendantOf(palWrap) then GuiService.SelectedObject = nil end
+		end
+	end
+	Pal.set = setPalette
+	function Pal.selecting()
+		local so = GuiService.SelectedObject
+		return so ~= nil and so:IsDescendantOf(palWrap)
+	end
+	leftStrip.MouseEnter:Connect(function()
+		if E.active and not E.carry and not Pal.open and E.pointerMode == "mouse" then setPalette(true) sound("SOUND_HOVER") end
+	end)
+	onClick(leftStrip, function() setPalette(not Pal.open) sfx("Click") end)
+
+	-- the grip strip on the palette's right side (click to tuck it away)
+	local palGrip = ui(new("TextButton", { Position = L(402, 163), Size = px(12, 759), BackgroundColor3 = C.STRIP_OPEN, BorderSizePixel = 0,
+		AutoButtonColor = false, Text = "", Selectable = false, ZIndex = 5, Parent = palWrap }))
+	for i = 0, 1 do new("Frame", { Position = px(4 + i * 3, 368), Size = px(1, 24), BackgroundColor3 = C.GRIP, BorderSizePixel = 0, ZIndex = 6, Parent = palGrip }) end
+	onClick(palGrip, function() setPalette(false) sfx("Click") end)
+
+	function Pal.startCarry(item)
+		if E.carry then return end
+		E.carry = item
+		itemName.Text = string.upper(item.name)
+		if E.pointerMode == "pad" or GuiService.SelectedObject ~= nil then
+			-- controller: the item now follows the cursor, A places it. The A press that picked it doesn't count.
+			usePad()
+			E.carryArm = padDown(Enum.KeyCode.ButtonA)
+			GuiService.SelectedObject = nil
+			setPalette(false)
+			local vp = viewportSize()
+			if E.pointer.X < vp.X * 0.3 then E.pointer = vp / 2 end
+		else
+			E.carryArm = nil
+		end
+	end
+
+	function Pal.togglePad()
+		if Pal.selecting() then
+			GuiService.SelectedObject = nil
+			setPalette(false)
+			sfx("Click")
+			return
+		end
+		setPalette(true)
+		local first
+		local sc = Pal.pages[Pal.tab]
+		for _, c in ipairs(sc:GetDescendants()) do
+			if c:IsA("GuiButton") and c.Visible and (not first or c.LayoutOrder < first.LayoutOrder) then first = c end
+		end
+		if first then GuiService.SelectedObject = first end
+		sfx("Click")
+	end
+
+	-- a tile you pick up and drop in the room (items and meshes)
+	local function carryTile(tile, item)
+		hoverable(tile, function()
+			tile.BackgroundColor3 = C.TILE_HI
+			itemName.Text = string.upper(item.name)
+			sound("SOUND_HOVER")
+		end, function()
+			tile.BackgroundColor3 = C.TILE
+			if not E.carry then itemName.Text = "" end
+		end)
+		local function pickUp() Pal.startCarry(item) sfx("Click") end
+		tile.MouseButton1Down:Connect(pickUp)
+		CLICK[tile] = pickUp -- controller cursor
+		tile.Activated:Connect(function() -- controller selection (D-pad + A)
+			if not E.carry and (E.pointerMode == "pad" or GuiService.SelectedObject == tile) then pickUp() end
+		end)
+	end
+
+	function Pal.build()
 		for _, c in ipairs(scroller:GetChildren()) do
 			if c:IsA("GuiObject") then c:Destroy() end
 		end
@@ -1750,9 +1912,7 @@ do
 			end
 		end
 		for i, item in ipairs(items) do
-			local tile = new("TextButton", { BackgroundColor3 = C.TILE, BorderSizePixel = 0, AutoButtonColor = false, Text = "", LayoutOrder = i, ZIndex = 6, Parent = scroller })
-			tile:SetAttribute("PalTile", true)
-			new("UIStroke", { Color = C.TILE_LINE, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = tile })
+			local tile = paletteTile(scroller, i, item.name)
 			local mount = Config.ENTITY_TYPES[item.kind].mount
 			local face = (mount == "ceiling" and 3) or (mount == "wall" and 2) or 4
 			local m = buildEntity({ item.kind, 0, 0, 0, face, 0, item.variant }, { editor = true }, Vector3.zero)
@@ -1764,22 +1924,195 @@ do
 				new("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = item.name, FontFace = FONT.UI_REG, TextSize = 12,
 					TextColor3 = rgb(40), TextWrapped = true, ZIndex = 7, Parent = tile })
 			end
-			hoverable(tile, function()
-				tile.BackgroundColor3 = C.TILE_HI
-				itemName.Text = string.upper(item.name)
-				sound("SOUND_HOVER")
-			end, function()
-				tile.BackgroundColor3 = C.TILE
-				if not E.carry then itemName.Text = "" end
-			end)
-			local function pickUp() startCarry(item) sfx("Click") end
-			tile.MouseButton1Down:Connect(pickUp)
-			CLICK[tile] = pickUp -- controller cursor
-			tile.Activated:Connect(function() -- controller selection (D-pad + A)
-				if not E.carry and (E.pointerMode == "pad" or GuiService.SelectedObject == tile) then pickUp() end
-			end)
+			carryTile(tile, item)
+		end
+		-- the other tabs fill in when you first open them
+		table.clear(Pal.built)
+		Pal.layoutTabs()
+		if Pal.tab ~= "items" and Pal.onShow[Pal.tab] then Pal.onShow[Pal.tab]() end
+	end
+
+	-- ----- TEXTURES -----
+	local texPage = page("textures")
+	local texGrid = grid(texPage, 42, 540, 104)
+	searchBox(texPage, "Search textures...", function(q) filterTiles(texGrid, q) end)
+	local texId = inputBox(texPage, px(7, 590), px(220, 30), "Texture asset id")
+	note(texPage, px(9, 668), px(359, 60), "Select surfaces in the room, then click a texture to put it on them. Add your own in ReplicatedStorage.PortalAssets.Textures.")
+	local texEmpty = note(texPage, px(14, 50), px(340, 80), "")
+
+	-- puts a texture on every selected surface (nil = back to the normal tiles)
+	function Pal.applyTexture(v)
+		if next(E.sel) == nil then flash("Select the surfaces to texture first.") sfx("Error") return end
+		pushUndo()
+		for fk in pairs(E.sel) do E.textures[fk] = v end
+		rebuild()
+		sfx("Click")
+		flash(v and ("Texture applied to %d surface%s."):format(selCount(), selCount() == 1 and "" or "s") or "Textures cleared.")
+	end
+	smallButton(texPage, px(233, 590), px(135, 30), "USE ID", function()
+		local id = texId.Text:match("(%d+)")
+		if not id then flash("Paste a texture / decal asset id first.") sfx("Error") return end
+		Pal.applyTexture("id:" .. id)
+	end, true)
+	smallButton(texPage, px(7, 628), px(180, 30), "CLEAR TEXTURE", function() Pal.applyTexture(nil) end)
+
+	Pal.onShow.textures = function()
+		if Pal.built.textures then return end
+		Pal.built.textures = true
+		for _, c in ipairs(texGrid:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		local list = Config.TextureList()
+		texEmpty.Text = #list == 0 and "No textures yet. Put Textures / Decals in ReplicatedStorage.PortalAssets.Textures, or paste an asset id below." or ""
+		for i, it in ipairs(list) do
+			local tile = paletteTile(texGrid, i, it.name .. " " .. (it.folder or ""))
+			new("ImageLabel", { Position = px(10, 6), Size = px(70, 70), BackgroundColor3 = rgb(250), BorderSizePixel = 0, Image = Config.TextureImage(it.name),
+				ScaleType = Enum.ScaleType.Tile, TileSize = UDim2.fromOffset(35, 35), ZIndex = 7, Parent = tile })
+			new("TextLabel", { Position = px(3, 78), Size = px(84, 24), BackgroundTransparency = 1, Text = it.name, FontFace = FONT.UI_REG, TextSize = 11,
+				TextColor3 = rgb(40), TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 7, Parent = tile })
+			hoverable(tile, function() tile.BackgroundColor3 = C.TILE_HI itemName.Text = string.upper(it.name) sound("SOUND_HOVER") end,
+				function() tile.BackgroundColor3 = C.TILE itemName.Text = "" end)
+			onClick(tile, function() Pal.applyTexture(it.name) end)
 		end
 	end
+
+	-- ----- MESHES -----
+	local meshPage = page("meshes")
+	local meshGrid = grid(meshPage, 42, 540, 104)
+	searchBox(meshPage, "Search meshes...", function(q) filterTiles(meshGrid, q) end)
+	local meshId = inputBox(meshPage, px(7, 590), px(178, 30), "Mesh asset id")
+	local meshTex = inputBox(meshPage, px(190, 590), px(178, 30), "Texture id (optional)")
+	note(meshPage, px(9, 668), px(359, 60), "Drag a mesh into the room. Right-click it to resize it (and nudge it in Advanced mode). Add your own in ReplicatedStorage.PortalAssets.Meshes.")
+	local meshEmpty = note(meshPage, px(14, 50), px(340, 80), "")
+	smallButton(meshPage, px(7, 628), px(361, 30), "PICK UP MESH ID", function()
+		local id = meshId.Text:match("(%d+)")
+		if not id then flash("Paste a mesh asset id first.") sfx("Error") return end
+		local tid = meshTex.Text:match("(%d+)")
+		Pal.startCarry({ kind = "prop", variant = "mesh:" .. id .. (tid and (":" .. tid) or ""), name = "Mesh " .. id })
+	end, true)
+
+	Pal.onShow.meshes = function()
+		if Pal.built.meshes then return end
+		Pal.built.meshes = true
+		for _, c in ipairs(meshGrid:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		local list = Config.MeshList()
+		meshEmpty.Text = #list == 0 and "No meshes yet. Put models / MeshParts in ReplicatedStorage.PortalAssets.Meshes, or paste a mesh id below." or ""
+		for i, it in ipairs(list) do
+			local tile = paletteTile(meshGrid, i, it.name .. " " .. (it.folder or ""))
+			new("TextLabel", { Position = px(3, 78), Size = px(84, 24), BackgroundTransparency = 1, Text = it.name, FontFace = FONT.UI_REG, TextSize = 11,
+				TextColor3 = rgb(40), TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 7, Parent = tile })
+			local vp = new("ViewportFrame", { Position = px(5, 2), Size = px(80, 76), BackgroundTransparency = 1, Ambient = rgb(180),
+				LightDirection = Vector3.new(-0.4, -1, -0.6), ZIndex = 7, Parent = tile })
+			local ok, m = pcall(function()
+				local c = it.inst:Clone()
+				if c:IsA("BasePart") then
+					local holder = Instance.new("Model")
+					c.Parent = holder
+					c = holder
+				end
+				return c
+			end)
+			if ok and m then
+				for _, d in ipairs(m:GetDescendants()) do
+					if d:IsA("BaseScript") or d:IsA("Sound") then d:Destroy() end
+				end
+				m.Parent = new("WorldModel", { Parent = vp })
+				frameModel(vp, m)
+			end
+			carryTile(tile, { kind = "prop", variant = it.name, name = it.name })
+		end
+	end
+
+	-- ----- MY CHIPS -----
+	local chipPage = page("chips")
+	new("TextLabel", { Position = px(9, 6), Size = px(359, 20), BackgroundTransparency = 1, Text = "CHIPS IN THIS CHAMBER", FontFace = FONT.UI, TextSize = 14,
+		TextColor3 = rgb(60), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 7, Parent = chipPage })
+	local function chipList(y, h)
+		local sc = new("ScrollingFrame", { Position = px(7, y), Size = px(361, h), BackgroundColor3 = rgb(250), BorderSizePixel = 0, ScrollBarThickness = 4,
+			AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = px(0, 0), ZIndex = 7, Parent = chipPage })
+		new("UIStroke", { Color = C.TILE_LINE, Thickness = 1, Parent = sc })
+		new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = sc })
+		return sc
+	end
+	local here = chipList(28, 250)
+	smallButton(chipPage, px(7, 284), px(361, 30), "+ NEW CHIP", function()
+		if #E.chips >= (LIM.chips or 16) then flash("That's the chip limit for one chamber.") sfx("Error") return end
+		Dlg.chip(nil)
+	end, true)
+	new("TextLabel", { Position = px(9, 326), Size = px(359, 20), BackgroundTransparency = 1, Text = "MY CHIPS (SAVED, USE THEM IN ANY CHAMBER)", FontFace = FONT.UI, TextSize = 14,
+		TextColor3 = rgb(60), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 7, Parent = chipPage })
+	local saved = chipList(348, 290)
+	note(chipPage, px(9, 646), px(359, 84), "Chips are little programs: \"when button1 pressed\" -> \"open exit\". Build them from blocks or type them as lines. Items are named by their label (right-click an item to see it).")
+	local library = {}
+
+	local function chipRow(parent, order, text, buttons)
+		local row = new("Frame", { Size = px(355, 34), BackgroundTransparency = 1, LayoutOrder = order, ZIndex = 8, Parent = parent })
+		new("TextLabel", { Position = px(8, 0), Size = px(355 - 8 - #buttons * 64, 34), BackgroundTransparency = 1, Text = text, FontFace = FONT.UI_REG, TextSize = 15,
+			TextColor3 = rgb(25), TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 8, Parent = row })
+		for i, b in ipairs(buttons) do
+			local x = 355 - (#buttons - i + 1) * 64
+			local btn = smallButton(row, px(x + 2, 3), px(60, 28), b[1], b[2], b[3])
+			btn.ZIndex = 9
+		end
+		new("Frame", { Position = px(0, 33), Size = px(355, 1), BackgroundColor3 = C.TILE_LINE, BorderSizePixel = 0, ZIndex = 8, Parent = row })
+	end
+
+	function Pal.refreshChips()
+		for _, sc in ipairs({ here, saved }) do
+			for _, c in ipairs(sc:GetChildren()) do
+				if c:IsA("GuiObject") then c:Destroy() end
+			end
+		end
+		for i, chip in ipairs(E.chips) do
+			chipRow(here, i, chip.name, {
+				{ "EDIT", function() Dlg.chip(i) end, true },
+				{ "✕", function()
+					pushUndo()
+					table.remove(E.chips, i)
+					Pal.refreshChips()
+				end },
+			})
+		end
+		if #E.chips == 0 then
+			note(here, px(0, 0), px(350, 40), "  No chips yet.").Size = px(350, 30)
+		end
+		for i, chip in ipairs(library) do
+			chipRow(saved, i, chip.name, {
+				{ "USE", function()
+					if #E.chips >= (LIM.chips or 16) then flash("That's the chip limit for one chamber.") sfx("Error") return end
+					Dlg.chip(nil, { name = chip.name, src = chip.src })
+				end, true },
+				{ "✕", function()
+					task.spawn(function()
+						local ok, list = netCall("ChipDelete", chip.id)
+						if ok and type(list) == "table" then library = list Pal.refreshChips() end
+					end)
+				end },
+			})
+		end
+		if #library == 0 then
+			note(saved, px(0, 0), px(350, 40), "  Save a chip with SAVE TO MY CHIPS to reuse it.").Size = px(350, 30)
+		end
+	end
+	function Pal.setLibrary(list)
+		if type(list) == "table" then library = list end
+		Pal.refreshChips()
+	end
+	Pal.onShow.chips = function()
+		Pal.refreshChips()
+		task.spawn(function()
+			local ok, list = netCall("ChipList")
+			if ok then Pal.setLibrary(list) end
+		end)
+	end
+
+	player:GetAttributeChangedSignal("Setting_edMode"):Connect(function()
+		Pal.layoutTabs()
+		if E.active then flash(("Editor mode: %s"):format(ES("edMode", "Simple"))) end
+	end)
+	Pal.layoutTabs()
 end
 
 -- ==========================================
@@ -1794,15 +2127,15 @@ local function closeDialog()
 	end
 end
 local saveDraft -- forward
-local publishDialog, saveAsDialog, openDialog, controlsDialog, inviteDialog
 do
-	local function makeDialog(title, h)
+	local function makeDialog(title, h, w)
+		w = w or 560
 		closeDialog()
-		dialog = ui(new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = px(560, h), BackgroundColor3 = C.CTX_BG,
+		dialog = ui(new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = px(w, h), BackgroundColor3 = C.CTX_BG,
 			BorderSizePixel = 0, Active = true, SelectionGroup = true, ZIndex = 30, Parent = canvas }))
 		new("UIStroke", { Color = C.CTX_EDGE, Thickness = 1, Parent = dialog })
-		local head = new("Frame", { Size = px(560, 26), BackgroundColor3 = C.CTX_HEAD, BackgroundTransparency = 0.2, BorderSizePixel = 0, ZIndex = 31, Parent = dialog })
-		new("TextLabel", { Size = px(548, 26), BackgroundTransparency = 1, Text = string.upper(title), FontFace = FONT.UI_REG, TextSize = 15, TextColor3 = rgb(236),
+		local head = new("Frame", { Size = px(w, 26), BackgroundColor3 = C.CTX_HEAD, BackgroundTransparency = 0.2, BorderSizePixel = 0, ZIndex = 31, Parent = dialog })
+		new("TextLabel", { Size = px(w - 12, 26), BackgroundTransparency = 1, Text = string.upper(title), FontFace = FONT.UI_REG, TextSize = 15, TextColor3 = rgb(236),
 			TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 32, Parent = head })
 		local d = dialog
 		task.defer(function() if dialog == d then focusFirst(d) end end) -- after the buttons exist
@@ -1834,20 +2167,31 @@ do
 		return sc
 	end
 
-	publishDialog = function()
+	Dlg.publish = function()
 		local d = makeDialog("Publish To Workshop", 160)
 		local box = dialogBox(d, 50, E.title, "Chamber name")
 		dialogButton(d, 20, 108, "PUBLISH", function()
+			if not Config.ExitCanOpen(serialize()) then
+				flash("Nothing opens the exit door. Connect a button to it, open it with a chip, or right-click it > Open without a button.")
+				sfx("Error")
+				return
+			end
 			if box.Text ~= "" then E.title = box.Text:sub(1, 40) end
 			closeDialog()
 			saveDraft(true)
 			local ok, res = netCall("EditorPublish", { id = E.id, data = serialize(), title = E.title, coop = E.coop })
-			if ok then flash("Published to the Workshop!") else flash(res) sfx("Error") end
+			if ok then
+				flash("Published to the Workshop!")
+				X.toast(E.title .. " is live in the Workshop.", "Published", "good")
+			else
+				flash(res)
+				sfx("Error")
+			end
 		end, true)
 		dialogButton(d, 196, 108, "CANCEL", closeDialog)
 	end
 
-	saveAsDialog = function()
+	Dlg.saveAs = function()
 		local d = makeDialog("Save As", 160)
 		local box = dialogBox(d, 50, E.title .. " copy", "Chamber name")
 		dialogButton(d, 20, 108, "OK", function()
@@ -1863,7 +2207,7 @@ do
 		dialogButton(d, 196, 108, "CANCEL", closeDialog)
 	end
 
-	openDialog = function()
+	Dlg.open = function()
 		local ok, list = netCall("EditorList")
 		if not ok then flash(list) return end
 		local d = makeDialog("Open Test Chamber", 420)
@@ -1887,13 +2231,13 @@ do
 	end
 
 	-- team building: invite someone in this server
-	inviteDialog = function()
+	Dlg.invite = function()
 		if E.guest then flash("Only the chamber's owner can invite people.") sfx("Error") return end
 		local d = makeDialog("Invite Team Builder", 420)
 		local sc = listFrame(d)
 		local n = 0
 		for _, pl in ipairs(Players:GetPlayers()) do
-			if pl ~= player and not memberInfo(pl.UserId) then
+			if pl ~= player and not Team.memberInfo(pl.UserId) then
 				n += 1
 				listRow(sc, pl.DisplayName .. "  (@" .. pl.Name .. ")", function()
 					closeDialog()
@@ -1911,7 +2255,304 @@ do
 		dialogButton(d, 20, 340, "CANCEL", closeDialog)
 	end
 
-	controlsDialog = function()
+	-- Advanced: rename an item's label (chips use it); chips that used the old name follow along
+	Dlg.rename = function(index)
+		local e = E.ents[index]
+		if not e then return end
+		local d = makeDialog("Item Label", 196)
+		new("TextLabel", { Position = px(20, 34), Size = px(520, 26), BackgroundTransparency = 1, Text = "Chips call this item by its label. Letters, numbers and _, starting with a letter.",
+			FontFace = FONT.UI_REG, TextSize = 15, TextColor3 = rgb(60), TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, ZIndex = 32, Parent = d })
+		local box = dialogBox(d, 66, Config.LabelOf(e) or "", "button1")
+		dialogButton(d, 20, 136, "OK", function()
+			local l = box.Text:gsub("%s", "")
+			if not Config.ValidLabel(l) then flash("Use letters, numbers and _, starting with a letter (max 20).") sfx("Error") return end
+			for i, other in ipairs(E.ents) do
+				if i ~= index and (Config.LabelOf(other) or ""):lower() == l:lower() then flash("Another item already has that label.") sfx("Error") return end
+			end
+			local old = Config.LabelOf(e)
+			closeDialog()
+			pushUndo()
+			local opt = table.clone(Config.Options(e))
+			opt.label = l
+			e[10] = opt
+			if old and old:lower() ~= l:lower() then
+				for _, chip in ipairs(E.chips) do
+					local rules, errs = Config.ParseChip(chip.src)
+					if #errs == 0 then
+						for _, r in ipairs(rules) do
+							if r.src and r.src:lower() == old:lower() then r.src = l end
+							for _, a in ipairs(r.acts) do
+								if a.target and a.target:lower() == old:lower() then a.target = l end
+							end
+						end
+						chip.src = Config.ChipText(rules)
+					end
+				end
+			end
+			rebuildEnts()
+			flash("Label set to " .. l .. ".")
+		end, true)
+		dialogButton(d, 196, 136, "CANCEL", closeDialog)
+	end
+
+	-- Advanced: the chip editor. Two views of the same program: BLOCKS (pick from menus) and LINES (type it).
+	Dlg.chip = function(index, preset)
+		local existing = index and E.chips[index]
+		local src = (existing and existing.src) or (preset and preset.src) or "when button1 pressed\n    open exit\nwhen button1 released\n    close exit"
+		local name = (existing and existing.name) or (preset and preset.name) or ("Chip " .. (#E.chips + 1))
+		local DW, DH = 840, 664
+		local d = makeDialog(existing and "Edit Chip" or "New Chip", DH, DW)
+		local nameBox = new("TextBox", { Position = px(20, 40), Size = px(460, 36), BackgroundColor3 = rgb(255), BorderSizePixel = 0, Text = name,
+			PlaceholderText = "Chip name", FontFace = FONT.UI_REG, TextSize = 19, TextColor3 = rgb(20), ClearTextOnFocus = false, ZIndex = 32, Parent = d })
+		local body = new("Frame", { Position = px(20, 86), Size = px(800, 470), BackgroundColor3 = rgb(250), BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 32, Parent = d })
+		new("UIStroke", { Color = C.CTX_EDGE, Thickness = 1, Parent = body })
+		local errLabel = new("TextLabel", { Position = px(20, 560), Size = px(800, 40), BackgroundTransparency = 1, Text = "", FontFace = FONT.UI_REG, TextSize = 15,
+			TextColor3 = rgb(200, 50, 50), TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 32, Parent = d })
+		local rules, perrs = Config.ParseChip(src)
+		local view = #perrs > 0 and "lines" or "blocks"
+		local linesBox
+		local render
+
+		-- items a menu can offer, sorted by label
+		local function labelsWhere(ok)
+			local list = {}
+			for _, e in ipairs(E.ents) do
+				local l = Config.LabelOf(e)
+				if l and ok(e[1]) then table.insert(list, { label = l, name = entLabel(e) }) end
+			end
+			table.sort(list, function(a, b) return a.label:lower() < b.label:lower() end)
+			return list
+		end
+		local function pickItems(current, ok, set)
+			local list = {}
+			for _, it in ipairs(labelsWhere(ok)) do
+				table.insert(list, { text = it.label .. "   (" .. it.name .. ")", icon = "radio", checked = current == it.label, fn = function() set(it.label) render() end })
+			end
+			if #list == 0 then list = { { text = "Nothing in the chamber can do that yet", disabled = true, fn = function() end } } end
+			return list
+		end
+		local function dropdown(parent, x, y, w, text, getItems)
+			local b = new("TextButton", { Position = px(x, y), Size = px(w, 30), BackgroundColor3 = rgb(255), BorderSizePixel = 0, AutoButtonColor = true,
+				Text = "  " .. text .. "  ▾", FontFace = FONT.UI_REG, TextSize = 16, TextColor3 = rgb(20), TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 35, Parent = parent })
+			new("UICorner", { CornerRadius = UDim.new(0, 4), Parent = b })
+			hoverable(b, function() sound("SOUND_HOVER") end, function() end)
+			onClick(b, function()
+				sfx("Click")
+				local pos = (b.AbsolutePosition - canvas.AbsolutePosition) / uiScale.Scale
+				popupMenu(pos.X, pos.Y + 32, { { items = getItems() } })
+			end)
+			return b
+		end
+		local function field(parent, x, y, w, value, set, numeric)
+			local b = new("TextBox", { Position = px(x, y), Size = px(w, 30), BackgroundColor3 = rgb(255), BorderSizePixel = 0, Text = tostring(value),
+				FontFace = FONT.UI_REG, TextSize = 16, TextColor3 = rgb(20), ClearTextOnFocus = false, ZIndex = 35, Parent = parent })
+			new("UICorner", { CornerRadius = UDim.new(0, 4), Parent = b })
+			b.FocusLost:Connect(function()
+				if numeric then
+					local v = tonumber(b.Text)
+					if v then set(v) else b.Text = tostring(value) end
+				else
+					set(b.Text:sub(1, 120))
+				end
+			end)
+			return b
+		end
+		local function tinyButton(parent, x, y, w, text, fn, color)
+			local b = new("TextButton", { Position = px(x, y), Size = px(w, 30), BackgroundColor3 = color or rgb(240, 240, 236), BorderSizePixel = 0,
+				AutoButtonColor = true, Text = text, FontFace = FONT.P2, TextSize = 16, TextColor3 = rgb(25), ZIndex = 35, Parent = parent })
+			new("UICorner", { CornerRadius = UDim.new(0, 4), Parent = b })
+			hoverable(b, function() sound("SOUND_HOVER") end, function() end)
+			onClick(b, function() sfx("Click") fn() end)
+			return b
+		end
+		local function label(parent, x, y, w, text, color)
+			return new("TextLabel", { Position = px(x, y), Size = px(w, 30), BackgroundTransparency = 1, Text = text, FontFace = FONT.P2, TextSize = 18,
+				TextColor3 = color or rgb(30), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 35, Parent = parent })
+		end
+
+		local viewButtons = {}
+		render = function()
+			for _, c in ipairs(body:GetChildren()) do
+				if c:IsA("GuiObject") then c:Destroy() end
+			end
+			for v, b in pairs(viewButtons) do
+				b.BackgroundColor3 = v == view and rgb(77, 128, 151) or rgb(200, 206, 203)
+				b.TextColor3 = v == view and rgb(245) or rgb(20)
+			end
+			if view == "lines" then
+				linesBox = new("TextBox", { Position = px(0, 0), Size = px(800, 470), BackgroundTransparency = 1, Text = linesBox and linesBox.Text or Config.ChipText(rules),
+					MultiLine = true, ClearTextOnFocus = false, Font = Enum.Font.Code, TextSize = 19, TextColor3 = rgb(25), TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false, ZIndex = 33, Parent = body })
+				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingTop = UDim.new(0, 10), Parent = linesBox })
+				return
+			end
+			linesBox = nil
+			local sc = new("ScrollingFrame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 6,
+				AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = px(0, 0), ZIndex = 33, Parent = body })
+			new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = sc })
+			new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8), Parent = sc })
+			for ri, r in ipairs(rules) do
+				local h = 44 + #r.acts * 40 + 40
+				local blk = new("Frame", { Size = px(770, h), BackgroundColor3 = rgb(250, 206, 96), BorderSizePixel = 0, LayoutOrder = ri, ZIndex = 34, Parent = sc })
+				new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = blk })
+				label(blk, 12, 7, 60, "WHEN")
+				local ex = 70
+				if r.ev == "pressed" or r.ev == "released" then
+					dropdown(blk, 70, 7, 230, r.src or "pick an item", function()
+						return pickItems(r.src, Config.ChipSourceOk, function(v) r.src = v end)
+					end)
+					ex = 310
+				end
+				dropdown(blk, ex, 7, 200, Config.CHIP_EVENT_LABELS[r.ev] or r.ev, function()
+					local list = {}
+					for _, ev in ipairs(Config.CHIP_EVENTS) do
+						table.insert(list, { text = Config.CHIP_EVENT_LABELS[ev], icon = "radio", checked = r.ev == ev, fn = function()
+							r.ev = ev
+							if ev == "start" or ev == "every" then r.src = nil end
+							if ev == "every" then r.n = r.n or 5 end
+							render()
+						end })
+					end
+					return list
+				end)
+				if r.ev == "every" then
+					field(blk, ex + 210, 7, 70, r.n or 5, function(v) r.n = math.clamp(v, 0.5, 600) end, true)
+					label(blk, ex + 288, 7, 80, "seconds")
+				end
+				tinyButton(blk, 726, 7, 34, "✕", function() table.remove(rules, ri) render() end)
+				for ai, a in ipairs(r.acts) do
+					local row = new("Frame", { Position = px(24, 44 + (ai - 1) * 40), Size = px(736, 34), BackgroundColor3 = rgb(126, 186, 240), BorderSizePixel = 0, ZIndex = 34, Parent = blk })
+					new("UICorner", { CornerRadius = UDim.new(0, 5), Parent = row })
+					label(row, 10, 2, 40, "DO")
+					dropdown(row, 46, 2, 200, Config.CHIP_ACTION_LABELS[a.op] or a.op, function()
+						local list = {}
+						for _, op in ipairs(Config.CHIP_ACTIONS) do
+							table.insert(list, { text = Config.CHIP_ACTION_LABELS[op], icon = "radio", checked = a.op == op, fn = function()
+								a.op = op
+								if op == "wait" then a.n = a.n or 1 end
+								if op == "say" then a.text = a.text or "Well done!" end
+								if a.target then
+									local k = Config.LabelKinds(E.ents)[a.target:lower()]
+									if not (k and Config.ChipTargetOk(op, k)) then a.target = nil end
+								end
+								render()
+							end })
+						end
+						return list
+					end)
+					if Config.CHIP_TARGET[a.op] then
+						dropdown(row, 256, 2, 300, a.target or "pick an item", function()
+							return pickItems(a.target, function(k) return Config.ChipTargetOk(a.op, k) end, function(v) a.target = v end)
+						end)
+					elseif a.op == "wait" then
+						field(row, 256, 2, 90, a.n or 1, function(v) a.n = math.clamp(v, 0, 60) end, true)
+						label(row, 354, 2, 80, "seconds")
+					elseif a.op == "say" then
+						field(row, 256, 2, 340, a.text or "", function(v) a.text = v end, false)
+					end
+					tinyButton(row, 610, 2, 34, "▲", function()
+						if ai > 1 then r.acts[ai], r.acts[ai - 1] = r.acts[ai - 1], r.acts[ai] render() end
+					end)
+					tinyButton(row, 650, 2, 34, "▼", function()
+						if ai < #r.acts then r.acts[ai], r.acts[ai + 1] = r.acts[ai + 1], r.acts[ai] render() end
+					end)
+					tinyButton(row, 694, 2, 34, "✕", function() table.remove(r.acts, ai) render() end)
+				end
+				tinyButton(blk, 24, 44 + #r.acts * 40, 120, "+ DO", function()
+					table.insert(r.acts, { op = "open", target = Config.LabelKinds(E.ents).exit and "exit" or nil })
+					render()
+				end, rgb(126, 186, 240))
+			end
+			local add = new("Frame", { Size = px(770, 34), BackgroundTransparency = 1, LayoutOrder = #rules + 1, ZIndex = 34, Parent = sc })
+			tinyButton(add, 0, 2, 200, "+ WHEN PRESSED", function() table.insert(rules, { ev = "pressed", acts = {} }) render() end, rgb(250, 206, 96))
+			tinyButton(add, 210, 2, 200, "+ WHEN STARTS", function() table.insert(rules, { ev = "start", acts = {} }) render() end, rgb(250, 206, 96))
+			tinyButton(add, 420, 2, 200, "+ EVERY ... SECONDS", function() table.insert(rules, { ev = "every", n = 5, acts = {} }) render() end, rgb(250, 206, 96))
+		end
+
+		-- LINES view -> rules (false + message if it doesn't parse)
+		local function readLines()
+			if view ~= "lines" or not linesBox then return true end
+			local r2, e2 = Config.ParseChip(linesBox.Text)
+			if #e2 > 0 then
+				errLabel.Text = table.concat(e2, "    ", 1, math.min(#e2, 3))
+				return false
+			end
+			rules = r2
+			return true
+		end
+		local function setView(v)
+			if v == view then return end
+			if v == "blocks" and not readLines() then sfx("Error") return end
+			errLabel.Text = ""
+			if v == "lines" then linesBox = nil end -- regenerate the text from the blocks
+			view = v
+			render()
+		end
+		for i, v in ipairs({ "blocks", "lines" }) do
+			local b = new("TextButton", { Position = px(500 + (i - 1) * 160, 40), Size = px(150, 36), BorderSizePixel = 0, AutoButtonColor = true,
+				Text = v == "blocks" and "BLOCKS" or "LINES", FontFace = FONT.P2, TextSize = 20, ZIndex = 32, Parent = d })
+			hoverable(b, function() sound("SOUND_HOVER") end, function() end)
+			onClick(b, function() sfx("Click") setView(v) end)
+			viewButtons[v] = b
+		end
+
+		-- the finished chip, or nil (and the problems shown) if it isn't ready
+		local function collect()
+			if not readLines() then sfx("Error") return nil end
+			local problems = {}
+			if #rules == 0 then table.insert(problems, "Add at least one WHEN block.") end
+			for _, r in ipairs(rules) do
+				if (r.ev == "pressed" or r.ev == "released") and not r.src then table.insert(problems, "Pick the item for every 'when ... pressed / released'.") end
+				for _, a in ipairs(r.acts) do
+					if Config.CHIP_TARGET[a.op] and not a.target then table.insert(problems, "Pick an item for every action.") end
+				end
+			end
+			if #problems == 0 then problems = Config.CheckChip(rules, Config.LabelKinds(E.ents)) end
+			if #problems > 0 then
+				errLabel.Text = table.concat(problems, "    ", 1, math.min(#problems, 3))
+				sfx("Error")
+				return nil
+			end
+			local text = (view == "lines" and linesBox) and linesBox.Text or Config.ChipText(rules)
+			return { name = nameBox.Text ~= "" and nameBox.Text:sub(1, 30) or "Chip", src = text:sub(1, LIM.chipLen or 3000) }
+		end
+
+		dialogButton(d, 20, 610, "SAVE", function()
+			local c = collect()
+			if not c then return end
+			closeDialog()
+			pushUndo()
+			if index and E.chips[index] then E.chips[index] = c else table.insert(E.chips, c) end
+			Pal.refreshChips()
+			flash(("Chip \"%s\" saved."):format(c.name))
+		end, true)
+		dialogButton(d, 196, 610, "TO MY CHIPS", function()
+			local c = collect()
+			if not c then return end
+			task.spawn(function()
+				local ok, list = netCall("ChipSave", { name = c.name, src = c.src })
+				if ok then
+					Pal.setLibrary(list)
+					X.toast(("\"%s\" is in My Chips now."):format(c.name), "Chip saved", "chip")
+				else
+					flash(list or "Couldn't save the chip.")
+				end
+			end)
+		end)
+		if existing then
+			dialogButton(d, 372, 610, "DELETE", function()
+				closeDialog()
+				pushUndo()
+				table.remove(E.chips, index)
+				Pal.refreshChips()
+			end)
+		end
+		dialogButton(d, existing and 548 or 372, 610, "CANCEL", closeDialog)
+		render()
+	end
+
+	Dlg.controls = function()
 		local d = makeDialog("Controls", 600)
 		new("TextLabel", { Position = px(20, 40), Size = px(520, 500), BackgroundTransparency = 1, FontFace = FONT.UI_REG, TextSize = 16, TextColor3 = rgb(30),
 			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, LineHeight = 1.15, ZIndex = 32, Parent = d,
@@ -2016,7 +2657,7 @@ local loadData -- forward
 
 local function sendSync()
 	E.sentRev = E.rev
-	if not (syncEvent and teamSize() > 1) then return end
+	if not (syncEvent and Team.teamSize() > 1) then return end
 	E.lastSync = os.clock()
 	syncEvent:FireServer("Data", { data = serialize() })
 end
@@ -2105,8 +2746,13 @@ local function buildAndPlay()
 	closeMenus()
 	cancelLink()
 	local fromPlay = E.playtest
-	showBuilding(fromPlay)
 	local data = serialize()
+	if not Config.ExitCanOpen(data) then
+		-- still builds (so you can look around), but you can't finish it like this
+		X.toast("Nothing opens the exit door yet. Connect a button to it (select the button, press C, click the exit), use a chip, or right-click the exit > Open without a button.",
+			"Exit door is locked", "locked")
+	end
+	showBuilding(fromPlay)
 	sendSync()
 	task.spawn(saveDraft, true)
 	local done, ok, err = false, nil, nil
@@ -2152,8 +2798,8 @@ local function stop(keepServerState)
 	E.active, E.playtest, E.building, E.linking = false, false, false, nil
 	E.mmb, E.rmb, E.carry, E.touch, E.pinch, E.touchOrbit = false, nil, nil, nil, nil, false
 	E.team, E.guest, E.pendingRemote = nil, false, nil
-	clearMarkers()
-	refreshTeamBox()
+	Team.clearMarkers()
+	Team.refreshTeamBox()
 	connectGui.hide()
 	setDrone(false)
 	gui.Enabled = false
@@ -2184,6 +2830,13 @@ end
 
 loadData = function(data)
 	E.air, E.faces, E.colors, E.ents, E.links = {}, {}, {}, {}, {}
+	E.textures, E.chips = {}, {}
+	for k, v in pairs(type(data.textures) == "table" and data.textures or {}) do
+		if Config.ValidTextureValue(v) then E.textures[k] = v end
+	end
+	for _, c in ipairs(type(data.chips) == "table" and data.chips or {}) do
+		if type(c) == "table" and type(c.src) == "string" then table.insert(E.chips, { name = tostring(c.name or "Chip"), src = c.src }) end
+	end
 	E.coop = data.coop == true
 	for _, c in ipairs(data.air or {}) do E.air[key(c[1], c[2], c[3])] = true end
 	for k, v in pairs(data.faces or {}) do if v == 0 or v == 2 or v == 3 then E.faces[k] = v end end
@@ -2202,6 +2855,7 @@ loadData = function(data)
 	for _, l in ipairs(data.links or {}) do
 		if type(l) == "table" then table.insert(E.links, { l[1], l[2] }) end
 	end
+	Config.AutoLabel(E.ents) -- chips talk about items by label
 end
 
 local function start(payload)
@@ -2222,10 +2876,10 @@ local function start(payload)
 	frameCamera()
 	applyCamera()
 	rebuild()
-	buildPalette()
-	setPalette(E.pointerMode == "mouse")
+	Pal.build()
+	Pal.set(E.pointerMode == "mouse")
 	rescaleUI()
-	refreshTeamBox()
+	Team.refreshTeamBox()
 	gui.Enabled = true
 	setDrone(true)
 	if controls then controls:Disable() end
@@ -2269,19 +2923,28 @@ local MENUS = {
 		local g = E.guest
 		local items = {
 			{ text = "New chamber", shortcut = "Ctrl+N", disabled = g, fn = newChamber },
-			{ text = "Open...", shortcut = "Ctrl+O", disabled = g, fn = function() task.spawn(openDialog) end },
+			{ text = "Open...", shortcut = "Ctrl+O", disabled = g, fn = function() task.spawn(Dlg.open) end },
 			{ text = "Save", shortcut = "Ctrl+S", fn = function() task.spawn(saveDraft, false) end },
-			{ text = "Save as...", shortcut = "Ctrl+Sh+S", disabled = g, fn = saveAsDialog },
+			{ text = "Save as...", shortcut = "Ctrl+Sh+S", disabled = g, fn = Dlg.saveAs },
 			{ text = "Cooperative puzzle", icon = "check", checked = E.coop, sep = true, fn = function() E.coop = not E.coop E.dirty = true E.rev += 1 end },
 			{ text = E.gameView and "Editor view" or "Game view", shortcut = "Tab", fn = toggleGameView },
+			{ text = "Editor mode", sub = function()
+				local list = {}
+				for _, m in ipairs({ "Simple", "Intermediate", "Advanced" }) do
+					table.insert(list, { text = m, icon = "radio", checked = ES("edMode", "Simple") == m, fn = function()
+						menuRequest("SetSetting", { key = "edMode", value = m }) -- saved with the rest of the options
+					end })
+				end
+				return list
+			end },
 			{ text = "Rebuild...", shortcut = "F9", fn = function() task.spawn(buildAndPlay) end },
-			{ text = "Publish...", disabled = g, fn = publishDialog, sep = true },
+			{ text = "Publish...", disabled = g, fn = Dlg.publish, sep = true },
 		}
 		if g then
 			table.insert(items, { text = "Leave team", sep = true, fn = function() menuRequest("ExitToMain") end })
 		else
-			table.insert(items, { text = "Invite team builder...", sep = teamSize() < 2, fn = inviteDialog })
-			if teamSize() > 1 then
+			table.insert(items, { text = "Invite team builder...", sep = Team.teamSize() < 2, fn = Dlg.invite })
+			if Team.teamSize() > 1 then
 				table.insert(items, { text = "Remove team builder", sep = true, sub = function()
 					local list = {}
 					for _, m in ipairs(E.team.members) do
@@ -2308,7 +2971,7 @@ local MENUS = {
 		} end,
 	Help = function() return {
 		{ text = "Tips...", fn = function() tipIndex = tipIndex % #SET.TIPS + 1 flash(SET.TIPS[tipIndex]) end },
-		{ text = "Controls...", fn = controlsDialog },
+		{ text = "Controls...", fn = Dlg.controls },
 		} end,
 }
 -- File / Edit / Help: x is where the word starts in the footage
@@ -2629,6 +3292,11 @@ local function itemMenu(x, y)
 	refreshSelection()
 
 	local items = {}
+	local adv = Pal.level() >= 3
+	if adv and Config.LABEL_PREFIX[e[1]] then
+		-- chips refer to items by this name
+		table.insert(items, { text = "Label: " .. (Config.LabelOf(e) or "(none)"), icon = "glyph", glyph = "✎", sep = true, fn = function() Dlg.rename(index) end })
+	end
 	if canSource(e) or canTarget(e) then
 		table.insert(items, { text = "Connect to...", shortcut = "C", fn = startLink })
 	end
@@ -2702,12 +3370,57 @@ local function itemMenu(x, y)
 			rebuildEnts()
 		end })
 	end
+	if e[1] == "exit" then
+		-- the exit is locked until something opens it; this lets it open by itself (no button needed)
+		local free = o.free == true
+		table.insert(items, { text = "Open without a button", icon = "check", checked = free, sep = true, fn = function()
+			setOption(index, "free", (not free) or nil)
+			flash(free and "The exit now needs a button (or a chip) to open." or "The exit opens without a button.")
+		end })
+	elseif e[1] == "prop" then
+		local SIZES = { 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4 }
+		local labels = {}
+		for _, v in ipairs(SIZES) do labels[v] = "x" .. tostring(v) end
+		table.insert(items, { text = "Size", sep = not adv, sub = function()
+			return radios(index, "scale", SIZES, tonumber(o.scale) or 1, labels)
+		end })
+		if adv then
+			table.insert(items, { text = "Turn 15°", icon = "glyph", glyph = "↻", fn = function()
+				setOption(index, "spin", ((tonumber(o.spin) or 0) + 15) % 360)
+			end })
+			table.insert(items, { text = "Nudge", sep = true, sub = function()
+				local function nudge(k, d)
+					return function()
+						local v = math.clamp((tonumber(o[k]) or 0) + d, -CELL, CELL)
+						setOption(index, k, v ~= 0 and v or nil)
+					end
+				end
+				return {
+					{ text = "Up (out of the surface)", fn = nudge("oy", 1) },
+					{ text = "Down (into the surface)", fn = nudge("oy", -1) },
+					{ text = "Left", fn = nudge("ox", -1) },
+					{ text = "Right", fn = nudge("ox", 1) },
+					{ text = "Forward", fn = nudge("oz", -1) },
+					{ text = "Back", fn = nudge("oz", 1), sep = true },
+					{ text = "Reset position", fn = function()
+						pushUndo()
+						local opt = table.clone(o)
+						opt.ox, opt.oy, opt.oz, opt.spin = nil, nil, nil, nil
+						E.ents[index][10] = next(opt) and opt or nil
+						rebuildEnts()
+					end },
+				}
+			end })
+		end
+	end
 	if Config.SWITCHABLE[e[1]] and e[1] ~= "exit" then
 		local on = Config.StartOn(e, hasLinks(e))
 		table.insert(items, { text = "Start enabled", icon = "check", checked = on, sep = true, fn = function() setOption(index, "startOn", not on) end })
 	end
 	table.insert(items, { text = "Delete item", shortcut = "Delete", disabled = def.mandatory == true, fn = deleteItem })
-	popupMenu(x, y, { { title = e[1] == "gate" and (Config.GateMode(e) .. " gate") or "Item", items = items }, surfaceSection() })
+	local title = e[1] == "gate" and (Config.GateMode(e) .. " gate") or "Item"
+	if adv and Config.LabelOf(e) then title = Config.LabelOf(e) end
+	popupMenu(x, y, { { title = title, items = items }, surfaceSection() })
 end
 
 -- the menu for whatever is selected (touch toolbar's OPTIONS)
@@ -2790,7 +3503,7 @@ end
 
 local function cancelCarry()
 	E.carry, E.carryArm = nil, nil
-	itemName.Text = ""
+	Pal.itemName.Text = ""
 	if ghost then ghost:Destroy() ghost = nil end
 end
 
@@ -2890,6 +3603,7 @@ local function primaryUp()
 			if #E.ents >= LIM.ents then flash("That's the item limit.") sfx("Error") return end
 			pushUndo()
 			table.insert(E.ents, { item.kind, hit.x, hit.y, hit.z, hit.f, 0, item.variant, newId() })
+			Config.AutoLabel(E.ents)
 			E.selItem, E.sel = #E.ents, {}
 			refreshItems(item.kind)
 			if GEL_KINDS[item.kind] then sfx("Gel")
@@ -3040,13 +3754,14 @@ local function pointerMoved(d)
 	end
 end
 
+do
 local function keyAction(kc)
 	if ctrlDown() and kc == Enum.KeyCode.S then
-		if shiftDown() then if not E.guest then saveAsDialog() end else task.spawn(saveDraft, false) end
+		if shiftDown() then if not E.guest then Dlg.saveAs() end else task.spawn(saveDraft, false) end
 	elseif ctrlDown() and kc == Enum.KeyCode.N then
 		if not E.guest then newChamber() end
 	elseif ctrlDown() and kc == Enum.KeyCode.O then
-		if not E.guest then task.spawn(openDialog) end
+		if not E.guest then task.spawn(Dlg.open) end
 	elseif ctrlDown() and kc == Enum.KeyCode.Q then
 		exitEditor()
 	elseif ctrlDown() and kc == Enum.KeyCode.A then
@@ -3083,13 +3798,13 @@ end
 local function padButton(kc, gpe)
 	if kc == Enum.KeyCode.ButtonB then
 		if #openMenus > 0 then closeMenus() GuiService.SelectedObject = nil
-		elseif paletteSelecting() then GuiService.SelectedObject = nil setPalette(false)
+		elseif Pal.selecting() then GuiService.SelectedObject = nil Pal.set(false)
 		elseif E.carry then cancelCarry()
 		elseif E.linking then cancelLink()
 		else keyAction(Enum.KeyCode.Escape) end
 		return
 	end
-	if kc == Enum.KeyCode.ButtonY then togglePadPalette() return end
+	if kc == Enum.KeyCode.ButtonY then Pal.togglePad() return end
 	if GuiService.SelectedObject ~= nil or gpe then return end -- the D-pad / A are driving a menu or the palette
 	if kc == Enum.KeyCode.ButtonA then
 		local b = guiAtPointer(CLICK)
@@ -3261,6 +3976,7 @@ UserInputService.InputEnded:Connect(function(input)
 		E.mmb = false
 	end
 end)
+end
 
 -- the pause menu opens over the editor: give it the controller
 player:GetAttributeChangedSignal("InMenu"):Connect(function()
@@ -3275,6 +3991,7 @@ end)
 -- ==========================================
 -- FRAME LOOP
 -- ==========================================
+do
 local function readSticks()
 	local l, r = Vector2.zero, Vector2.zero
 	local ok, state = pcall(function() return UserInputService:GetGamepadState(Enum.UserInputType.Gamepad1) end)
@@ -3384,16 +4101,16 @@ editLoop = function(dt)
 
 	-- palette slides away once you head into the room
 	local autoHide = ES("edAutoHide", SET.PALETTE_AUTOHIDE and "Enabled" or "Disabled") == "Enabled"
-	if palOpen and autoHide and #openMenus == 0 and not dialog and not paletteSelecting() then
+	if Pal.open and autoHide and #openMenus == 0 and not dialog and not Pal.selecting() then
 		if mc.X > (E.carry and 414 or 470) then
-			palAwayT = palAwayT or now
-			if now - palAwayT > (E.carry and 0.05 or 0.4) then setPalette(false) end
+			Pal.awayT = Pal.awayT or now
+			if now - Pal.awayT > (E.carry and 0.05 or 0.4) then Pal.set(false) end
 		else
-			palAwayT = nil
+			Pal.awayT = nil
 		end
 	end
 	-- controller cursor resting on the left strip opens the palette
-	if E.pointerMode == "pad" and not palOpen and not E.carry and mc.X < 26 and mc.Y > 145 and mc.Y < 936 then setPalette(true) end
+	if E.pointerMode == "pad" and not Pal.open and not E.carry and mc.X < 26 and mc.Y > 145 and mc.Y < 936 then Pal.set(true) end
 
 	-- controller cursor / hints, touch toolbar
 	padCursor.Visible = E.pointerMode == "pad" and GuiService.SelectedObject == nil and not inMenu
@@ -3433,8 +4150,26 @@ editLoop = function(dt)
 		hoverPart.Transparency = 1
 	end
 
+	-- Advanced: coordinates of what's under the pointer
+	if ES("edMode", "Simple") == "Advanced" and E.pointerMode ~= "pad" then
+		local h = hit or ((not over and not E.drag) and pick() or nil)
+		local txt = ""
+		if h and h.kind == "face" then
+			local FACE = { "+X wall", "-X wall", "ceiling", "floor", "+Z wall", "-Z wall" }
+			txt = ("cell %d, %d, %d  ·  %s"):format(h.x, h.y, h.z, FACE[h.f] or "?")
+			if E.textures[h.key] then txt ..= "  ·  texture " .. tostring(E.textures[h.key]) end
+		elseif h and (h.kind == "ent" or h.kind == "handle") and E.ents[h.index or 0] then
+			local e = E.ents[h.index]
+			txt = ("%s  ·  %s  ·  cell %d, %d, %d"):format(Config.LabelOf(e) or e[1], entLabel(e), e[2], e[3], e[4])
+		end
+		X.coords.Text = txt
+		X.coords.Visible = txt ~= ""
+	else
+		X.coords.Visible = false
+	end
+
 	-- team: send where we're pointing (and what at), move everyone else's markers
-	if teamSize() > 1 then
+	if Team.teamSize() > 1 then
 		if cursorEvent and now - E.lastCursorSend > 0.08 then
 			E.lastCursorSend = now
 			local h = (not over and not inMenu) and (hit or pick()) or nil
@@ -3449,8 +4184,9 @@ editLoop = function(dt)
 			end
 			cursorEvent:FireServer({ c = h and (h.pos - W) or nil, t = E.target - W, s = surf })
 		end
-		updateMarkers(dt)
+		Team.updateMarkers(dt)
 	end
+end
 end
 
 -- ==========================================
@@ -3467,7 +4203,7 @@ editorRequest.Event:Connect(function(kind)
 	elseif kind == "Save" then
 		task.spawn(saveDraft, false)
 	elseif kind == "Invite" then
-		if not E.playtest then inviteDialog() end
+		if not E.playtest then Dlg.invite() end
 	end
 end)
 
@@ -3479,17 +4215,18 @@ task.spawn(function()
 			start(data)
 		elseif kind == "ChamberComplete" and type(data) == "table" and data.editor and E.playtest then
 			flash(("Test chamber solved in %d seconds!"):format(math.floor(data.time or 0)))
+			X.toast(("Solved in %d seconds."):format(math.floor(data.time or 0)), "Test chamber solved", "good")
 			task.delay(2.5, function() if E.playtest then exitPlaytest() end end)
 		elseif kind == "TeamUpdate" and type(data) == "table" and E.active then
 			E.team = data
-			refreshTeamBox()
+			Team.refreshTeamBox()
 		elseif kind == "TeamDeclined" and type(data) == "table" and E.active then
 			flash(tostring(data.name) .. " can't build right now.")
 		elseif kind == "TeamEnded" and type(data) == "table" and E.active then
 			flash(tostring(data.reason or "The team was closed."))
 			E.team = nil
-			clearMarkers()
-			refreshTeamBox()
+			Team.clearMarkers()
+			Team.refreshTeamBox()
 			task.delay(1.5, function() menuRequest("ExitToMain") end)
 		elseif kind == "TeamPlaytest" and type(data) == "table" and E.active and not E.playtest and not E.building then
 			-- a teammate pressed Build and Play: the server is taking us in too
@@ -3514,7 +4251,7 @@ task.spawn(function()
 	if cursorEvent then
 		cursorEvent.OnClientEvent:Connect(function(userId, d)
 			if not E.active or not E.team or type(d) ~= "table" then return end
-			local mk = markerFor(userId)
+			local mk = Team.markerFor(userId)
 			if not mk then return end
 			local at = typeof(d.c) == "Vector3" and d.c or (typeof(d.t) == "Vector3" and d.t or nil)
 			if not at then return end

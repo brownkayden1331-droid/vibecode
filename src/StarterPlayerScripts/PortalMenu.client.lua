@@ -301,6 +301,8 @@ local settings = {
 	-- test chamber editor (PortalMapEditor reads these from the Setting_<key> attributes)
 	edAutoHide = "Enabled", edOrbitSens = 0.5, edInvertY = "Disabled", edZoomSpeed = 0.5, edCamSmooth = 0.5,
 	edSfx = 1, edDrone = 1, edHover = "Enabled", edPadCursor = 0.5, edTouchBar = "Auto", edTeamNames = "Enabled",
+	edMode = "Simple", -- Simple (Items) | Intermediate (+ Textures, Meshes) | Advanced (+ My Chips, labels, nudging)
+	toasts = "Enabled", -- toast notifications (achievements, saves, chamber messages...)
 }
 local DEFAULTS = table.clone(settings)
 
@@ -728,6 +730,77 @@ local gui = new("ScreenGui", {
 })
 local menuAction = new("BindableEvent", { Name = "MenuAction", Parent = gui })
 local menuRequest = new("BindableEvent", { Name = "MenuRequest", Parent = gui })
+
+-- ==========================================
+-- TOASTS (small notifications top right; Options > Editor / Advanced Video > Toast Notifications turns them off)
+-- ==========================================
+-- Other scripts: MenuRequest:Fire("Toast", { title = "...", text = "...", kind = "info" | "good" | "bad" | ... })
+-- The server: Push "Toast" { text, title, kind }
+local toast
+do
+	local toastGui = new("ScreenGui", {
+		Name = "PortalToasts", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 430,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = playerGui,
+	})
+	local holder = new("Frame", {
+		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -20, 0, 70), Size = UDim2.fromOffset(360, 600),
+		BackgroundTransparency = 1, Parent = toastGui,
+	})
+	new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, HorizontalAlignment = Enum.HorizontalAlignment.Right, Parent = holder })
+	local toastScale = new("UIScale", { Parent = holder })
+	local function rescaleToasts()
+		local c = workspace.CurrentCamera
+		toastScale.Scale = math.clamp((c and c.ViewportSize.Y or 1080) / 1080, 0.6, 1.4)
+	end
+	rescaleToasts()
+	task.spawn(function()
+		while true do
+			task.wait(2)
+			rescaleToasts()
+		end
+	end)
+	local STRIPE = {
+		info = Color3.fromRGB(38, 178, 214), good = Color3.fromRGB(110, 210, 90), bad = Color3.fromRGB(230, 90, 70),
+		locked = Color3.fromRGB(240, 150, 50), achievement = Color3.fromRGB(240, 205, 70), chip = Color3.fromRGB(170, 110, 255),
+	}
+	local order, live = 0, {}
+	local recent = {}
+	toast = function(text, title, kind)
+		if settings.toasts == "Disabled" or type(text) ~= "string" or text == "" then return end
+		local key = tostring(title) .. "|" .. text
+		if recent[key] and os.clock() - recent[key] < 1.5 then return end -- the same toast twice in a row
+		recent[key] = os.clock()
+		order += 1
+		local card = new("CanvasGroup", {
+			Size = UDim2.fromOffset(360, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = Color3.fromRGB(28, 32, 34),
+			BackgroundTransparency = 0.12, BorderSizePixel = 0, GroupTransparency = 1, LayoutOrder = order, Parent = holder,
+		})
+		new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = card })
+		new("Frame", { Size = UDim2.new(0, 5, 1, 0), BackgroundColor3 = STRIPE[kind or "info"] or STRIPE.info, BorderSizePixel = 0, Parent = card })
+		new("UIPadding", { PaddingLeft = UDim.new(0, 18), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 9), PaddingBottom = UDim.new(0, 10), Parent = card })
+		new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder, Parent = card })
+		if title and title ~= "" then
+			new("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = string.upper(title), FontFace = F_TITLE, TextSize = 19,
+				TextColor3 = STRIPE[kind or "info"] or STRIPE.info, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 1, Parent = card })
+		end
+		new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = text, FontFace = F_SET,
+			TextSize = 20, TextWrapped = true, TextColor3 = Color3.fromRGB(236, 242, 240), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 2, Parent = card })
+		table.insert(live, card)
+		while #live > 4 do
+			local old = table.remove(live, 1)
+			if old.Parent then old:Destroy() end
+		end
+		tween(card, 0.25, { GroupTransparency = 0 })
+		uiSound(CFG.SOUND_HOVER, 0.5)
+		task.delay(4, function()
+			if not card.Parent then return end
+			tween(card, 0.4, { GroupTransparency = 1 }).Completed:Wait()
+			local i = table.find(live, card)
+			if i then table.remove(live, i) end
+			card:Destroy()
+		end)
+	end
+end
 
 local loadGui = new("ScreenGui", {
 	Name = "PortalLoading", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 420,
@@ -2232,6 +2305,18 @@ local function openEnrichment()
 end
 
 menuRequest.Event:Connect(function(kind, arg)
+	if kind == "Toast" then
+		if type(arg) == "table" then toast(arg.text, arg.title, arg.kind) else toast(tostring(arg)) end
+		return
+	elseif kind == "SetSetting" then
+		-- other scripts changing a setting (the editor's File > Editor mode): saved like any other option
+		if type(arg) == "table" and type(arg.key) == "string" and DEFAULTS[arg.key] ~= nil and type(arg.value) == type(DEFAULTS[arg.key]) then
+			settings[arg.key] = arg.value
+			applySetting(arg.key)
+			onSettingChanged()
+		end
+		return
+	end
 	if kind == "Sound" then
 		uiSound(CFG[arg] or arg)
 	elseif kind == "TileSound" then
@@ -2284,6 +2369,7 @@ function Panels.AdvancedVideo()
 			{ kind = "choice", text = "Motion Blur", key = "motionBlur", options = { "Disabled", "Enabled" } },
 			{ kind = "slider", text = "Motion Blur Amount", key = "blurStrength", min = 0, max = 1, step = 0.05 },
 			{ kind = "choice", text = "Weapon Bob", key = "viewBob", options = { "Enabled", "Disabled" } },
+			{ kind = "choice", text = "Toast Notifications", key = "toasts", options = { "Enabled", "Disabled" } },
 		},
 	})
 end
@@ -2354,6 +2440,8 @@ function Panels.EditorSettings()
 	return buildPanel({
 		title = "Editor", cells = 8, defaults = true, minBodyCells = 5, maxVisible = 9, listW = 8 * CFG.GRID, noPreview = true, padTop = 30,
 		rows = {
+			{ kind = "choice", text = "Editor Mode", key = "edMode", options = { "Simple", "Intermediate", "Advanced" } },
+			{ kind = "choice", text = "Toast Notifications", key = "toasts", options = { "Enabled", "Disabled" } },
 			{ kind = "choice", text = "Hide Items Palette", key = "edAutoHide", options = { "Enabled", "Disabled" } },
 			{ kind = "slider", text = "Orbit Speed", key = "edOrbitSens", min = 0, max = 1, step = 0.05 },
 			{ kind = "choice", text = "Invert Orbit", key = "edInvertY", options = { "Disabled", "Enabled" } },
@@ -3421,12 +3509,23 @@ end)
 -- ==========================================
 
 local Push = {}
-function Push.Achievement(d) P.achievements[d.id] = os.time() end
-function Push.ChapterUnlocked(d) P.maxChapter = d.maxChapter end
+function Push.Achievement(d)
+	P.achievements[d.id] = os.time()
+	local a = Config.Achievement(d.id)
+	if a then toast(a.name .. " - " .. a.desc, "Achievement unlocked", "achievement") end
+end
+function Push.ChapterUnlocked(d)
+	local new = (d.maxChapter or 1) > (P.maxChapter or 1)
+	P.maxChapter = d.maxChapter
+	local ch = new and Config.Chapter(d.maxChapter)
+	if ch then toast(("Chapter %d: %s"):format(d.maxChapter, ch.title), "Chapter unlocked", "good") end
+end
+function Push.Toast(d) toast(d.text, d.title, d.kind) end
 function Push.Inventory(d) P.inventory = d.inventory end
 function Push.LoadChapter(d) startGame("NewGame", d.chapter) end
 function Push.SkipMenu() if mode ~= "none" then closeAll() end end
 function Push.Autosaved()
+	toast("Your progress was saved.", "Autosave", "info")
 	task.spawn(function()
 		local ok, prof = Net.call("GetProfile")
 		if ok then P.saves = prof.saves end
@@ -3471,7 +3570,8 @@ function Push.TeamInvite(d)
 		}, 2)
 	end)
 end
-function Push.CoopStart()
+function Push.CoopStart(d)
+	if d.partner then toast(("Playing with %s (you're %s)."):format(tostring(d.partner), tostring(d.color or "")), "Co-op", "good") end
 	task.spawn(function()
 		local t0 = os.clock()
 		while busy and os.clock() - t0 < 5 do task.wait() end
@@ -3485,6 +3585,7 @@ function Push.CoopStart()
 end
 function Push.ChamberComplete(d)
 	if d.editor then return end -- the editor shows its own message
+	toast(("Solved in %s."):format(fmtTime(d.time)), "Chamber complete", "good")
 	if d.mapId then
 		showAnywhere(function()
 			return Panels.dialog("Chamber Complete", ("Solved in %s. What did you think of this test chamber?"):format(fmtTime(d.time)), {
