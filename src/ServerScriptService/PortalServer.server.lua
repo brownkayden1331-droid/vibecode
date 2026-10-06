@@ -1063,6 +1063,40 @@ local function loadMeshPart(id, tex)
 	return mp
 end
 
+-- Meshes tab, TOOLBOX: Roblox only lets a game search the Toolbox for models (InsertService:GetFreeModels), so a
+-- picked item is loaded and cut down to ONLY its MeshParts (with their SurfaceAppearances / textures). Everything
+-- else - scripts, sounds, plain parts, junk - is thrown away. One MeshPart is used as-is, several stay in a Model.
+local function loadToolboxMeshes(id)
+	id = math.floor(tonumber(id) or 0)
+	local key = "tbmesh_" .. id
+	local have = toolboxFolder:FindFirstChild(key)
+	if have then return have end
+	local m, err = loadToolboxAsset(id)
+	if not m then return nil, err end
+	local meshes = {}
+	for _, d in ipairs(m:GetDescendants()) do
+		if d:IsA("MeshPart") then table.insert(meshes, d) end
+	end
+	if #meshes == 0 then return nil, "That Toolbox item has no MeshParts in it. Pick another one." end
+	local out
+	if #meshes == 1 then
+		out = meshes[1]:Clone()
+	else
+		out = Instance.new("Model")
+		for _, mp in ipairs(meshes) do mp:Clone().Parent = out end
+	end
+	-- only the look of each MeshPart survives: SurfaceAppearance, textures, decals
+	for _, part in ipairs(out:IsA("MeshPart") and { out } or out:GetChildren()) do
+		for _, c in ipairs(part:GetChildren()) do
+			if not (c:IsA("SurfaceAppearance") or c:IsA("Texture") or c:IsA("Decal")) then c:Destroy() end
+		end
+		part.Anchored = true
+	end
+	out.Name = key
+	out.Parent = toolboxFolder
+	return out
+end
+
 local function toolboxSearch(player, arg)
 	arg = type(arg) == "table" and arg or {}
 	local kind = arg.kind == "textures" and "textures" or "meshes"
@@ -1093,6 +1127,11 @@ end
 
 local function toolboxLoad(player, arg)
 	if type(arg) ~= "table" then return false end
+	if arg.kind == "toolboxmesh" then
+		local mm, merr = loadToolboxMeshes(arg.id)
+		if not mm then return false, merr end
+		return true, { value = "tbmesh:" .. math.floor(tonumber(arg.id)) }
+	end
 	if arg.kind == "mesh" then
 		local mp, merr = loadMeshPart(arg.id, arg.tex)
 		if not mp then return false, merr end
@@ -1116,6 +1155,8 @@ local function preloadToolbox(data)
 		local v = e[1] == "prop" and type(e[7]) == "string" and e[7] or ""
 		local aid = v:match("^asset:(%d+)$")
 		if aid then loadToolboxAsset(aid) end
+		local tbid = v:match("^tbmesh:(%d+)$")
+		if tbid then loadToolboxMeshes(tbid) end
 		local mid, tid = v:match("^mesh:(%d+):?(%d*)$")
 		if mid then loadMeshPart(mid, tid ~= "" and tid or nil) end
 	end

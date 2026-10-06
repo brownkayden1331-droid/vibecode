@@ -2117,11 +2117,30 @@ do
 	end
 
 	-- ----- MESHES (MeshParts) -----
-	-- the game's own MeshParts / models, or any Mesh asset id: the server turns it into a real MeshPart
-	local meshPage, mesh = sourcePage("meshes", "Search meshes...", true)
+	-- TOOLBOX: search the Toolbox; what you pick is cut down to only its MeshParts on the server.
+	-- IN GAME: your own MeshParts in PortalAssets.Meshes. Or paste any Mesh asset id for a real MeshPart.
+	local meshPage, mesh = sourcePage("meshes", "Search meshes (Toolbox)...")
 	local meshId = inputBox(meshPage, px(7, 590), px(178, 30), "Mesh asset id")
 	local meshTex = inputBox(meshPage, px(190, 590), px(178, 30), "Texture id (optional)")
-	note(meshPage, px(9, 668), px(359, 60), "Drag a mesh into the room, or paste a Mesh id. Right-click a placed mesh to resize it. Your own go in ReplicatedStorage.PortalAssets.Meshes.")
+	note(meshPage, px(9, 668), px(359, 60), "Toolbox picks keep only their MeshParts (no scripts). Drag into the room, right-click to resize. IN GAME = ReplicatedStorage.PortalAssets.Meshes.")
+
+	-- a Toolbox pick: the server keeps just its MeshParts, then you carry it like any item
+	local function pickToolboxMesh(r)
+		if E.carry then return end
+		local key = "tbmesh_" .. r.id
+		local function carry() if E.active and not E.carry then Pal.startCarry({ kind = "prop", variant = "tbmesh:" .. r.id, name = r.name }) end end
+		if Config.ToolboxModel(key) then carry() sfx("Click") return end
+		flash("Loading " .. r.name .. "...")
+		task.spawn(function()
+			local ok, res = netCall("ToolboxLoad", { kind = "toolboxmesh", id = r.id })
+			if not ok then flash(tostring(res or "Couldn't load that mesh.")) sfx("Error") return end
+			local f = ReplicatedStorage:WaitForChild(Config.TOOLBOX_FOLDER, 10)
+			if f and f:WaitForChild(key, 10) then
+				carry()
+				flash("Click in the room to place " .. r.name .. ".")
+			end
+		end)
+	end
 
 	smallButton(meshPage, px(7, 628), px(361, 30), "PICK UP MESH ID", function()
 		local id = meshId.Text:match("(%d+)")
@@ -2144,6 +2163,10 @@ do
 	end, true)
 
 	function mesh.run(more)
+		if mesh.src == "toolbox" then
+			toolboxSearch(mesh, "meshes", more, pickToolboxMesh)
+			return
+		end
 		mesh.token += 1
 		mesh.clear()
 		local list = Config.MeshList()
@@ -3097,6 +3120,8 @@ local function start(payload)
 			local v = e[1] == "prop" and type(e[7]) == "string" and e[7] or ""
 			local aid = v:match("^asset:(%d+)$")
 			if aid and not Config.ToolboxModel(aid) then want[aid] = { kind = "meshes", id = tonumber(aid), key = aid } end
+			local tbid = v:match("^tbmesh:(%d+)$")
+			if tbid and not Config.ToolboxModel("tbmesh_" .. tbid) then want[v] = { kind = "toolboxmesh", id = tonumber(tbid), key = "tbmesh_" .. tbid } end
 			local mid, tid = v:match("^mesh:(%d+):?(%d*)$")
 			tid = tid ~= "" and tid or nil
 			if mid and not Config.ToolboxModel(Config.MeshKey(mid, tid)) then

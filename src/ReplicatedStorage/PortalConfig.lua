@@ -504,7 +504,7 @@ function C.MeshList()
 end
 function C.ValidMeshValue(v)
 	return type(v) == "string" and #v <= 60 and (v:match("^mesh:%d+$") ~= nil or v:match("^mesh:%d+:%d+$") ~= nil
-		or v:match("^asset:%d+$") ~= nil or v:match("^[%w _%-%.%(%)]+$") ~= nil)
+		or v:match("^asset:%d+$") ~= nil or v:match("^tbmesh:%d+$") ~= nil or v:match("^[%w _%-%.%(%)]+$") ~= nil)
 end
 -- models loaded from the Toolbox (Creator Store) by PortalServer live here, named by asset id
 C.TOOLBOX_FOLDER = "PortalToolbox"
@@ -520,6 +520,9 @@ function C.MeshTemplate(v)
 	if type(v) ~= "string" then return nil end
 	local aid = v:match("^asset:(%d+)$")
 	if aid then return C.ToolboxModel(aid) end
+	-- a Toolbox item, cut down to just its MeshParts (PortalServer)
+	local tbid = v:match("^tbmesh:(%d+)$")
+	if tbid then return C.ToolboxModel("tbmesh_" .. tbid) end
 	local mid, tid = v:match("^mesh:(%d+):?(%d*)$")
 	-- the real MeshPart once the server has made it; a SpecialMesh stand-in until then
 	local real = mid and C.ToolboxModel(C.MeshKey(mid, tid))

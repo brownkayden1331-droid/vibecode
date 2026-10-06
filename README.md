@@ -15,7 +15,11 @@ Options › Editor › **Editor Mode** (also File › Editor mode inside the edi
 - **Simple** – Items palette (the original editor).
 - **Intermediate** – adds **Textures** and **Meshes** tabs. Each searches the **Toolbox** (Creator Store) by default; **IN GAME** switches to your own assets.
   - Textures: Toolbox decals, `ReplicatedStorage.PortalAssets.Textures`, or a pasted id. Select surfaces, then click a texture.
-  - Meshes: **MeshParts** only. Your own from `ReplicatedStorage.PortalAssets.Meshes` (searchable), or paste any **Mesh** asset id (+ optional texture id): the server makes a real MeshPart with `AssetService:CreateMeshPartAsync` and caches it in `ReplicatedStorage.PortalToolbox`. Drag into the room; right-click › Size. (Roblox has no in-game API to search the Creator Store for meshes, so search covers your own MeshParts.)
+  - Meshes: **MeshParts** only.
+    - **TOOLBOX** (default) searches the Toolbox. Roblox only lets a game search Toolbox *models*, so whatever you pick is cut down on the server to just its MeshParts (with their SurfaceAppearances / textures); scripts, sounds and everything else are thrown away. Items without MeshParts are refused. Needs InsertService › **AllowInsertFreeModels** ticked in Studio.
+    - **IN GAME** lists your own MeshParts in `ReplicatedStorage.PortalAssets.Meshes`.
+    - Or paste any **Mesh** asset id (+ optional texture id): the server makes a real MeshPart with `AssetService:CreateMeshPartAsync`.
+    - Loaded meshes are cached in `ReplicatedStorage.PortalToolbox`. Drag into the room; right-click › Size.
   - **Textures setup:** Toolbox decal search needs InsertService › **AllowInsertFreeModels** ticked in Studio to load the image.
 - **Advanced** – adds **My Chips**, item labels, mesh nudge/turn, and a coordinates readout.
 
