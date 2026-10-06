@@ -2444,6 +2444,58 @@ do
 		dialogButton(d, 20, 340, "CANCEL", closeDialog)
 	end
 
+	-- Help > Wiki: everything the editor does, one page per topic (PortalConfig C.WIKI)
+	-- overlay = true: opens on top of the dialog that's open (the chip editor's ? button) instead of replacing it
+	Dlg.wiki = function(pageTitle, overlay)
+		local WW, WH = 940, 660
+		local d
+		if overlay then
+			d = ui(new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = px(WW, WH), BackgroundColor3 = C.CTX_BG,
+				BorderSizePixel = 0, Active = true, ZIndex = 60, Parent = canvas }))
+			new("UIStroke", { Color = C.CTX_EDGE, Thickness = 1, Parent = d })
+			local head = new("Frame", { Size = px(WW, 26), BackgroundColor3 = C.CTX_HEAD, BackgroundTransparency = 0.2, BorderSizePixel = 0, ZIndex = 61, Parent = d })
+			new("TextLabel", { Size = px(WW - 12, 26), BackgroundTransparency = 1, Text = "WIKI", FontFace = FONT.UI_REG, TextSize = 15, TextColor3 = rgb(236),
+				TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 62, Parent = head })
+		else
+			d = makeDialog("Wiki", WH, WW)
+		end
+		local list = new("ScrollingFrame", { Position = px(14, 38), Size = px(230, WH - 104), BackgroundColor3 = rgb(250), BorderSizePixel = 0,
+			ScrollBarThickness = 4, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = px(0, 0), ZIndex = 32, Parent = d })
+		new("UIStroke", { Color = C.CTX_EDGE, Thickness = 1, Parent = list })
+		new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = list })
+		local pageFrame = new("ScrollingFrame", { Position = px(256, 38), Size = px(WW - 270, WH - 104), BackgroundColor3 = rgb(250), BorderSizePixel = 0,
+			ScrollBarThickness = 6, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = px(0, 0), ZIndex = 32, Parent = d })
+		new("UIStroke", { Color = C.CTX_EDGE, Thickness = 1, Parent = pageFrame })
+		new("UIPadding", { PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 16), PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12), Parent = pageFrame })
+		new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = pageFrame })
+		local title = new("TextLabel", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Text = "", FontFace = FONT.P2, TextSize = 30,
+			TextColor3 = rgb(25), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 1, ZIndex = 33, Parent = pageFrame })
+		local body = new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = "",
+			RichText = true, FontFace = FONT.UI_REG, TextSize = 17, LineHeight = 1.2, TextWrapped = true, TextColor3 = rgb(30),
+			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2, ZIndex = 33, Parent = pageFrame })
+		local rows = {}
+		local function show(i)
+			local pg = Config.WIKI[i]
+			if not pg then return end
+			title.Text = pg[1]
+			body.Text = pg[2]
+			pageFrame.CanvasPosition = Vector2.zero
+			for j, r in ipairs(rows) do r.BackgroundTransparency = j == i and 0 or 1 end
+		end
+		local start = 1
+		for i, pg in ipairs(Config.WIKI or {}) do
+			if pageTitle and pg[1] == pageTitle then start = i end
+			local b = new("TextButton", { Size = px(226, 34), BackgroundColor3 = C.CTX_HI, BackgroundTransparency = 1, BorderSizePixel = 0,
+				AutoButtonColor = false, Text = "  " .. pg[1], FontFace = FONT.UI_REG, TextSize = 17, TextColor3 = rgb(30),
+				TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = i, ZIndex = 33, Parent = list })
+			hoverable(b, function() sound("SOUND_HOVER") end, function() end)
+			onClick(b, function() sfx("Click") show(i) end)
+			rows[i] = b
+		end
+		show(start)
+		dialogButton(d, 14, WH - 54, "CLOSE", function() if overlay then d:Destroy() else closeDialog() end end, true)
+	end
+
 	-- Advanced: rename an item's label (chips use it); chips that used the old name follow along
 	Dlg.rename = function(index)
 		local e = E.ents[index]
@@ -2524,7 +2576,6 @@ do
 			local b = new("TextButton", { Position = px(x, y), Size = px(w, 30), BackgroundColor3 = rgb(255), BorderSizePixel = 0, AutoButtonColor = true,
 				Text = "  " .. text .. "  ▾", FontFace = FONT.UI_REG, TextSize = 16, TextColor3 = rgb(20), TextXAlignment = Enum.TextXAlignment.Left,
 				TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 35, Parent = parent })
-			new("UICorner", { CornerRadius = UDim.new(0, 4), Parent = b })
 			hoverable(b, function() sound("SOUND_HOVER") end, function() end)
 			onClick(b, function()
 				sfx("Click")
@@ -2536,7 +2587,6 @@ do
 		local function field(parent, x, y, w, value, set, numeric)
 			local b = new("TextBox", { Position = px(x, y), Size = px(w, 30), BackgroundColor3 = rgb(255), BorderSizePixel = 0, Text = tostring(value),
 				FontFace = FONT.UI_REG, TextSize = 16, TextColor3 = rgb(20), ClearTextOnFocus = false, ZIndex = 35, Parent = parent })
-			new("UICorner", { CornerRadius = UDim.new(0, 4), Parent = b })
 			b.FocusLost:Connect(function()
 				if numeric then
 					local v = tonumber(b.Text)
@@ -2550,7 +2600,6 @@ do
 		local function tinyButton(parent, x, y, w, text, fn, color)
 			local b = new("TextButton", { Position = px(x, y), Size = px(w, 30), BackgroundColor3 = color or rgb(240, 240, 236), BorderSizePixel = 0,
 				AutoButtonColor = true, Text = text, FontFace = FONT.P2, TextSize = 16, TextColor3 = rgb(25), ZIndex = 35, Parent = parent })
-			new("UICorner", { CornerRadius = UDim.new(0, 4), Parent = b })
 			hoverable(b, function() sound("SOUND_HOVER") end, function() end)
 			onClick(b, function() sfx("Click") fn() end)
 			return b
@@ -2598,8 +2647,84 @@ do
 				local function paint()
 					colors.Text = Config.ChipHighlight(box.Text, Config.LabelKinds(E.ents))
 				end
+
+				-- what the line expects (bottom bar) + suggestions at the cursor (Tab or a click takes one)
+				local TS = game:GetService("TextService")
+				local hintBar = new("TextLabel", { Position = px(0, 446), Size = px(800, 24), BackgroundColor3 = rgb(232, 234, 232), BorderSizePixel = 0,
+					Text = "", Font = Enum.Font.Code, TextSize = 15, TextColor3 = rgb(60), TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 36, Parent = body })
+				new("UIPadding", { PaddingLeft = UDim.new(0, 10), Parent = hintBar })
+				local pop = new("Frame", { Size = px(280, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = C.CTX_BG, BorderSizePixel = 0,
+					Visible = false, ZIndex = 37, Parent = body })
+				new("UIStroke", { Color = C.CTX_EDGE, Thickness = 1, Parent = pop })
+				new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = pop })
+				local lineH = TS:GetTextSize("Ag", 19, Enum.Font.Code, Vector2.new(10000, 10000)).Y
+				local sugg = {}
+				local KIND_COL = { keyword = "#8E44AD", action = "#1F6FD0", event = "#C26A00", item = "#2E8B3A", variable = "#0E8A92",
+					compare = "#5A5F66", value = "#B5522B" }
+				local showSuggest
+				local function accept(i)
+					local sg = sugg[i]
+					if not sg then return false end
+					local cur = box.CursorPosition
+					if cur < 1 then return false end
+					local before, after = box.Text:sub(1, cur - 1), box.Text:sub(cur)
+					local typed = before:match("(%S*)$") or ""
+					local ins = sg .. " "
+					busy = true
+					box.Text = before:sub(1, #before - #typed) .. ins .. after
+					box.CursorPosition = #before - #typed + #ins + 1
+					busy = false
+					lines = select(2, box.Text:gsub("\n", ""))
+					paint()
+					task.defer(showSuggest)
+					return true
+				end
+				showSuggest = function()
+					for _, c in ipairs(pop:GetChildren()) do
+						if c:IsA("GuiObject") then c:Destroy() end
+					end
+					table.clear(sugg)
+					local cur = box.CursorPosition
+					if not box:IsFocused() or cur < 1 then pop.Visible = false return end
+					local before = box.Text:sub(1, cur - 1)
+					local lineText = before:match("([^\n]*)$") or ""
+					local _, nl = before:gsub("\n", "")
+					hintBar.Text = Config.ChipHintFor(lineText) or "Type a line. Tab or click takes a suggestion. Help > Wiki explains everything."
+					local list = Config.ChipSuggest(lineText, Config.LabelKinds(E.ents), Config.ChipVariables((Config.ParseChip(box.Text))))
+					for i = 1, math.min(#list, 7) do
+						local sg = list[i]
+						sugg[i] = sg[1]
+						local b = new("TextButton", { Size = px(280, 24), BackgroundColor3 = i == 1 and C.CTX_HI or C.CTX_BG, BorderSizePixel = 0,
+							AutoButtonColor = true, RichText = true, LayoutOrder = i, ZIndex = 38, Font = Enum.Font.Code, TextSize = 16,
+							Text = ('  <font color="%s">%s</font>   <font color="#8A8F8F">%s</font>'):format(KIND_COL[sg[2]] or "#202020",
+								sg[1]:gsub("<", "&lt;"):gsub(">", "&gt;"), sg[2]),
+							TextXAlignment = Enum.TextXAlignment.Left, Parent = pop })
+						b.MouseButton1Down:Connect(function() accept(i) end)
+					end
+					if #sugg == 0 then pop.Visible = false return end
+					local w = TS:GetTextSize(lineText, 19, Enum.Font.Code, Vector2.new(10000, 10000)).X
+					pop.Position = px(math.clamp(12 + w, 0, 800 - 284), math.min(10 + (nl + 1) * lineH + 2, 446 - 24 * #sugg))
+					pop.Visible = true
+				end
+				local tabConn = UserInputService.InputBegan:Connect(function(input)
+					if input.KeyCode == Enum.KeyCode.Tab and box:IsFocused() and pop.Visible then accept(1) end
+				end)
+				box.Destroying:Connect(function() tabConn:Disconnect() end)
+				box:GetPropertyChangedSignal("CursorPosition"):Connect(function() if not busy then showSuggest() end end)
+				box.Focused:Connect(showSuggest)
+
 				box:GetPropertyChangedSignal("Text"):Connect(function()
 					if busy then return end
+					-- a Tab typed into the box: take the suggestion instead of a tab character
+					local tabAt = box.Text:find("\t", 1, true)
+					if tabAt then
+						busy = true
+						box.Text = box.Text:gsub("\t", "")
+						box.CursorPosition = tabAt
+						busy = false
+						if accept(1) then return end
+					end
 					local n = select(2, box.Text:gsub("\n", ""))
 					local cursor = box.CursorPosition
 					if n == lines + 1 and cursor > 1 and box.Text:sub(cursor - 1, cursor - 1) == "\n" then
@@ -2615,8 +2740,10 @@ do
 					end
 					lines = select(2, box.Text:gsub("\n", ""))
 					paint()
+					showSuggest()
 				end)
 				box.FocusLost:Connect(function()
+					task.delay(0.25, function() if not box:IsFocused() then pop.Visible = false end end)
 					local fixed, fx = Config.ChipAutocorrect(box.Text, labels())
 					if fixed ~= box.Text then
 						busy = true
@@ -2635,10 +2762,66 @@ do
 				AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = px(0, 0), ZIndex = 33, Parent = body })
 			new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = sc })
 			new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8), Parent = sc })
+			-- the op menu for an action (allowIf = false for the action after an "if ... then")
+			local function opMenu(a, allowIf)
+				return function()
+					local list = {}
+					for _, op in ipairs(Config.CHIP_ACTIONS) do
+						if allowIf or op ~= "if" then
+							table.insert(list, { text = Config.CHIP_ACTION_LABELS[op], icon = "radio", checked = a.op == op, fn = function()
+								a.op = op
+								if op == "wait" then a.n = a.n or 1 end
+								if op == "say" then a.text = a.text or "Well done!" end
+								if op == "set" or op == "add" then
+									a.var = a.var or "score"
+									a.value = a.value or (op == "add" and "1" or "0")
+								end
+								if op == "if" then
+									a.lhs, a.cmp, a.rhs = a.lhs or "score", a.cmp or ">=", a.rhs or "1"
+									a.act = a.act or { op = "open", target = Config.LabelKinds(E.ents).exit and "exit" or nil }
+								end
+								if a.target then
+									local k = Config.LabelKinds(E.ents)[a.target:lower()]
+									if not (k and Config.ChipTargetOk(op, k)) then a.target = nil end
+								end
+								render()
+							end })
+						end
+					end
+					return list
+				end
+			end
+			-- the fields after the op, from x (w = room left)
+			local function argFields(row, x, y, a, w)
+				if Config.CHIP_TARGET[a.op] then
+					dropdown(row, x, y, w, a.target or "pick an item", function()
+						return pickItems(a.target, function(k) return Config.ChipTargetOk(a.op, k) end, function(v) a.target = v end)
+					end)
+				elseif a.op == "wait" then
+					field(row, x, y, 90, a.n or 1, function(v) a.n = math.clamp(v, 0, 60) end, true)
+					label(row, x + 98, y, 80, "seconds")
+				elseif a.op == "say" then
+					field(row, x, y, w, a.text or "", function(v) a.text = v end, false)
+				elseif a.op == "set" or a.op == "add" then
+					local nameBox = field(row, x, y, 130, a.var or "score", function(v)
+						v = v:gsub("%s", "")
+						if Config.ValidVarName(v) then a.var = v else flash("Variable names: letters, numbers and _, starting with a letter.") render() end
+					end, false)
+					nameBox.PlaceholderText = "variable"
+					label(row, x + 138, y, 40, a.op == "set" and "to" or "+")
+					field(row, x + 172, y, 90, a.value or "0", function(v)
+						v = v:gsub("%s", "")
+						if a.op == "add" and not tonumber(v) then render() return end
+						a.value = v ~= "" and v or "0"
+					end, false)
+				end
+			end
+			local function rowHeight(a) return a.op == "if" and 72 or 34 end
+
 			for ri, r in ipairs(rules) do
-				local h = 44 + #r.acts * 40 + 40
+				local h = 44 + 40
+				for _, a in ipairs(r.acts) do h += rowHeight(a) + 6 end
 				local blk = new("Frame", { Size = px(770, h), BackgroundColor3 = rgb(250, 206, 96), BorderSizePixel = 0, LayoutOrder = ri, ZIndex = 34, Parent = sc })
-				new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = blk })
 				label(blk, 12, 7, 60, "WHEN")
 				local ex = 70
 				if r.ev == "pressed" or r.ev == "released" then
@@ -2664,35 +2847,30 @@ do
 					label(blk, ex + 288, 7, 80, "seconds")
 				end
 				tinyButton(blk, 726, 7, 34, "✕", function() table.remove(rules, ri) render() end)
+				local ay = 44
 				for ai, a in ipairs(r.acts) do
-					local row = new("Frame", { Position = px(24, 44 + (ai - 1) * 40), Size = px(736, 34), BackgroundColor3 = rgb(126, 186, 240), BorderSizePixel = 0, ZIndex = 34, Parent = blk })
-					new("UICorner", { CornerRadius = UDim.new(0, 5), Parent = row })
+					local rh = rowHeight(a)
+					local row = new("Frame", { Position = px(24, ay), Size = px(736, rh), BackgroundColor3 = rgb(126, 186, 240), BorderSizePixel = 0, ZIndex = 34, Parent = blk })
+					ay += rh + 6
 					label(row, 10, 2, 40, "DO")
-					dropdown(row, 46, 2, 200, Config.CHIP_ACTION_LABELS[a.op] or a.op, function()
-						local list = {}
-						for _, op in ipairs(Config.CHIP_ACTIONS) do
-							table.insert(list, { text = Config.CHIP_ACTION_LABELS[op], icon = "radio", checked = a.op == op, fn = function()
-								a.op = op
-								if op == "wait" then a.n = a.n or 1 end
-								if op == "say" then a.text = a.text or "Well done!" end
-								if a.target then
-									local k = Config.LabelKinds(E.ents)[a.target:lower()]
-									if not (k and Config.ChipTargetOk(op, k)) then a.target = nil end
-								end
-								render()
-							end })
-						end
-						return list
-					end)
-					if Config.CHIP_TARGET[a.op] then
-						dropdown(row, 256, 2, 300, a.target or "pick an item", function()
-							return pickItems(a.target, function(k) return Config.ChipTargetOk(a.op, k) end, function(v) a.target = v end)
+					dropdown(row, 46, 2, a.op == "if" and 110 or 200, Config.CHIP_ACTION_LABELS[a.op] or a.op, opMenu(a, true))
+					if a.op == "if" then
+						-- if <lhs> <cmp> <rhs>   /   then <action>
+						field(row, 162, 2, 120, a.lhs or "score", function(v) v = v:gsub("%s", "") if v ~= "" then a.lhs = v end end, false).PlaceholderText = "variable or item"
+						dropdown(row, 288, 2, 70, a.cmp or "==", function()
+							local list = {}
+							for _, c in ipairs(Config.CHIP_COMPARE) do
+								table.insert(list, { text = c, icon = "radio", checked = a.cmp == c, fn = function() a.cmp = c render() end })
+							end
+							return list
 						end)
-					elseif a.op == "wait" then
-						field(row, 256, 2, 90, a.n or 1, function(v) a.n = math.clamp(v, 0, 60) end, true)
-						label(row, 354, 2, 80, "seconds")
-					elseif a.op == "say" then
-						field(row, 256, 2, 340, a.text or "", function(v) a.text = v end, false)
+						field(row, 364, 2, 90, a.rhs or "1", function(v) v = v:gsub("%s", "") if v ~= "" then a.rhs = v end end, false)
+						label(row, 46, 38, 60, "THEN")
+						a.act = a.act or { op = "open" }
+						dropdown(row, 110, 38, 170, Config.CHIP_ACTION_LABELS[a.act.op] or a.act.op, opMenu(a.act, false))
+						argFields(row, 288, 38, a.act, 310)
+					else
+						argFields(row, 256, 2, a, 340)
 					end
 					tinyButton(row, 610, 2, 34, "▲", function()
 						if ai > 1 then r.acts[ai], r.acts[ai - 1] = r.acts[ai - 1], r.acts[ai] render() end
@@ -2702,7 +2880,7 @@ do
 					end)
 					tinyButton(row, 694, 2, 34, "✕", function() table.remove(r.acts, ai) render() end)
 				end
-				tinyButton(blk, 24, 44 + #r.acts * 40, 120, "+ DO", function()
+				tinyButton(blk, 24, ay, 120, "+ DO", function()
 					table.insert(r.acts, { op = "open", target = Config.LabelKinds(E.ents).exit and "exit" or nil })
 					render()
 				end, rgb(126, 186, 240))
@@ -2733,8 +2911,13 @@ do
 			view = v
 			render()
 		end
+		local helpBtn = new("TextButton", { Position = px(DW - 44, 40), Size = px(30, 36), BorderSizePixel = 0, AutoButtonColor = true,
+			BackgroundColor3 = rgb(200, 206, 203), Text = "?", FontFace = FONT.P2, TextSize = 22, TextColor3 = rgb(20), ZIndex = 32, Parent = d })
+		hoverable(helpBtn, function() sound("SOUND_HOVER") end, function() end)
+		-- the language reference, on top of the chip you're editing
+		onClick(helpBtn, function() sfx("Click") Dlg.wiki("Chips: reference", true) end)
 		for i, v in ipairs({ "blocks", "lines" }) do
-			local b = new("TextButton", { Position = px(500 + (i - 1) * 160, 40), Size = px(150, 36), BorderSizePixel = 0, AutoButtonColor = true,
+			local b = new("TextButton", { Position = px(486 + (i - 1) * 152, 40), Size = px(146, 36), BorderSizePixel = 0, AutoButtonColor = true,
 				Text = v == "blocks" and "BLOCKS" or "LINES", FontFace = FONT.P2, TextSize = 20, ZIndex = 32, Parent = d })
 			hoverable(b, function() sound("SOUND_HOVER") end, function() end)
 			onClick(b, function() sfx("Click") setView(v) end)
@@ -2748,10 +2931,10 @@ do
 			if #rules == 0 then table.insert(problems, "Add at least one WHEN block.") end
 			for _, r in ipairs(rules) do
 				if (r.ev == "pressed" or r.ev == "released") and not r.src then table.insert(problems, "Pick the item for every 'when ... pressed / released'.") end
-				for _, a in ipairs(r.acts) do
-					if Config.CHIP_TARGET[a.op] and not a.target then table.insert(problems, "Pick an item for every action.") end
-				end
 			end
+			Config.ChipEachAction(rules, function(a)
+				if Config.CHIP_TARGET[a.op] and not a.target then table.insert(problems, "Pick an item for every action.") end
+			end)
 			if #problems == 0 then problems = Config.CheckChip(rules, Config.LabelKinds(E.ents)) end
 			if #problems > 0 then
 				errLabel.TextColor3 = rgb(200, 50, 50)
@@ -3262,6 +3445,15 @@ local MENUS = {
 			{ text = "Save as...", shortcut = "Ctrl+Sh+S", disabled = g, fn = Dlg.saveAs },
 			{ text = "Cooperative puzzle", icon = "check", checked = E.coop, sep = true, fn = function() E.coop = not E.coop E.dirty = true E.rev += 1 end },
 			{ text = E.gameView and "Editor view" or "Game view", shortcut = "Tab", fn = toggleGameView },
+			{ text = "Editor style", sub = function()
+				local list = {}
+				for _, st in ipairs(X.STYLES or { "Classic" }) do
+					table.insert(list, { text = st, icon = "radio", checked = ES("edStyle", "Classic") == st, fn = function()
+						menuRequest("SetSetting", { key = "edStyle", value = st })
+					end })
+				end
+				return list
+			end },
 			{ text = "Editor mode", sub = function()
 				local list = {}
 				for _, m in ipairs({ "Simple", "Intermediate", "Advanced" }) do
@@ -3307,6 +3499,7 @@ local MENUS = {
 		{ text = "Tips...", fn = function() tipIndex = tipIndex % #SET.TIPS + 1 flash(SET.TIPS[tipIndex]) end },
 		{ text = "Controls...", fn = Dlg.controls },
 		{ text = "Tutorial...", fn = function() X.tutorial(true) end },
+		{ text = "Wiki...", shortcut = "F1", fn = function() Dlg.wiki() end },
 		} end,
 }
 -- File / Edit / Help: x is where the word starts in the footage
@@ -3364,29 +3557,31 @@ do
 	local ring = new("Frame", { BackgroundTransparency = 1, Visible = false, ZIndex = 91, Parent = layer })
 	local ringStroke = new("UIStroke", { Color = rgb(40, 210, 235), Thickness = 4, Parent = ring })
 	new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = ring })
-	local card = ui(new("Frame", { Size = px(470, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = rgb(28, 32, 34), BackgroundTransparency = 0.05,
+	-- same look as the editor's dialogs: light panel, dark header strip with the title on the right, square corners
+	local card = ui(new("Frame", { Size = px(470, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = C.CTX_BG, BackgroundTransparency = 0.04,
 		BorderSizePixel = 0, Active = true, ZIndex = 95, Parent = layer }))
-	new("UICorner", { CornerRadius = UDim.new(0, 8), Parent = card })
-	new("UIStroke", { Color = rgb(40, 210, 235), Thickness = 2, Transparency = 0.3, Parent = card })
-	new("UIPadding", { PaddingLeft = UDim.new(0, 18), PaddingRight = UDim.new(0, 18), PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 14), Parent = card })
-	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = card })
-	local head = new("TextLabel", { Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "", FontFace = FONT.P2_MED, TextSize = 15,
-		TextColor3 = rgb(40, 210, 235), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 1, ZIndex = 96, Parent = card })
-	local title = new("TextLabel", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, Text = "", FontFace = FONT.P2, TextSize = 28,
-		TextColor3 = rgb(240, 246, 244), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 2, ZIndex = 96, Parent = card })
-	local body = new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = "",
-		FontFace = FONT.P2_MED, TextSize = 21, TextWrapped = true, TextColor3 = rgb(222, 230, 228), TextXAlignment = Enum.TextXAlignment.Left,
+	new("UIStroke", { Color = C.CTX_EDGE, Thickness = 1, Parent = card })
+	new("UIPadding", { PaddingLeft = UDim.new(0, 0), PaddingRight = UDim.new(0, 0), PaddingTop = UDim.new(0, 0), PaddingBottom = UDim.new(0, 14), Parent = card })
+	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, HorizontalAlignment = Enum.HorizontalAlignment.Center, Parent = card })
+	local headBar = new("Frame", { Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = C.CTX_HEAD, BackgroundTransparency = 0.2, BorderSizePixel = 0,
+		LayoutOrder = 1, ZIndex = 96, Parent = card })
+	local head = new("TextLabel", { Size = UDim2.new(1, -12, 1, 0), BackgroundTransparency = 1, Text = "", FontFace = FONT.UI_REG, TextSize = 15,
+		TextColor3 = rgb(236), TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 97, Parent = headBar })
+	local title = new("TextLabel", { Size = UDim2.new(1, -36, 0, 30), BackgroundTransparency = 1, Text = "", FontFace = FONT.P2, TextSize = 28,
+		TextColor3 = C.CTX_TEXT, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 2, ZIndex = 96, Parent = card })
+	local body = new("TextLabel", { Size = UDim2.new(1, -36, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = "",
+		FontFace = FONT.UI_REG, TextSize = 18, TextWrapped = true, TextColor3 = rgb(40), TextXAlignment = Enum.TextXAlignment.Left,
 		LayoutOrder = 3, ZIndex = 96, Parent = card })
-	local row = new("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, LayoutOrder = 4, ZIndex = 96, Parent = card })
+	local row = new("Frame", { Size = UDim2.new(1, -36, 0, 34), BackgroundTransparency = 1, LayoutOrder = 4, ZIndex = 96, Parent = card })
 	local steps, idx, conn = nil, 1, nil
 	local shown = false
 	local render, close
 
 	local function button(x, w, text, fn, blue)
+		-- the editor's dialog buttons
 		local b = new("TextButton", { Position = px(x, 4), Size = px(w, 30), BorderSizePixel = 0, AutoButtonColor = true,
-			BackgroundColor3 = blue and rgb(77, 128, 151) or rgb(70, 76, 78), Text = text, FontFace = FONT.P2, TextSize = 17,
-			TextColor3 = rgb(240), ZIndex = 97, Parent = row })
-		new("UICorner", { CornerRadius = UDim.new(0, 4), Parent = b })
+			BackgroundColor3 = blue and rgb(77, 128, 151) or rgb(200, 206, 203), Text = text, FontFace = FONT.P2, TextSize = 17,
+			TextColor3 = blue and rgb(245) or rgb(20), ZIndex = 97, Parent = row })
 		hoverable(b, function() sound("SOUND_HOVER") end, function() end)
 		onClick(b, function() sfx("Click") fn() end)
 		return b
@@ -3479,7 +3674,7 @@ do
 	end
 	render = function()
 		local st = steps[idx]
-		head.Text = ("TUTORIAL  %d / %d"):format(idx, #steps)
+		head.Text = ("TUTORIAL   %d / %d"):format(idx, #steps)
 		title.Text = st[1]
 		body.Text = st[2]
 		X.tutNext.Text = idx >= #steps and "DONE" or "NEXT"
@@ -4280,6 +4475,8 @@ local function keyAction(kc)
 		undo()
 	elseif ctrlDown() and kc == Enum.KeyCode.Y then
 		redo()
+	elseif kc == Enum.KeyCode.F1 then
+		Dlg.wiki()
 	elseif kc == Enum.KeyCode.Tab then
 		toggleGameView()
 	elseif kc == Enum.KeyCode.Equals or kc == Enum.KeyCode.KeypadPlus then
@@ -4698,6 +4895,148 @@ editLoop = function(dt)
 		Team.updateMarkers(dt)
 	end
 end
+end
+
+-- ==========================================
+-- EDITOR STYLES (Options > Editor > Editor Style, or File > Editor style)
+-- ==========================================
+-- The GUI is always built in the Classic colours; this recolours it to the chosen style as things appear (and when
+-- hover effects set a Classic colour again). The room itself (tiles, rims, selection, backdrop) changes too.
+-- Add your own style: a new entry in STYLES, { gui = { [Classic colour] = new colour }, room = { C key = colour } }.
+do
+	local function hex(c) return ("%02x%02x%02x"):format(math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5)) end
+	local CLASSIC = table.clone(C)
+	local CLASSIC_BACKDROP = SET.BACKDROP
+	-- GUI colours: Classic colour -> style colour (C keys + the few greys used straight in the code)
+	local function guiMap(byKey, literal)
+		local m = {}
+		for k, v in pairs(byKey) do if CLASSIC[k] then m[hex(CLASSIC[k])] = v end end
+		for _, pair in ipairs(literal or {}) do m[hex(pair[1])] = pair[2] end
+		return m
+	end
+	local STYLES = {
+		Classic = { gui = {}, room = {} },
+		Dark = {
+			gui = guiMap({
+				OUT = rgb(46, 49, 51), STRIP_OPEN = rgb(62, 66, 68), STRIP_SHUT = rgb(54, 57, 59), GRIP = rgb(110),
+				MENU_TEXT = rgb(165), MENU_HI = rgb(240), ICON = rgb(150), ICON_HI = rgb(235), ICON_ON = rgb(90, 205, 220),
+				PAL_BG = rgb(38, 41, 43), PAL_EDGE = rgb(18), TILE = rgb(52, 56, 58), TILE_LINE = rgb(66, 70, 72), TILE_HI = rgb(36, 84, 92),
+				CTX_BG = rgb(40, 43, 45), CTX_HEAD = rgb(18, 20, 21), CTX_ICONCOL = rgb(55, 58, 60), CTX_EDGE = rgb(14),
+				CTX_HI = rgb(28, 96, 102), CTX_TEXT = rgb(228), CTX_SHORT = rgb(150), CTX_SEP = rgb(80),
+			}, {
+				{ rgb(250), rgb(32, 35, 37) }, { rgb(255), rgb(30, 33, 35) }, { rgb(200, 206, 203), rgb(70, 75, 78) },
+				{ rgb(214, 218, 216), rgb(64, 68, 71) }, { rgb(206, 208, 206), rgb(48, 51, 53) }, { rgb(232), rgb(60, 64, 66) },
+				{ rgb(240, 240, 236), rgb(70, 75, 78) }, { rgb(232, 234, 232), rgb(30, 33, 35) },
+				{ rgb(20), rgb(232) }, { rgb(25), rgb(230) }, { rgb(30), rgb(226) }, { rgb(40), rgb(220) }, { rgb(60), rgb(200) },
+				{ rgb(95), rgb(170) }, { rgb(105), rgb(160) }, { rgb(110), rgb(160) }, { rgb(130), rgb(150) }, { rgb(150), rgb(130) },
+			}),
+			room = { WHITE = rgb(190, 196, 192), BLACK = rgb(44, 50, 49), RIM_WHITE = rgb(150, 156, 152), RIM_BLACK = rgb(64, 70, 68),
+				SHELL = rgb(30, 33, 32), BACKDROP = rgb(40, 43, 45) },
+		},
+		Blueprint = {
+			gui = guiMap({
+				OUT = rgb(26, 60, 108), STRIP_OPEN = rgb(36, 78, 134), STRIP_SHUT = rgb(30, 68, 120), GRIP = rgb(140, 175, 220),
+				MENU_TEXT = rgb(170, 200, 240), MENU_HI = rgb(255), ICON = rgb(160, 190, 230), ICON_HI = rgb(255), ICON_ON = rgb(255, 220, 120),
+				PAL_BG = rgb(22, 52, 96), PAL_EDGE = rgb(120, 160, 215), TILE = rgb(30, 66, 118), TILE_LINE = rgb(70, 110, 170), TILE_HI = rgb(50, 100, 170),
+				CTX_BG = rgb(24, 56, 104), CTX_HEAD = rgb(14, 36, 70), CTX_ICONCOL = rgb(34, 72, 128), CTX_EDGE = rgb(120, 160, 215),
+				CTX_HI = rgb(52, 104, 176), CTX_TEXT = rgb(225, 238, 255), CTX_SHORT = rgb(160, 190, 230), CTX_SEP = rgb(80, 120, 180),
+			}, {
+				{ rgb(250), rgb(20, 48, 90) }, { rgb(255), rgb(18, 44, 84) }, { rgb(200, 206, 203), rgb(46, 92, 156) },
+				{ rgb(214, 218, 216), rgb(40, 82, 142) }, { rgb(206, 208, 206), rgb(28, 62, 112) }, { rgb(232), rgb(44, 88, 150) },
+				{ rgb(240, 240, 236), rgb(46, 92, 156) }, { rgb(232, 234, 232), rgb(18, 44, 84) },
+				{ rgb(20), rgb(230, 240, 255) }, { rgb(25), rgb(225, 238, 255) }, { rgb(30), rgb(220, 235, 255) }, { rgb(40), rgb(210, 228, 250) },
+				{ rgb(60), rgb(190, 212, 240) }, { rgb(95), rgb(160, 190, 230) }, { rgb(105), rgb(150, 182, 225) }, { rgb(110), rgb(150, 182, 225) },
+				{ rgb(130), rgb(140, 170, 215) }, { rgb(150), rgb(120, 150, 200) },
+			}),
+			room = { WHITE = rgb(205, 222, 245), BLACK = rgb(40, 70, 112), RIM_WHITE = rgb(160, 190, 230), RIM_BLACK = rgb(60, 92, 140),
+				SHELL = rgb(26, 50, 88), BACKDROP = rgb(30, 70, 130) },
+		},
+		["High Contrast"] = {
+			gui = guiMap({
+				OUT = rgb(0), STRIP_OPEN = rgb(30), STRIP_SHUT = rgb(20), GRIP = rgb(255, 220, 0),
+				MENU_TEXT = rgb(255), MENU_HI = rgb(255, 220, 0), ICON = rgb(255), ICON_HI = rgb(255, 220, 0), ICON_ON = rgb(255, 220, 0),
+				PAL_BG = rgb(255), PAL_EDGE = rgb(0), TILE = rgb(255), TILE_LINE = rgb(0), TILE_HI = rgb(255, 230, 0),
+				CTX_BG = rgb(255), CTX_HEAD = rgb(0), CTX_ICONCOL = rgb(230), CTX_EDGE = rgb(0),
+				CTX_HI = rgb(255, 230, 0), CTX_TEXT = rgb(0), CTX_SHORT = rgb(40), CTX_SEP = rgb(0),
+			}, { { rgb(95), rgb(20) }, { rgb(105), rgb(20) }, { rgb(110), rgb(20) }, { rgb(130), rgb(20) }, { rgb(150), rgb(30) } }),
+			room = { WHITE = rgb(255), BLACK = rgb(20), RIM_WHITE = rgb(120), RIM_BLACK = rgb(70), SHELL = rgb(0),
+				SEL_WHITE = rgb(255, 230, 0), SEL_BLACK = rgb(255, 170, 0), BACKDROP = rgb(90) },
+		},
+	}
+	X.STYLES = { "Classic", "Dark", "Blueprint", "High Contrast" }
+
+	local PROPS = { "BackgroundColor3", "TextColor3", "ImageColor3", "PlaceholderColor3", "ScrollBarImageColor3" }
+	local current = STYLES.Classic
+	local touched = setmetatable({}, { __mode = "k" })
+	local applying = false
+
+	-- obj's Classic colour for prop: what it was the first time we saw it (or since the code last set it itself)
+	local function styleProp(obj, prop)
+		local ok, v = pcall(function() return obj[prop] end)
+		if not ok or typeof(v) ~= "Color3" then return end
+		local base = obj:GetAttribute("StyleBase_" .. prop)
+		if not base then
+			base = v
+			obj:SetAttribute("StyleBase_" .. prop, base)
+		end
+		local want = current.gui[hex(base)] or base
+		if v ~= want then
+			applying = true
+			obj[prop] = want
+			applying = false
+		end
+	end
+	local function styleObj(obj)
+		if obj:IsA("GuiObject") then
+			for _, prop in ipairs(PROPS) do styleProp(obj, prop) end
+			if not touched[obj] then
+				touched[obj] = true
+				-- hover effects etc. set Classic colours again: restyle them (and remember that as the new base)
+				for _, prop in ipairs(PROPS) do
+					pcall(function()
+						obj:GetPropertyChangedSignal(prop):Connect(function()
+							if applying then return end
+							-- (signals can arrive late: our own recolour isn't a new base colour)
+							local base = obj:GetAttribute("StyleBase_" .. prop)
+							if base and obj[prop] == (current.gui[hex(base)] or base) then return end
+							obj:SetAttribute("StyleBase_" .. prop, obj[prop])
+							styleProp(obj, prop)
+						end)
+					end)
+				end
+			end
+		elseif obj:IsA("UIStroke") then
+			local base = obj:GetAttribute("StyleBase_Color") or obj.Color
+			obj:SetAttribute("StyleBase_Color", base)
+			obj.Color = current.gui[hex(base)] or base
+		end
+	end
+
+	function X.applyStyle(name)
+		local st = STYLES[name] or STYLES.Classic
+		current = st
+		-- room colours
+		for k, v in pairs(CLASSIC) do
+			if typeof(v) == "Color3" and (k == "WHITE" or k == "BLACK" or k:match("^RIM_") or k == "SHELL" or k:match("^SEL_") or k == "HOVER" or k:match("^WALLTILE_")) then
+				C[k] = st.room[k] or v
+			end
+		end
+		SET.BACKDROP = st.room.BACKDROP or CLASSIC_BACKDROP
+		for _, p in ipairs(world:GetChildren()) do
+			if p.Name == "Backdrop" and p:IsA("BasePart") then p.Color = SET.BACKDROP end
+		end
+		hoverPart.Color, itemBox.Color = C.HOVER, C.SEL_WHITE
+		-- GUI
+		styleObj(gui)
+		for _, d in ipairs(gui:GetDescendants()) do styleObj(d) end
+		if E.active and not E.gameView then rebuild() end
+	end
+	gui.DescendantAdded:Connect(function(d) task.defer(function() if d.Parent then styleObj(d) end end) end)
+	player:GetAttributeChangedSignal("Setting_edStyle"):Connect(function()
+		X.applyStyle(ES("edStyle", "Classic"))
+		if E.active then flash("Editor style: " .. ES("edStyle", "Classic")) end
+	end)
+	task.defer(function() X.applyStyle(ES("edStyle", "Classic")) end)
 end
 
 -- ==========================================

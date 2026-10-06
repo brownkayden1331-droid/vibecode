@@ -2323,6 +2323,113 @@ function C.ChipHintFor(line)
 end
 
 -- ==========================================
+-- WIKI (the editor's Help > Wiki). RichText: <b>, <i>, <font color="#..">.
+-- ==========================================
+C.WIKI = {
+	{ "Getting started", [[
+<b>The test chamber editor</b> builds a room out of tiles, fills it with test elements and lets you play it.
+
+1. Shape the room: select panels and pull / push them.
+2. Drag items in from the palette on the left.
+3. Connect a button to the <b>exit door</b> (it's locked until something opens it).
+4. Press <b>F9</b> (or the play button) to build and play it.
+5. File > Publish puts it in the Workshop.
+
+Help > Tutorial walks you through the screen again.]] },
+	{ "Shaping the room", [[
+<b>Select</b>: click a panel. Drag across a wall for an area, Shift+click to add everything in between, Ctrl+click to add / remove one, Ctrl+A for all.
+<b>Pull / push</b>: <b>+</b> pulls the selected panels toward you (fills cells in), <b>-</b> pushes them away (digs cells out).
+<b>Portalable</b>: <b>P</b> switches the selected panels between white (portals stick) and dark metal (they don't).
+<b>Colour</b>: right-click > Tile color, or <b>T</b> to paint with the last colour.
+<b>Camera</b>: middle-drag orbits, right-drag pans, the wheel zooms, WASD / Q E move.
+<b>Game view</b>: <b>Tab</b> shows the chamber the way it will look in game, without building it.]] },
+	{ "Items", [[
+Open the palette (the strip on the left, or Y on a controller) and drag an item onto a panel. Each item only goes where it fits: floor, wall, ceiling or any.
+<b>Move</b>: drag it. <b>Turn</b>: R, or click a diamond handle. <b>Delete</b>: Delete key. <b>Options</b>: right-click it.
+Fizzlers and laser fields: drag the triangles to change their length. Faith plates: drag the yellow ball onto a panel to aim, then up / down for the arc. Toxic goo: drag the edge triangles to grow it.
+The entry and exit doors can be moved but never deleted.]] },
+	{ "Connections + the exit", [[
+Buttons, pedestals, laser catchers and logic gates <b>drive</b> other items. Select one, press <b>C</b>, then click the item it should control. Right-click > Remove connections takes them off.
+An item with several inputs needs <b>all</b> of them on. Put an OR logic gate in front of it if any one should do.
+<b>The exit door is locked</b> until something opens it: a connection, a chip (open exit), or right-click the exit > <b>Open without a button</b>. Build and Play warns you about a locked exit and Publish refuses one.]] },
+	{ "Textures", [[
+<i>Intermediate and Advanced modes.</i>
+Select surfaces in the room, then open the <b>Textures</b> tab and click a texture.
+<b>TOOLBOX</b> searches decals, <b>IN GAME</b> lists ReplicatedStorage.PortalAssets.Textures. Or paste an image / decal id and press USE ID.
+CLEAR TEXTURE puts the normal tiles back.]] },
+	{ "Meshes", [[
+<i>Intermediate and Advanced modes.</i>
+The <b>Meshes</b> tab places decoration MeshParts. <b>TOOLBOX</b> searches the Creator Store for MeshParts only, <b>IN GAME</b> lists ReplicatedStorage.PortalAssets.Meshes, or paste a Mesh id.
+Drag one onto any surface. Right-click it for <b>Size</b>; in Advanced mode also <b>Turn 15°</b> and <b>Nudge</b>.]] },
+	{ "Chips", [[
+<i>Advanced mode.</i> Chips are little programs that run in your chamber. Open the <b>My Chips</b> tab and press + NEW CHIP.
+Build them from <b>BLOCKS</b> (pick everything from menus) or type them as <b>LINES</b>. Both are the same program; switch whenever you like.
+In LINES, words are coloured, typos are fixed when you press Enter, suggestions pop up as you type (<b>Tab</b> takes the top one) and the bar at the bottom shows what the line expects.
+Items are called by their <b>label</b> (right-click an item to see or change it). <b>TO MY CHIPS</b> saves a chip so you can use it in any chamber.]] },
+	{ "Chips: reference", [[
+<b>Events</b> (start a rule; the lines under it run when it happens)
+  <font color="#8E44AD">when</font> button1 <font color="#C26A00">pressed</font>   /   <font color="#C26A00">released</font>   (buttons, pedestals, laser catchers, gates)
+  <font color="#8E44AD">when</font> <font color="#C26A00">start</font>   (the chamber was just built)
+  <font color="#8E44AD">when</font> <font color="#C26A00">every</font> 5   (every 5 seconds)
+
+<b>Actions</b>
+  <font color="#1F6FD0">open</font> / <font color="#1F6FD0">close</font> <i>item</i>   doors, or turn an item on / off
+  <font color="#1F6FD0">enable</font> / <font color="#1F6FD0">disable</font> / <font color="#1F6FD0">toggle</font> <i>item</i>
+  <font color="#1F6FD0">drop</font> <i>dropper</i>   a new cube      <font color="#1F6FD0">reverse</font> <i>funnel</i>
+  <font color="#1F6FD0">wait</font> 2   pause this rule      <font color="#1F6FD0">say</font> "text"   a message on screen
+
+<b>Variables</b> (shared by every chip in the chamber, start at 0)
+  <font color="#1F6FD0">set</font> <font color="#0E8A92">score</font> 0      <font color="#1F6FD0">add</font> <font color="#0E8A92">score</font> 1      <font color="#1F6FD0">add</font> <font color="#0E8A92">score</font> -1
+  <font color="#1F6FD0">say</font> "Score: {score}"   shows the value
+
+<b>If</b> (one line)
+  <font color="#8E44AD">if</font> <font color="#0E8A92">score</font> &gt;= 3 <font color="#8E44AD">then</font> <font color="#1F6FD0">open</font> exit
+  Compare with == != &lt; &gt; &lt;= &gt;=. An item in an if counts as 1 when it's pressed / on / open, else 0: <font color="#8E44AD">if</font> button2 == 1 <font color="#8E44AD">then</font> ...
+
+Lines starting with -- or # are comments.]] },
+	{ "Chips: examples", [[
+<b>Hold the button to keep the exit open</b>
+when button1 pressed
+    open exit
+when button1 released
+    close exit
+
+<b>Press it three times</b>
+when start
+    set presses 0
+when button1 pressed
+    add presses 1
+    say "{presses} / 3"
+    if presses >= 3 then open exit
+
+<b>Two buttons, both needed</b>
+when button1 pressed
+    if button2 == 1 then open exit
+when button2 pressed
+    if button1 == 1 then open exit
+
+<b>A cube every 10 seconds</b>
+when every 10
+    drop dropper1]] },
+	{ "Editor modes", [[
+Options > Editor > <b>Editor Mode</b>, or File > Editor mode:
+<b>Simple</b>: the Items palette.
+<b>Intermediate</b>: + Textures and Meshes tabs.
+<b>Advanced</b>: + My Chips, item labels, mesh nudging and a coordinates readout under the pointer.]] },
+	{ "Editor styles", [[
+Options > Editor > <b>Editor Style</b>, or File > Editor style, changes how the editor looks:
+<b>Classic</b> the light grey Puzzle Maker look. <b>Dark</b> for night owls. <b>Blueprint</b> blue drafting paper. <b>High Contrast</b> black, white and yellow for the clearest view.]] },
+	{ "Controls", [[
+<b>Mouse + keyboard</b>: click select, + / - pull / push, P portalable, T paint, C connect, R rotate, Delete delete, Ctrl+Z / Y undo / redo, Ctrl+S save, Tab game view, F9 build and play.
+<b>Controller</b>: left stick cursor, A select, X menu, Y items, B cancel, D-pad pull / push / rotate / portalable, L3 connect, R3 game view, Back build and play, LT + sticks move the camera, LB / RB zoom.
+<b>Touch</b>: tap to select, drag across a wall for an area, one finger orbits, two pan and zoom, hold for the menu, toolbar along the bottom.]] },
+	{ "Publishing + co-op", [[
+File > <b>Publish</b> puts the chamber in the Workshop (the exit has to be openable). Chip messages are filtered when you publish.
+File > <b>Cooperative puzzle</b> marks it as a co-op chamber. In co-op the blue player is <b>Atlas</b> and the orange player is <b>P-body</b>.
+File > <b>Invite team builder</b> lets friends in this server build with you.]] },
+}
+
+-- ==========================================
 -- TUTORIALS (Options > Gameplay > Tutorials turns them off)
 -- ==========================================
 -- Shown when a level starts. A chapter can have its own: tutorial = { { title, text }, ... } in C.CHAPTERS.

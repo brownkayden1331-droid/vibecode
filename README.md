@@ -43,6 +43,7 @@ when start
 Events: `when <item> pressed|released`, `when start`, `when every <seconds>`.
 Actions: `open|close|enable|disable|toggle <item>`, `drop <dropper>`, `reverse <funnel>`, `wait <seconds>`, `say <text>`.
 In the LINES view words are coloured (keywords, items, numbers, text, comments; unknown words in red), and typos are fixed when you press Enter or click away (e.g. `opne exitt` → `open exit`), with actions indented under their `when`.
+Chips also have **variables** (`set score 0`, `add score 1`, `say "Score: {score}"`) and one-line **if** (`if score >= 3 then open exit`). In the LINES view suggestions pop up as you type (Tab takes the top one) and the bar under the text shows what the line expects.
 Items are named by label (right-click an item in Advanced mode). **To My Chips** stores a chip in your profile so you can use it in any chamber.
 
 ## Exit door
@@ -82,3 +83,12 @@ In co-op the blue player becomes **Atlas** and the orange player **P-body** (Rig
 
 ## Menu music
 MusicDirector plays `ReplicatedStorage.PortalAssets.OST["Main Menu"]` (a Sound, or a folder of Sounds) on the main menu. It used to read that folder once, before it had replicated, and stayed silent; it now picks the tracks up whenever they arrive.
+
+## Wiki
+Help › **Wiki** (or F1) in the editor explains everything: shaping rooms, items, connections, textures, meshes, chips (with a full language reference and examples), modes, styles and controls. The **?** in the chip editor opens the chip reference on top of your chip.
+
+## Editor styles
+Options › Editor › **Editor Style** (or File › Editor style): Classic, Dark, Blueprint, High Contrast. Add your own in the `STYLES` table in PortalMapEditor.
+
+## Music troubleshooting
+MusicDirector prints one line in Output a few seconds after starting (what it found), warns when a song can't load (usually audio permissions), and **Ctrl+Shift+M** shows a live music HUD in game.

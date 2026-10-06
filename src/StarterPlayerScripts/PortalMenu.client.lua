@@ -307,6 +307,7 @@ settings = {
 	edAutoHide = "Enabled", edOrbitSens = 0.5, edInvertY = "Disabled", edZoomSpeed = 0.5, edCamSmooth = 0.5,
 	edSfx = 1, edDrone = 1, edHover = "Enabled", edPadCursor = 0.5, edTouchBar = "Auto", edTeamNames = "Enabled",
 	edMode = "Simple", -- Simple (Items) | Intermediate (+ Textures, Meshes) | Advanced (+ My Chips, labels, nudging)
+	edStyle = "Classic", -- how the editor looks: Classic | Dark | Blueprint | High Contrast
 	toasts = "Enabled", -- toast notifications (achievements, saves, chamber messages...)
 	tutorial = "Enabled", -- tutorial cards when a level starts
 }
@@ -2651,6 +2652,7 @@ function Panels.EditorSettings()
 		title = "Editor", cells = 8, defaults = true, minBodyCells = 5, maxVisible = 9, listW = 8 * CFG.GRID, noPreview = true, padTop = 30,
 		rows = {
 			{ kind = "choice", text = "Editor Mode", key = "edMode", options = { "Simple", "Intermediate", "Advanced" } },
+			{ kind = "choice", text = "Editor Style", key = "edStyle", options = { "Classic", "Dark", "Blueprint", "High Contrast" } },
 			{ kind = "choice", text = "Toast Notifications", key = "toasts", options = { "Enabled", "Disabled" } },
 			{ kind = "choice", text = "Tutorials", key = "tutorial", options = { "Enabled", "Disabled" } },
 			{ kind = "choice", text = "Hide Items Palette", key = "edAutoHide", options = { "Enabled", "Disabled" } },
