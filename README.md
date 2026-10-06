@@ -11,9 +11,10 @@
 Options › Editor › **Editor Mode** (also File › Editor mode inside the editor):
 
 - **Simple** – Items palette (the original editor).
-- **Intermediate** – adds **Textures** and **Meshes** tabs, each with a search box.
-  - Textures: `ReplicatedStorage.PortalAssets.Textures` (Textures, Decals, or parts carrying one; sub-folders OK), or paste any texture asset id. Select surfaces, then click a texture.
-  - Meshes: `ReplicatedStorage.PortalAssets.Meshes` (Models / MeshParts), or paste a mesh id (+ optional texture id). Drag into the room; right-click › Size.
+- **Intermediate** – adds **Textures** and **Meshes** tabs. Each searches the **Toolbox** (Creator Store) by default; **IN GAME** switches to your own assets.
+  - Textures: Toolbox decals, `ReplicatedStorage.PortalAssets.Textures`, or a pasted id. Select surfaces, then click a texture.
+  - Meshes: Toolbox models, `ReplicatedStorage.PortalAssets.Meshes`, or a pasted model / mesh id. Drag into the room; right-click › Size.
+  - **Toolbox setup:** in Studio select **InsertService** in the Explorer and tick **AllowInsertFreeModels**, or models/decals won't load. Loaded models are stripped of scripts and cached in `ReplicatedStorage.PortalToolbox`.
 - **Advanced** – adds **My Chips**, item labels, mesh nudge/turn, and a coordinates readout.
 
 ### Chips
@@ -33,6 +34,7 @@ when start
 ```
 Events: `when <item> pressed|released`, `when start`, `when every <seconds>`.
 Actions: `open|close|enable|disable|toggle <item>`, `drop <dropper>`, `reverse <funnel>`, `wait <seconds>`, `say <text>`.
+In the LINES view words are coloured (keywords, items, numbers, text, comments; unknown words in red), and typos are fixed when you press Enter or click away (e.g. `opne exitt` → `open exit`), with actions indented under their `when`.
 Items are named by label (right-click an item in Advanced mode). **To My Chips** stores a chip in your profile so you can use it in any chamber.
 
 ## Exit door
@@ -56,3 +58,12 @@ Each player (a co-op pair shares one) gets their own slot, `workspace.PortalInst
 ## Toast notifications
 Small pop-ups for achievements, autosaves, unlocked chapters, finished chambers, chip messages and so on. Turn them off in Options › Editor or Video › Advanced Video › **Toast Notifications**.
 Other scripts: `PlayerGui.PortalMenu.MenuRequest:Fire("Toast", { title = "...", text = "...", kind = "good" })`, or from the server `shared.PortalData.Toast(player, text)`.
+
+## Game view
+Tab (or the eye button) shows the chamber exactly as it will look in game (real tiles, textures, item models, antlines) without building it or leaving the editor. Tab again to keep editing.
+
+## Tutorials
+A tutorial card appears when a level starts: every chapter, challenges, Workshop chambers, co-op, the editor and editor playtests. Enter = next, Backspace = skip. Turn them off in Options › Gameplay › **Tutorials** (or Options › Editor). A chapter can have its own steps: `tutorial = { { "Title", "Text" }, ... }` in `PortalConfig.CHAPTERS`. Editor: Help › Tutorial shows it again.
+
+## Version check
+`PortalConfig.VERSION` must match what the other scripts expect (3). If you update the scripts but not PortalConfig, the Output window says so.

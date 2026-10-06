@@ -59,6 +59,9 @@ local TextService = game:GetService("TextService")
 local RunService = game:GetService("RunService")
 
 local Config = require(ReplicatedStorage:WaitForChild("PortalConfig"))
+if Config.VERSION ~= 3 then
+	warn("[PortalServer] ReplicatedStorage.PortalConfig is out of date (version " .. tostring(Config.VERSION) .. ", need 3). Replace it with the new PortalConfig - things will break until you do.")
+end
 
 -- ==========================================
 -- NETWORK
@@ -973,7 +976,110 @@ runChips = function(root, data, byId, slot)
 	end
 end
 
+-- ==========================================
+-- TOOLBOX (Creator Store search for the editor's Textures / Meshes tabs)
+-- ==========================================
+-- Search uses InsertService:GetFreeDecals / GetFreeModels. Loading free models needs, in Studio:
+-- select InsertService in the Explorer and tick AllowInsertFreeModels (Game Settings > Security too, if offered).
+-- Loaded models are stripped of scripts and kept in ReplicatedStorage.PortalToolbox (Config.TOOLBOX_FOLDER).
+local InsertService = game:GetService("InsertService")
+local toolboxFolder = ReplicatedStorage:FindFirstChild(Config.TOOLBOX_FOLDER) or Instance.new("Folder")
+toolboxFolder.Name = Config.TOOLBOX_FOLDER
+toolboxFolder.Parent = ReplicatedStorage
+local TOOLBOX_MAX_PARTS = 400
+local toolboxSearchCache = {} -- [kind|query|page] = { t, list }
+local toolboxLoading, toolboxFailed = {}, {}
+
+local function loadToolboxAsset(id)
+	id = math.floor(tonumber(id) or 0)
+	if id <= 0 then return nil, "That isn't an asset id." end
+	local have = toolboxFolder:FindFirstChild(tostring(id))
+	if have then return have end
+	if toolboxFailed[id] then return nil, toolboxFailed[id] end
+	local t0 = os.clock()
+	while toolboxLoading[id] and os.clock() - t0 < 20 do task.wait(0.1) end
+	have = toolboxFolder:FindFirstChild(tostring(id))
+	if have then return have end
+	toolboxLoading[id] = true
+	local ok, model = pcall(function() return InsertService:LoadAsset(id) end)
+	toolboxLoading[id] = nil
+	if not ok or not model then
+		local err = "Couldn't load that asset. In Studio, select InsertService and turn on AllowInsertFreeModels."
+		toolboxFailed[id] = err
+		warn("[PortalServer] LoadAsset", id, model)
+		return nil, err
+	end
+	local parts = 0
+	for _, d in ipairs(model:GetDescendants()) do
+		if d:IsA("LuaSourceContainer") or d:IsA("Sound") or d:IsA("Tool") then
+			d:Destroy()
+		elseif d:IsA("BasePart") then
+			parts += 1
+			d.Anchored = true
+		end
+	end
+	if parts > TOOLBOX_MAX_PARTS then
+		model:Destroy()
+		toolboxFailed[id] = "That model is too big (more than " .. TOOLBOX_MAX_PARTS .. " parts)."
+		return nil, toolboxFailed[id]
+	end
+	model.Name = tostring(id)
+	model.Parent = toolboxFolder
+	return model
+end
+
+local function toolboxSearch(player, arg)
+	arg = type(arg) == "table" and arg or {}
+	local kind = arg.kind == "textures" and "textures" or "meshes"
+	local q = tostring(arg.q or ""):sub(1, 50)
+	local page = math.clamp(math.floor(tonumber(arg.page) or 0), 0, 20)
+	local key = kind .. "|" .. q:lower() .. "|" .. page
+	local c = toolboxSearchCache[key]
+	if c and os.clock() - c.t < 300 then return true, c.list end
+	local ok, res = pcall(function()
+		if kind == "textures" then return InsertService:GetFreeDecals(q, page) end
+		return InsertService:GetFreeModels(q, page)
+	end)
+	if not ok then
+		warn("[PortalServer] toolbox search", res)
+		return false, "The Toolbox search isn't available right now."
+	end
+	local list = {}
+	local set = type(res) == "table" and res[1]
+	for _, r in ipairs(type(set) == "table" and set.Results or {}) do
+		if #list >= 40 then break end
+		if tonumber(r.AssetId) then
+			table.insert(list, { id = tonumber(r.AssetId), name = tostring(r.Name or r.AssetId):sub(1, 60), creator = tostring(r.CreatorName or "") })
+		end
+	end
+	toolboxSearchCache[key] = { t = os.clock(), list = list }
+	return true, list
+end
+
+local function toolboxLoad(player, arg)
+	if type(arg) ~= "table" then return false end
+	local m, err = loadToolboxAsset(arg.id)
+	if not m then return false, err end
+	if arg.kind == "textures" then
+		-- a decal asset holds the image id we need for a Texture
+		local t = m:FindFirstChildWhichIsA("Decal", true) or m:FindFirstChildWhichIsA("Texture", true)
+		local img = t and t.Texture:match("%d+")
+		if not img then return false, "That asset isn't an image." end
+		return true, { value = "id:" .. img }
+	end
+	return true, { value = "asset:" .. math.floor(tonumber(arg.id)) }
+end
+
+-- Toolbox meshes a chamber uses have to be loaded before it's built
+local function preloadToolbox(data)
+	for _, e in ipairs(data and data.ents or {}) do
+		local aid = e[1] == "prop" and type(e[7]) == "string" and e[7]:match("^asset:(%d+)$")
+		if aid then loadToolboxAsset(aid) end
+	end
+end
+
 local function buildChamberMap(data, name, player)
+	preloadToolbox(data)
 	clearActive(player)
 	local slot = acquireSlot(player)
 	local origin = Config.ChamberOrigin(slot)
@@ -1724,6 +1830,9 @@ function Actions.EditorPublish(player, arg)
 	unlock(player, "PUBLISH")
 	return true, id
 end
+
+Actions.ToolboxSearch = toolboxSearch
+Actions.ToolboxLoad = toolboxLoad
 
 -- My Chips library (chips you can drop into any of your chambers)
 function Actions.ChipList(player)

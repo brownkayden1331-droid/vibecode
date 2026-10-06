@@ -1,6 +1,7 @@
 -- PortalConfig
 -- ReplicatedStorage (ModuleScript)  -- name it exactly "PortalConfig"
 local C = {}
+C.VERSION = 3 -- PortalServer / PortalMenu / PortalMapEditor check this (they need the same version)
 
 C.MAPS_FOLDER = "PortalMaps"
 C.LOBBY_SPAWN = "MenuSpawn"
@@ -500,10 +501,19 @@ function C.MeshList()
 	return libraryItems("Meshes", function(c) return c:IsA("Model") or c:IsA("BasePart") end)
 end
 function C.ValidMeshValue(v)
-	return type(v) == "string" and #v <= 60 and (v:match("^mesh:%d+$") ~= nil or v:match("^mesh:%d+:%d+$") ~= nil or v:match("^[%w _%-%.%(%)]+$") ~= nil)
+	return type(v) == "string" and #v <= 60 and (v:match("^mesh:%d+$") ~= nil or v:match("^mesh:%d+:%d+$") ~= nil
+		or v:match("^asset:%d+$") ~= nil or v:match("^[%w _%-%.%(%)]+$") ~= nil)
+end
+-- models loaded from the Toolbox (Creator Store) by PortalServer live here, named by asset id
+C.TOOLBOX_FOLDER = "PortalToolbox"
+function C.ToolboxModel(id)
+	local f = ReplicatedStorage:FindFirstChild(C.TOOLBOX_FOLDER)
+	return f and f:FindFirstChild(tostring(id)) or nil
 end
 function C.MeshTemplate(v)
 	if type(v) ~= "string" then return nil end
+	local aid = v:match("^asset:(%d+)$")
+	if aid then return C.ToolboxModel(aid) end
 	local mid, tid = v:match("^mesh:(%d+):?(%d*)$")
 	if mid then
 		-- MeshPart.MeshId can't be set while the game runs, a SpecialMesh can
@@ -1950,6 +1960,181 @@ function C.ExitCanOpen(data)
 	end
 	return false
 end
+
+
+-- ----- chip LINES view helpers: auto correct + colours -----
+local function editDistance(a, b)
+	if a == b then return 0 end
+	local la, lb = #a, #b
+	if math.abs(la - lb) > 3 then return 99 end
+	local prev = {}
+	for j = 0, lb do prev[j] = j end
+	for i = 1, la do
+		local cur = { [0] = i }
+		local ca = a:sub(i, i)
+		for j = 1, lb do
+			local cost = (ca == b:sub(j, j)) and 0 or 1
+			cur[j] = math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+		end
+		prev = cur
+	end
+	return prev[lb]
+end
+-- the one closest word (nil if nothing is close or two are equally close)
+local function closest(word, list, maxD)
+	local best, bd, tie = nil, maxD + 1, false
+	local lw = word:lower()
+	for _, w in ipairs(list) do
+		local d = editDistance(lw, w:lower())
+		if d < bd then best, bd, tie = w, d, false
+		elseif d == bd and w:lower() ~= (best or ""):lower() then tie = true end
+	end
+	if tie then return nil end
+	return best
+end
+local ACTION_SET = {}
+for _, a in ipairs(C.CHIP_ACTIONS) do ACTION_SET[a] = true end
+local KEYWORDS = { "when" }
+for _, a in ipairs(C.CHIP_ACTIONS) do table.insert(KEYWORDS, a) end
+
+-- fixes typos and capitals in every line: keywords, events and item labels. Indents actions under their "when".
+-- labels = list of the chamber's labels. Returns the new text and a list of "old -> new" fixes.
+function C.ChipAutocorrect(src, labels)
+	local fixes = {}
+	local lower = {}
+	for _, l in ipairs(labels or {}) do lower[l:lower()] = l end
+	local function fixLabel(w)
+		if lower[w:lower()] then return lower[w:lower()] end
+		local c = closest(w, labels or {}, #w <= 4 and 1 or 2)
+		if c then table.insert(fixes, w .. " -> " .. c) return c end
+		return w
+	end
+	local function fixWord(w, list, maxD)
+		local lw = w:lower()
+		for _, x in ipairs(list) do if x == lw then return x end end
+		local c = closest(w, list, maxD)
+		if c then table.insert(fixes, w .. " -> " .. c) return c end
+		return w
+	end
+	local out = {}
+	for line in (src .. "\n"):gmatch("(.-)\r?\n") do
+		local body = line:gsub("^%s+", ""):gsub("%s+$", "")
+		if body == "" or body:match("^%-%-") or body:match("^#") then
+			table.insert(out, line)
+		else
+			local first, rest = body:match("^(%S+)%s*(.*)$")
+			first = fixWord(first, KEYWORDS, #first <= 3 and 1 or 2)
+			if first == "when" then
+				local w2, w3 = rest:match("^(%S*)%s*(%S*)")
+				local lw2 = (w2 or ""):lower()
+				if lw2 == "start" or lw2 == "every" then
+					w2 = lw2
+				elseif w2 ~= "" and not lower[lw2] and (editDistance(lw2, "start") <= 2 or editDistance(lw2, "every") <= 2) then
+					w2 = fixWord(w2, { "start", "every" }, 2)
+				elseif w2 ~= "" then
+					w2 = fixLabel(w2)
+					if w3 ~= "" then w3 = fixWord(w3, { "pressed", "released" }, 3) end
+				end
+				table.insert(out, (("when %s %s"):format(w2 or "", w3 or ""):gsub("%s+$", "")))
+			elseif first == "say" or first == "wait" or not ACTION_SET[first] then
+				table.insert(out, "    " .. first .. (rest ~= "" and (" " .. rest) or ""))
+			else
+				local target = rest:match("^(%S+)")
+				table.insert(out, "    " .. first .. (target and (" " .. fixLabel(target)) or ""))
+			end
+		end
+	end
+	return table.concat(out, "\n"), fixes
+end
+
+-- the program as RichText with colours (keeps every character where it is, for an overlay on the text box)
+C.CHIP_COLORS = {
+	when = "#8E44AD", action = "#1F6FD0", event = "#C26A00", number = "#B5522B",
+	label = "#2E8B3A", unknown = "#D03030", text = "#9A6B1F", comment = "#8A8F8F",
+}
+function C.ChipHighlight(src, kinds)
+	local function esc(t) return (t:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+	local function paint(t, kind) return ('<font color="%s">%s</font>'):format(C.CHIP_COLORS[kind], esc(t)) end
+	local EVENTS = { pressed = true, released = true, start = true, every = true }
+	local out = {}
+	for line in (src .. "\n"):gmatch("(.-)\n") do
+		local body = line:gsub("^%s+", "")
+		if body:match("^%-%-") or body:match("^#") then
+			table.insert(out, paint(line, "comment"))
+		else
+			local parts, idx, first, isSay = {}, 0, nil, false
+			local pos = 1
+			while pos <= #line do
+				local s, e = line:find("%S+", pos)
+				if not s then
+					table.insert(parts, esc(line:sub(pos)))
+					break
+				end
+				table.insert(parts, esc(line:sub(pos, s - 1)))
+				local w = line:sub(s, e)
+				local lw = w:lower()
+				idx += 1
+				if isSay then
+					table.insert(parts, paint(line:sub(s), "text"))
+					break
+				elseif idx == 1 then
+					first = lw
+					if lw == "when" then table.insert(parts, paint(w, "when"))
+					elseif ACTION_SET[lw] then table.insert(parts, paint(w, "action"))
+					else table.insert(parts, paint(w, "unknown")) end
+					isSay = lw == "say"
+				elseif EVENTS[lw] and first == "when" then
+					table.insert(parts, paint(w, "event"))
+				elseif tonumber(w) then
+					table.insert(parts, paint(w, "number"))
+				elseif kinds and kinds[lw] then
+					table.insert(parts, paint(w, "label"))
+				else
+					table.insert(parts, paint(w, "unknown"))
+				end
+				pos = e + 1
+			end
+			table.insert(out, table.concat(parts))
+		end
+	end
+	if #out > 0 and out[#out] == "" then table.remove(out) end
+	return table.concat(out, "\n")
+end
+
+-- ==========================================
+-- TUTORIALS (Options > Gameplay > Tutorials turns them off)
+-- ==========================================
+-- Shown when a level starts. A chapter can have its own: tutorial = { { title, text }, ... } in C.CHAPTERS.
+C.TUTORIALS = {
+	chapter = {
+		{ "Moving", "WASD to walk, Space to jump, move the mouse to look around." },
+		{ "Portals", "Left click fires a blue portal, right click an orange one. Walk into one to come out of the other." },
+		{ "Portal surfaces", "Portals only stick to the white (portalable) panels, not the dark metal ones." },
+		{ "Carrying", "Press E to pick up a cube, E again to drop it. Cubes hold buttons down." },
+		{ "Exits", "The exit door stays locked until you solve the chamber. Find the buttons that open it." },
+	},
+	challenge = {
+		{ "Challenge Mode", "Finish the chamber with as few portals and as fast as you can. Your best times go on the leaderboard." },
+	},
+	workshop = {
+		{ "Community chamber", "Someone built this chamber in the editor. Find what opens the exit door to finish it." },
+		{ "Rating", "When you finish you can rate it up or down." },
+	},
+	coop = {
+		{ "Co-op", "You and your partner each have your own pair of portals. Work together - some puzzles need both of you." },
+	},
+	editor = {
+		{ "Welcome to the editor", "Click a panel to select it. Drag across a wall to select an area." },
+		{ "Shaping the room", "Press + to pull the selected panels toward you, - to push them away. Middle mouse orbits, right mouse pans, wheel zooms." },
+		{ "Items", "Move the mouse to the strip on the left to open the palette, then drag items into the room." },
+		{ "The exit door", "The exit stays locked until something opens it. Select a button, press C and click the exit to connect them." },
+		{ "Testing", "Press F9 (or the play button at the top) to build and play your chamber. Tab shows how it will look without building." },
+		{ "More tools", "Options > Editor > Editor Mode: Intermediate adds Textures and Meshes, Advanced adds My Chips." },
+	},
+	playtest = {
+		{ "Playtesting", "Try to solve your chamber. Pause and pick Exit To Editor to keep building, or press F9 to rebuild." },
+	},
+}
 
 function C.DefaultChamber()
 	local air = {}

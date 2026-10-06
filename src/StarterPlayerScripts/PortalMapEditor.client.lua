@@ -71,6 +71,9 @@ local TweenService = game:GetService("TweenService")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local Config = require(ReplicatedStorage:WaitForChild("PortalConfig"))
+if Config.VERSION ~= 3 then
+	warn("[PortalMapEditor] ReplicatedStorage.PortalConfig is out of date (version " .. tostring(Config.VERSION) .. ", need 3). Replace it with the new PortalConfig - things will break until you do.")
+end
 local CELL, LIM, DIRS, OFFS = Config.CELL, Config.EDITOR_LIMITS, Config.DIRS, Config.OFFS
 
 local SET = {
@@ -1052,6 +1055,7 @@ end
 -- Every panel is three flat layers that never poke past its own cell:
 --   panel (the visible tile) / rim (the light grid line between tiles) / shell (the dark wall thickness on the cut edge)
 local function rebuild()
+	if E.gameView and X.buildGameView then X.buildGameView() return end -- game view shows the real chamber instead
 	roomFolder:ClearAllChildren()
 	E.faceParts = {}
 	local camPos = cam.CFrame.Position
@@ -1115,6 +1119,7 @@ updateCull = function()
 	local camPos = cam.CFrame.Position
 	if E.lastCull and (camPos - E.lastCull).Magnitude < 0.05 then return end
 	E.lastCull = camPos
+	if E.gameView and X.cullGameView then X.cullGameView(camPos) end
 	for _, fp in pairs(E.faceParts) do
 		local show = (camPos - fp.center):Dot(fp.normal) > 0
 		if show ~= fp.shown then
@@ -1764,9 +1769,7 @@ do
 			PlaceholderText = placeholder, FontFace = FONT.UI_REG, TextSize = 16, TextColor3 = rgb(25), PlaceholderColor3 = rgb(150),
 			TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false, ZIndex = 7, Parent = parent })
 		new("UIStroke", { Color = C.TILE_LINE, Thickness = 1, Parent = box })
-		new("UIPadding", { PaddingLeft = UDim.new(0, 30), Parent = box })
-		new("TextLabel", { Position = px(-24, 0), Size = px(20, 30), BackgroundTransparency = 1, Text = "⌕", FontFace = FONT.UI, TextSize = 20,
-			TextColor3 = rgb(130), ZIndex = 8, Parent = box })
+		new("UIPadding", { PaddingLeft = UDim.new(0, 10), Parent = box })
 		box:GetPropertyChangedSignal("Text"):Connect(function() filter(box.Text:lower()) end)
 		return box
 	end
@@ -1942,13 +1945,100 @@ do
 		if Pal.tab ~= "items" and Pal.onShow[Pal.tab] then Pal.onShow[Pal.tab]() end
 	end
 
+	-- ----- TEXTURES + MESHES: Toolbox (Creator Store) search, or what's in PortalAssets -----
+	-- each page: search box, TOOLBOX / IN GAME switch, a results grid, then its own id boxes and buttons
+	local function sourcePage(id, placeholder)
+		local pg = page(id)
+		local st = { src = "toolbox", query = "", page = 0, token = 0 }
+		st.grid = grid(pg, 74, 508, 104)
+		st.status = note(pg, px(14, 84), px(340, 80), "")
+		st.status.ZIndex = 8
+		st.search = searchBox(pg, placeholder, function(q)
+			st.query = q
+			if st.src == "library" then
+				filterTiles(st.grid, q)
+			else
+				-- the toolbox searches once you stop typing
+				st.token += 1
+				local my = st.token
+				task.delay(0.7, function() if my == st.token and st.src == "toolbox" then st.run(false) end end)
+			end
+		end)
+		st.buttons = {}
+		for i, sdef in ipairs({ { "toolbox", "TOOLBOX" }, { "library", "IN GAME" } }) do
+			local b = smallButton(pg, px(7 + (i - 1) * 183, 42), px(178, 26), sdef[2], function()
+				if st.src == sdef[1] then return end
+				st.src = sdef[1]
+				st.paint()
+				st.run(false)
+			end)
+			st.buttons[sdef[1]] = b
+		end
+		function st.paint()
+			for k, b in pairs(st.buttons) do
+				b.BackgroundColor3 = k == st.src and rgb(77, 128, 151) or rgb(214, 218, 216)
+				b.TextColor3 = k == st.src and rgb(245) or rgb(25)
+			end
+		end
+		function st.clear()
+			for _, c in ipairs(st.grid:GetChildren()) do
+				if c:IsA("GuiObject") then c:Destroy() end
+			end
+		end
+		st.paint()
+		return pg, st
+	end
+
+	-- a toolbox result tile: thumbnail + name
+	local function toolboxTile(st, order, r, onPick)
+		local tile = paletteTile(st.grid, order, r.name)
+		new("ImageLabel", { Position = px(10, 4), Size = px(70, 70), BackgroundColor3 = rgb(250), BorderSizePixel = 0,
+			Image = ("rbxthumb://type=Asset&id=%d&w=150&h=150"):format(r.id), ScaleType = Enum.ScaleType.Fit, ZIndex = 7, Parent = tile })
+		new("TextLabel", { Position = px(3, 76), Size = px(84, 26), BackgroundTransparency = 1, Text = r.name, FontFace = FONT.UI_REG, TextSize = 11,
+			TextColor3 = rgb(40), TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 7, Parent = tile })
+		hoverable(tile, function()
+			tile.BackgroundColor3 = C.TILE_HI
+			itemName.Text = string.upper(r.name) .. (r.creator ~= "" and ("  BY " .. string.upper(r.creator)) or "")
+			sound("SOUND_HOVER")
+		end, function() tile.BackgroundColor3 = C.TILE if not E.carry then itemName.Text = "" end end)
+		local function pick() onPick(r) end
+		tile.MouseButton1Down:Connect(pick)
+		CLICK[tile] = pick
+		tile.Activated:Connect(function()
+			if E.pointerMode == "pad" or GuiService.SelectedObject == tile then pick() end
+		end)
+		return tile
+	end
+
+	-- runs a toolbox search (more = add the next page)
+	local function toolboxSearch(st, kind, more, onPick)
+		if more then st.page += 1 else st.page = 0 st.clear() end
+		st.token += 1
+		local my = st.token
+		st.status.Text = "Searching the Toolbox..."
+		task.spawn(function()
+			local ok, list = netCall("ToolboxSearch", { kind = kind, q = st.query, page = st.page })
+			if my ~= st.token then return end
+			if not ok then st.status.Text = tostring(list or "The Toolbox search didn't work.") return end
+			st.status.Text = (#list == 0 and st.page == 0) and "Nothing found. Try another word." or ""
+			local old = st.grid:FindFirstChild("More")
+			if old then old:Destroy() end
+			local base = st.page * 100
+			for i, r in ipairs(list) do toolboxTile(st, base + i, r, onPick) end
+			if #list >= 20 then
+				local m = paletteTile(st.grid, base + 99, "")
+				m.Name = "More"
+				new("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "MORE...", FontFace = FONT.P2, TextSize = 18,
+					TextColor3 = rgb(60), ZIndex = 7, Parent = m })
+				onClick(m, function() toolboxSearch(st, kind, true, onPick) end)
+			end
+		end)
+	end
+
 	-- ----- TEXTURES -----
-	local texPage = page("textures")
-	local texGrid = grid(texPage, 42, 540, 104)
-	searchBox(texPage, "Search textures...", function(q) filterTiles(texGrid, q) end)
+	local texPage, tex = sourcePage("textures", "Search textures (Toolbox)...")
 	local texId = inputBox(texPage, px(7, 590), px(220, 30), "Texture asset id")
-	note(texPage, px(9, 668), px(359, 60), "Select surfaces in the room, then click a texture to put it on them. Add your own in ReplicatedStorage.PortalAssets.Textures.")
-	local texEmpty = note(texPage, px(14, 50), px(340, 80), "")
+	note(texPage, px(9, 668), px(359, 60), "Select surfaces in the room, then click a texture to put it on them. IN GAME lists ReplicatedStorage.PortalAssets.Textures.")
 
 	-- puts a texture on every selected surface (nil = back to the normal tiles)
 	function Pal.applyTexture(v)
@@ -1959,23 +2049,44 @@ do
 		sfx("Click")
 		flash(v and ("Texture applied to %d surface%s."):format(selCount(), selCount() == 1 and "" or "s") or "Textures cleared.")
 	end
+	-- a decal from the Toolbox: the server looks up the image inside it
+	local function pickToolboxTexture(r)
+		if next(E.sel) == nil then flash("Select the surfaces to texture first.") sfx("Error") return end
+		sfx("Click")
+		flash("Loading " .. r.name .. "...")
+		task.spawn(function()
+			local ok, res = netCall("ToolboxLoad", { kind = "textures", id = r.id })
+			if ok and type(res) == "table" and Config.ValidTextureValue(res.value) then
+				Pal.applyTexture(res.value)
+			else
+				flash(tostring(res or "Couldn't load that texture."))
+				sfx("Error")
+			end
+		end)
+	end
 	smallButton(texPage, px(233, 590), px(135, 30), "USE ID", function()
 		local id = texId.Text:match("(%d+)")
 		if not id then flash("Paste a texture / decal asset id first.") sfx("Error") return end
-		Pal.applyTexture("id:" .. id)
+		if next(E.sel) == nil then flash("Select the surfaces to texture first.") sfx("Error") return end
+		-- decal ids need looking up; if that fails it's probably an image id already
+		task.spawn(function()
+			local ok, res = netCall("ToolboxLoad", { kind = "textures", id = tonumber(id) })
+			Pal.applyTexture((ok and type(res) == "table" and Config.ValidTextureValue(res.value)) and res.value or ("id:" .. id))
+		end)
 	end, true)
 	smallButton(texPage, px(7, 628), px(180, 30), "CLEAR TEXTURE", function() Pal.applyTexture(nil) end)
 
-	Pal.onShow.textures = function()
-		if Pal.built.textures then return end
-		Pal.built.textures = true
-		for _, c in ipairs(texGrid:GetChildren()) do
-			if c:IsA("GuiObject") then c:Destroy() end
+	function tex.run(more)
+		if tex.src == "toolbox" then
+			toolboxSearch(tex, "textures", more, pickToolboxTexture)
+			return
 		end
+		tex.token += 1
+		tex.clear()
 		local list = Config.TextureList()
-		texEmpty.Text = #list == 0 and "No textures yet. Put Textures / Decals in ReplicatedStorage.PortalAssets.Textures, or paste an asset id below." or ""
+		tex.status.Text = #list == 0 and "No textures in the game yet. Put Textures / Decals in ReplicatedStorage.PortalAssets.Textures, or use TOOLBOX." or ""
 		for i, it in ipairs(list) do
-			local tile = paletteTile(texGrid, i, it.name .. " " .. (it.folder or ""))
+			local tile = paletteTile(tex.grid, i, it.name .. " " .. (it.folder or ""))
 			new("ImageLabel", { Position = px(10, 6), Size = px(70, 70), BackgroundColor3 = rgb(250), BorderSizePixel = 0, Image = Config.TextureImage(it.name),
 				ScaleType = Enum.ScaleType.Tile, TileSize = UDim2.fromOffset(35, 35), ZIndex = 7, Parent = tile })
 			new("TextLabel", { Position = px(3, 78), Size = px(84, 24), BackgroundTransparency = 1, Text = it.name, FontFace = FONT.UI_REG, TextSize = 11,
@@ -1984,33 +2095,72 @@ do
 				function() tile.BackgroundColor3 = C.TILE itemName.Text = "" end)
 			onClick(tile, function() Pal.applyTexture(it.name) end)
 		end
+		filterTiles(tex.grid, tex.query)
+	end
+	Pal.onShow.textures = function()
+		if Pal.built.textures then return end
+		Pal.built.textures = true
+		tex.run(false)
 	end
 
 	-- ----- MESHES -----
-	local meshPage = page("meshes")
-	local meshGrid = grid(meshPage, 42, 540, 104)
-	searchBox(meshPage, "Search meshes...", function(q) filterTiles(meshGrid, q) end)
-	local meshId = inputBox(meshPage, px(7, 590), px(178, 30), "Mesh asset id")
+	local meshPage, mesh = sourcePage("meshes", "Search models (Toolbox)...")
+	local meshId = inputBox(meshPage, px(7, 590), px(178, 30), "Mesh / model asset id")
 	local meshTex = inputBox(meshPage, px(190, 590), px(178, 30), "Texture id (optional)")
-	note(meshPage, px(9, 668), px(359, 60), "Drag a mesh into the room. Right-click it to resize it (and nudge it in Advanced mode). Add your own in ReplicatedStorage.PortalAssets.Meshes.")
-	local meshEmpty = note(meshPage, px(14, 50), px(340, 80), "")
-	smallButton(meshPage, px(7, 628), px(361, 30), "PICK UP MESH ID", function()
+	note(meshPage, px(9, 668), px(359, 60), "Drag a mesh into the room. Right-click it to resize it (and nudge it in Advanced mode). IN GAME lists ReplicatedStorage.PortalAssets.Meshes.")
+
+	-- a model from the Toolbox: the server loads it (scripts stripped), then you carry it like any item
+	local function pickToolboxMesh(r)
+		if E.carry then return end
+		local variant = "asset:" .. r.id
+		if Config.ToolboxModel(r.id) then
+			Pal.startCarry({ kind = "prop", variant = variant, name = r.name })
+			sfx("Click")
+			return
+		end
+		flash("Loading " .. r.name .. "...")
+		task.spawn(function()
+			local ok, res = netCall("ToolboxLoad", { kind = "meshes", id = r.id })
+			if not ok then flash(tostring(res or "Couldn't load that model.")) sfx("Error") return end
+			local f = ReplicatedStorage:WaitForChild(Config.TOOLBOX_FOLDER, 10)
+			if f and f:WaitForChild(tostring(r.id), 10) and E.active and not E.carry then
+				Pal.startCarry({ kind = "prop", variant = variant, name = r.name })
+				flash("Click in the room to place " .. r.name .. ".")
+			end
+		end)
+	end
+	smallButton(meshPage, px(7, 628), px(361, 30), "PICK UP ID", function()
 		local id = meshId.Text:match("(%d+)")
-		if not id then flash("Paste a mesh asset id first.") sfx("Error") return end
+		if not id then flash("Paste a mesh or model asset id first.") sfx("Error") return end
 		local tid = meshTex.Text:match("(%d+)")
-		Pal.startCarry({ kind = "prop", variant = "mesh:" .. id .. (tid and (":" .. tid) or ""), name = "Mesh " .. id })
+		if tid then
+			-- mesh id + texture id: a SpecialMesh
+			Pal.startCarry({ kind = "prop", variant = "mesh:" .. id .. ":" .. tid, name = "Mesh " .. id })
+			return
+		end
+		-- a model id loads like a Toolbox model; a bare mesh id falls back to a SpecialMesh
+		task.spawn(function()
+			local ok = netCall("ToolboxLoad", { kind = "meshes", id = tonumber(id) })
+			local f = ok and ReplicatedStorage:WaitForChild(Config.TOOLBOX_FOLDER, 10)
+			if f and f:WaitForChild(id, 10) then
+				Pal.startCarry({ kind = "prop", variant = "asset:" .. id, name = "Model " .. id })
+			else
+				Pal.startCarry({ kind = "prop", variant = "mesh:" .. id, name = "Mesh " .. id })
+			end
+		end)
 	end, true)
 
-	Pal.onShow.meshes = function()
-		if Pal.built.meshes then return end
-		Pal.built.meshes = true
-		for _, c in ipairs(meshGrid:GetChildren()) do
-			if c:IsA("GuiObject") then c:Destroy() end
+	function mesh.run(more)
+		if mesh.src == "toolbox" then
+			toolboxSearch(mesh, "meshes", more, pickToolboxMesh)
+			return
 		end
+		mesh.token += 1
+		mesh.clear()
 		local list = Config.MeshList()
-		meshEmpty.Text = #list == 0 and "No meshes yet. Put models / MeshParts in ReplicatedStorage.PortalAssets.Meshes, or paste a mesh id below." or ""
+		mesh.status.Text = #list == 0 and "No meshes in the game yet. Put models / MeshParts in ReplicatedStorage.PortalAssets.Meshes, or use TOOLBOX." or ""
 		for i, it in ipairs(list) do
-			local tile = paletteTile(meshGrid, i, it.name .. " " .. (it.folder or ""))
+			local tile = paletteTile(mesh.grid, i, it.name .. " " .. (it.folder or ""))
 			new("TextLabel", { Position = px(3, 78), Size = px(84, 24), BackgroundTransparency = 1, Text = it.name, FontFace = FONT.UI_REG, TextSize = 11,
 				TextColor3 = rgb(40), TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 7, Parent = tile })
 			local vp = new("ViewportFrame", { Position = px(5, 2), Size = px(80, 76), BackgroundTransparency = 1, Ambient = rgb(180),
@@ -2033,6 +2183,12 @@ do
 			end
 			carryTile(tile, { kind = "prop", variant = it.name, name = it.name })
 		end
+		filterTiles(mesh.grid, mesh.query)
+	end
+	Pal.onShow.meshes = function()
+		if Pal.built.meshes then return end
+		Pal.built.meshes = true
+		mesh.run(false)
 	end
 
 	-- ----- MY CHIPS -----
@@ -2391,10 +2547,64 @@ do
 				b.TextColor3 = v == view and rgb(245) or rgb(20)
 			end
 			if view == "lines" then
+				-- the text box underneath, a coloured copy of the same text on top (it lets clicks through)
 				linesBox = new("TextBox", { Position = px(0, 0), Size = px(800, 470), BackgroundTransparency = 1, Text = linesBox and linesBox.Text or Config.ChipText(rules),
 					MultiLine = true, ClearTextOnFocus = false, Font = Enum.Font.Code, TextSize = 19, TextColor3 = rgb(25), TextXAlignment = Enum.TextXAlignment.Left,
 					TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false, ZIndex = 33, Parent = body })
 				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingTop = UDim.new(0, 10), Parent = linesBox })
+				local colors = new("TextLabel", { Position = px(0, 0), Size = px(800, 470), BackgroundTransparency = 1, Text = "", RichText = true,
+					Font = Enum.Font.Code, TextSize = 19, TextColor3 = rgb(25), TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+					TextWrapped = false, Active = false, ZIndex = 34, Parent = body })
+				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingTop = UDim.new(0, 10), Parent = colors })
+				local box = linesBox
+				local busy, lines = false, select(2, box.Text:gsub("\n", ""))
+				local function labels()
+					local list = {}
+					for _, e in ipairs(E.ents) do
+						local l = Config.LabelOf(e)
+						if l then table.insert(list, l) end
+					end
+					return list
+				end
+				local function showFixes(fx)
+					if #fx > 0 then
+						errLabel.TextColor3 = rgb(40, 120, 60)
+						errLabel.Text = "Auto corrected: " .. table.concat(fx, ", ", 1, math.min(#fx, 6))
+					end
+				end
+				local function paint()
+					colors.Text = Config.ChipHighlight(box.Text, Config.LabelKinds(E.ents))
+				end
+				box:GetPropertyChangedSignal("Text"):Connect(function()
+					if busy then return end
+					local n = select(2, box.Text:gsub("\n", ""))
+					local cursor = box.CursorPosition
+					if n == lines + 1 and cursor > 1 and box.Text:sub(cursor - 1, cursor - 1) == "\n" then
+						-- Enter: fix the lines above the cursor, and indent the new line under its "when"
+						local before, after = box.Text:sub(1, cursor - 1), box.Text:sub(cursor)
+						local fixed, fx = Config.ChipAutocorrect(before:sub(1, -2), labels())
+						local indent = (fixed:match("[^\n]*$") or ""):match("^%s*%S") and "    " or ""
+						busy = true
+						box.Text = fixed .. "\n" .. indent .. after
+						box.CursorPosition = #fixed + 2 + #indent
+						busy = false
+						showFixes(fx)
+					end
+					lines = select(2, box.Text:gsub("\n", ""))
+					paint()
+				end)
+				box.FocusLost:Connect(function()
+					local fixed, fx = Config.ChipAutocorrect(box.Text, labels())
+					if fixed ~= box.Text then
+						busy = true
+						box.Text = fixed
+						busy = false
+						lines = select(2, fixed:gsub("\n", ""))
+						showFixes(fx)
+					end
+					paint()
+				end)
+				paint()
 				return
 			end
 			linesBox = nil
@@ -2485,6 +2695,7 @@ do
 			if view ~= "lines" or not linesBox then return true end
 			local r2, e2 = Config.ParseChip(linesBox.Text)
 			if #e2 > 0 then
+				errLabel.TextColor3 = rgb(200, 50, 50)
 				errLabel.Text = table.concat(e2, "    ", 1, math.min(#e2, 3))
 				return false
 			end
@@ -2520,6 +2731,7 @@ do
 			end
 			if #problems == 0 then problems = Config.CheckChip(rules, Config.LabelKinds(E.ents)) end
 			if #problems > 0 then
+				errLabel.TextColor3 = rgb(200, 50, 50)
 				errLabel.Text = table.concat(problems, "    ", 1, math.min(#problems, 3))
 				sfx("Error")
 				return nil
@@ -2879,6 +3091,7 @@ local function start(payload)
 	E.undo, E.redo, E.sel, E.selItem, E.anchor, E.linking, E.dirty, E.stale = {}, {}, {}, nil, nil, nil, false, true
 	E.rev, E.sentRev, E.pendingRemote = 0, 0, nil
 	E.gameView = false
+	if X.clearGameView then X.clearGameView() end
 	E.chromeHold = os.clock() + 2.5
 	if UserInputService:GetLastInputType() == Enum.UserInputType.Touch then E.pointerMode = "touch" end
 	if string.find(UserInputService:GetLastInputType().Name, "Gamepad", 1, true) then usePad() end
@@ -2888,6 +3101,21 @@ local function start(payload)
 	rebuild()
 	Pal.build()
 	Pal.set(E.pointerMode == "mouse")
+	-- Toolbox models this chamber uses: ask the server to load them, then redraw the items
+	task.spawn(function()
+		local want = {}
+		for _, e in ipairs(E.ents) do
+			local aid = e[1] == "prop" and type(e[7]) == "string" and e[7]:match("^asset:(%d+)$")
+			if aid and not Config.ToolboxModel(aid) then want[aid] = true end
+		end
+		local any = false
+		for aid in pairs(want) do
+			local ok = netCall("ToolboxLoad", { kind = "meshes", id = tonumber(aid) })
+			local f = ok and ReplicatedStorage:WaitForChild(Config.TOOLBOX_FOLDER, 10)
+			if f and f:WaitForChild(aid, 10) then any = true end
+		end
+		if any and E.active then rebuildEnts() end
+	end)
 	rescaleUI()
 	Team.refreshTeamBox()
 	gui.Enabled = true
@@ -2920,10 +3148,72 @@ local function newChamber()
 	end)
 end
 
+-- GAME VIEW (Tab): the chamber built the way it will look in game (real tiles, textures, item models, antlines),
+-- right here in the editor. Nothing is built on the server and you don't leave the editor. Tab again to keep editing.
+do
+	local preview, panels = nil, {}
+	local function editorBits() return { roomFolder, entFolder, H.model, H.previewRoot, fxFolder } end
+	function X.clearGameView()
+		if preview then preview:Destroy() preview = nil end
+		table.clear(panels)
+		for _, f in ipairs(editorBits()) do f.Parent = world end
+	end
+	function X.cullGameView(camPos)
+		for _, p in ipairs(panels) do
+			if p.part.Parent then
+				p.part.LocalTransparencyModifier = ((camPos - p.part.Position):Dot(p.normal) > 0) and 0 or 1
+			end
+		end
+	end
+	function X.buildGameView()
+		if preview then preview:Destroy() preview = nil end
+		table.clear(panels)
+		for _, f in ipairs(editorBits()) do f.Parent = nil end
+		local ok, m = pcall(Config.BuildChamber, serialize(), nil, W, {})
+		if not ok or not m then
+			warn("[PortalMapEditor] game view:", m)
+			flash("Couldn't draw the game view.")
+			return
+		end
+		-- a still picture: no tags, scripts or sounds, and no names the test element scripts react to
+		for _, t in ipairs(m:GetTags()) do m:RemoveTag(t) end
+		for _, d in ipairs(m:GetDescendants()) do
+			for _, t in ipairs(d:GetTags()) do d:RemoveTag(t) end
+			if d:IsA("Sound") then
+				d:Destroy()
+			elseif d:IsA("BaseScript") then
+				d.Enabled = false
+			elseif d:IsA("BasePart") then
+				d.Anchored, d.CanCollide, d.CanTouch, d.CanQuery = true, false, false, false
+				local fk = d.Name == "Panel" and d:GetAttribute("Face")
+				local f = fk and select(4, parseFace(fk))
+				if f then table.insert(panels, { part = d, normal = -DIRS[f] }) end
+			elseif d:IsA("Model") then
+				d.Name = "EditorPiece"
+			end
+		end
+		m.Name = "GameView"
+		m.Parent = world
+		preview = m
+		X.cullGameView(cam.CFrame.Position)
+	end
+end
+
 local eyeIcon
 local function toggleGameView()
 	E.gameView = not E.gameView
-	rebuild()
+	if E.gameView then
+		cancelLink()
+		closeMenus()
+		E.sel, E.selItem, E.drag = {}, nil, nil
+		refreshSelection()
+		X.buildGameView()
+		flash("Game view: this is how your chamber will look. Press Tab to keep editing.")
+	else
+		X.clearGameView()
+		rebuild()
+	end
+	E.lastCull = nil
 	if eyeIcon then eyeIcon.ImageColor3 = E.gameView and C.ICON_ON or C.ICON end
 	sfx("Click")
 end
@@ -2982,6 +3272,7 @@ local MENUS = {
 	Help = function() return {
 		{ text = "Tips...", fn = function() tipIndex = tipIndex % #SET.TIPS + 1 flash(SET.TIPS[tipIndex]) end },
 		{ text = "Controls...", fn = Dlg.controls },
+		{ text = "Tutorial...", fn = function() menuRequest("Tutorial", "editor") end },
 		} end,
 }
 -- File / Edit / Help: x is where the word starts in the footage
@@ -4092,7 +4383,7 @@ editLoop = function(dt)
 	E.cTarget = E.cTarget:Lerp(E.target, a)
 	applyCamera()
 	updateCull()
-	staleBox.Visible = E.gameView and E.stale and not E.building
+	staleBox.Visible = false -- the game view is always current now
 
 	-- a teammate's change that arrived mid-drag
 	if E.pendingRemote and not E.drag and not E.carry then applyRemote(E.pendingRemote) end

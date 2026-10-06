@@ -39,6 +39,9 @@ local getRobloxSettings = settings -- the local `settings` table below shadows t
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local Config = require(ReplicatedStorage:WaitForChild("PortalConfig"))
+if Config.VERSION ~= 3 then
+	warn("[PortalMenu] ReplicatedStorage.PortalConfig is out of date (version " .. tostring(Config.VERSION) .. ", need 3). Replace it with the new PortalConfig - things will break until you do.")
+end
 
 -- ==========================================
 -- SETTINGS + LOOK
@@ -303,6 +306,7 @@ local settings = {
 	edSfx = 1, edDrone = 1, edHover = "Enabled", edPadCursor = 0.5, edTouchBar = "Auto", edTeamNames = "Enabled",
 	edMode = "Simple", -- Simple (Items) | Intermediate (+ Textures, Meshes) | Advanced (+ My Chips, labels, nudging)
 	toasts = "Enabled", -- toast notifications (achievements, saves, chamber messages...)
+	tutorial = "Enabled", -- tutorial cards when a level starts
 }
 local DEFAULTS = table.clone(settings)
 
@@ -799,6 +803,145 @@ do
 			if i then table.remove(live, i) end
 			card:Destroy()
 		end)
+	end
+end
+
+-- ==========================================
+-- TUTORIALS (a card bottom left when a level starts; Options > Gameplay > Tutorials turns them off)
+-- ==========================================
+-- Every chapter, challenge, Workshop chamber, co-op game, the editor and editor playtests get one (PortalConfig
+-- C.TUTORIALS, or a chapter's own `tutorial` list). Enter = next, Backspace = skip. Other scripts can show one with
+-- MenuRequest:Fire("Tutorial", "editor") (forces it even if it was already seen this session).
+local showTutorial
+do
+	local tutGui = new("ScreenGui", {
+		Name = "PortalTutorial", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 425,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Enabled = false, Parent = playerGui,
+	})
+	local card = new("Frame", {
+		AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 24, 1, -90), Size = UDim2.fromOffset(460, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = Color3.fromRGB(28, 32, 34), BackgroundTransparency = 0.1, BorderSizePixel = 0, Parent = tutGui,
+	})
+	new("UICorner", { CornerRadius = UDim.new(0, 8), Parent = card })
+	new("UIStroke", { Color = COL.CYAN, Thickness = 2, Transparency = 0.3, Parent = card })
+	new("UIPadding", { PaddingLeft = UDim.new(0, 18), PaddingRight = UDim.new(0, 18), PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12), Parent = card })
+	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = card })
+	local tutScale = new("UIScale", { Parent = card })
+	local head = new("TextLabel", { Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "TUTORIAL", FontFace = F_SET, TextSize = 15,
+		TextColor3 = COL.CYAN, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 1, Parent = card })
+	local title = new("TextLabel", { Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, Text = "", FontFace = F_TITLE, TextSize = 26,
+		TextColor3 = Color3.fromRGB(240, 246, 244), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 2, Parent = card })
+	local body = new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = "",
+		FontFace = F_SET, TextSize = 20, TextWrapped = true, TextColor3 = Color3.fromRGB(220, 228, 226), TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = 3, Parent = card })
+	local row = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = 4, Parent = card })
+	local function btn(x, w, text, fn, blue)
+		local b = new("TextButton", { Position = UDim2.fromOffset(x, 2), Size = UDim2.fromOffset(w, 28), BorderSizePixel = 0, AutoButtonColor = true,
+			BackgroundColor3 = blue and COL.BLUE_BTN or Color3.fromRGB(70, 76, 78), Text = text, FontFace = F_ROW, TextSize = 16,
+			TextColor3 = Color3.fromRGB(240, 244, 244), Parent = row })
+		new("UICorner", { CornerRadius = UDim.new(0, 4), Parent = b })
+		b.MouseButton1Click:Connect(function() uiSound(CFG.SOUND_CLICK) fn() end)
+		return b
+	end
+	local hint = new("TextLabel", { Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "ENTER  next      BACKSPACE  skip", FontFace = F_SET,
+		TextSize = 13, TextColor3 = Color3.fromRGB(150, 160, 158), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 5, Parent = card })
+	local steps, idx, token = nil, 1, 0
+	local seen = {}
+	local nextBtn
+
+	local function close()
+		token += 1
+		tutGui.Enabled = false
+		steps = nil
+	end
+	local function render()
+		if not steps then return end
+		local st = steps[idx]
+		head.Text = ("TUTORIAL  %d / %d"):format(idx, #steps)
+		title.Text = st[1] or ""
+		body.Text = st[2] or ""
+		nextBtn.Text = idx >= #steps and "DONE" or "NEXT"
+		hint.Visible = not UserInputService.TouchEnabled or UserInputService.KeyboardEnabled
+		token += 1
+		local my = token
+		-- moves on by itself if you're busy playing (the mouse is locked in first person)
+		task.delay(12, function()
+			if my == token and steps then
+				if idx < #steps then idx += 1 render() else close() end
+			end
+		end)
+	end
+	local function nextStep()
+		if not steps then return end
+		if idx < #steps then idx += 1 render() else close() end
+	end
+	btn(0, 90, "BACK", function() if steps and idx > 1 then idx -= 1 render() end end)
+	nextBtn = btn(98, 90, "NEXT", nextStep, true)
+	btn(196, 70, "SKIP", close)
+	btn(274, 150, "TURN OFF TUTORIALS", function()
+		close()
+		settings.tutorial = "Disabled"
+		applySetting("tutorial")
+		onSettingChanged()
+		toast("Turn them back on in Options > Gameplay.", "Tutorials off", "info")
+	end)
+
+	UserInputService.InputBegan:Connect(function(input, gpe)
+		if not steps or gpe or UserInputService:GetFocusedTextBox() then return end
+		if input.KeyCode == Enum.KeyCode.Return then nextStep()
+		elseif input.KeyCode == Enum.KeyCode.Backspace then close() end
+	end)
+	player:GetAttributeChangedSignal("Setting_tutorial"):Connect(function()
+		if settings.tutorial == "Disabled" then close() end
+	end)
+
+	showTutorial = function(key, list, force)
+		if type(list) ~= "table" or #list == 0 then return end
+		if not force and (settings.tutorial == "Disabled" or seen[key]) then return end
+		seen[key] = true
+		task.spawn(function()
+			-- wait for the loading screen / menus to get out of the way
+			local t0 = os.clock()
+			while (loadingNow or mode ~= "none") and os.clock() - t0 < 30 do task.wait(0.25) end
+			task.wait(0.8)
+			if loadingNow or mode ~= "none" then return end
+			local c = workspace.CurrentCamera
+			tutScale.Scale = math.clamp((c and c.ViewportSize.Y or 1080) / 1080, 0.6, 1.4)
+			steps, idx = list, 1
+			tutGui.Enabled = true
+			render()
+		end)
+	end
+
+	-- which tutorial goes with what you're doing now
+	local function chapterSteps(n)
+		local ch = Config.Chapter(n)
+		if ch and type(ch.tutorial) == "table" then return ch.tutorial end
+		local basics = Config.TUTORIALS.chapter or {}
+		if n == 1 then return basics end
+		-- later chapters: the chapter's name and one reminder
+		local tip = basics[((n - 2) % math.max(#basics, 1)) + 1]
+		local list = { { ("Chapter %d: %s"):format(n, ch and ch.title or ""), "New chamber, new tricks. Look for what opens the exit door." } }
+		if tip then table.insert(list, tip) end
+		return list
+	end
+	local function check()
+		local T = Config.TUTORIALS or {}
+		if player:GetAttribute("InEditor") then
+			if player:GetAttribute("EditorPlaytest") then showTutorial("playtest", T.playtest)
+			else showTutorial("editor", T.editor) end
+		elseif player:GetAttribute("ChallengeChamber") then
+			showTutorial("challenge", T.challenge)
+		elseif player:GetAttribute("WorkshopMap") then
+			showTutorial("workshop", T.workshop)
+		elseif type(player:GetAttribute("Chapter")) == "number" then
+			local n = player:GetAttribute("Chapter")
+			showTutorial("chapter" .. n, chapterSteps(n))
+		end
+		if player:GetAttribute("CoopPartner") then showTutorial("coop", T.coop) end
+	end
+	for _, attr in ipairs({ "Chapter", "ChallengeChamber", "WorkshopMap", "CoopPartner", "InEditor", "EditorPlaytest" }) do
+		player:GetAttributeChangedSignal(attr):Connect(function() task.defer(check) end)
 	end
 end
 
@@ -2305,7 +2448,11 @@ local function openEnrichment()
 end
 
 menuRequest.Event:Connect(function(kind, arg)
-	if kind == "Toast" then
+	if kind == "Tutorial" then
+		local T = Config.TUTORIALS or {}
+		if type(arg) == "string" and T[arg] then showTutorial(arg, T[arg], true) end
+		return
+	elseif kind == "Toast" then
 		if type(arg) == "table" then toast(arg.text, arg.title, arg.kind) else toast(tostring(arg)) end
 		return
 	elseif kind == "SetSetting" then
@@ -2442,6 +2589,7 @@ function Panels.EditorSettings()
 		rows = {
 			{ kind = "choice", text = "Editor Mode", key = "edMode", options = { "Simple", "Intermediate", "Advanced" } },
 			{ kind = "choice", text = "Toast Notifications", key = "toasts", options = { "Enabled", "Disabled" } },
+			{ kind = "choice", text = "Tutorials", key = "tutorial", options = { "Enabled", "Disabled" } },
 			{ kind = "choice", text = "Hide Items Palette", key = "edAutoHide", options = { "Enabled", "Disabled" } },
 			{ kind = "slider", text = "Orbit Speed", key = "edOrbitSens", min = 0, max = 1, step = 0.05 },
 			{ kind = "choice", text = "Invert Orbit", key = "edInvertY", options = { "Disabled", "Enabled" } },
@@ -2457,6 +2605,16 @@ function Panels.EditorSettings()
 	})
 end
 
+function Panels.Gameplay()
+	return buildPanel({
+		title = "Gameplay", cells = 7, defaults = true, minBodyCells = 3,
+		rows = {
+			{ kind = "choice", text = "Tutorials", key = "tutorial", options = { "Enabled", "Disabled" } },
+			{ kind = "choice", text = "Toast Notifications", key = "toasts", options = { "Enabled", "Disabled" } },
+		},
+	})
+end
+
 function Panels.Options()
 	return buildPanel({
 		title = "OPTIONS",
@@ -2465,6 +2623,7 @@ function Panels.Options()
 			{ kind = "button", text = "VIDEO", action = function() openPanel(Panels.Video) end },
 			{ kind = "button", text = "KEYBOARD/MOUSE", action = function() openPanel(Panels.Keyboard) end },
 			{ kind = "button", text = "CONTROLLER", action = function() openPanel(Panels.Controller) end },
+			{ kind = "button", text = "GAMEPLAY", action = function() openPanel(Panels.Gameplay) end },
 			{ kind = "button", text = "EDITOR", action = function() openPanel(Panels.EditorSettings) end },
 		},
 	})
