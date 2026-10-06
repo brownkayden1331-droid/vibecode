@@ -7,6 +7,28 @@ C.LOBBY_SPAWN = "MenuSpawn"
 C.COOP_HUB_MAP = "CoopHub"
 C.EDITOR_ORIGIN = Vector3.new(0, 600, 0)
 
+-- ==========================================
+-- INSTANCES (every player / co-op pair gets its own spot in the world, FAR away from everyone else)
+-- ==========================================
+-- Chapters, challenge maps, Workshop chambers and editor playtests are all loaded into
+-- workspace.PortalInstances.Slot_<n>, moved out to that slot's spot. Slots sit on a grid around (but never on) the
+-- lobby at the world origin. Chapter / challenge maps are moved by InstanceOffset (their own height is kept), built
+-- test chambers sit at ChamberOrigin.
+C.INSTANCE_SPACING = 6000 -- studs between two neighbouring slots
+C.INSTANCE_GRID = 8       -- slots per row (8 x 8 = 64 slots, the furthest is ~21000 studs out)
+C.OFFSET_CHAPTER_MAPS = true -- false = chapter / challenge maps stay where they are in ServerStorage (shared spot)
+function C.InstanceOffset(slot)
+	local i = math.max((slot or 1) - 1, 0)
+	local n = C.INSTANCE_GRID
+	local half = (n - 1) / 2 -- half-integer: no slot lands on the lobby
+	local gx, gz = i % n, math.floor(i / n) % n
+	local layer = math.floor(i / (n * n)) -- more players than slots: stack another grid far below
+	return Vector3.new((gx - half) * C.INSTANCE_SPACING, -layer * 2000, (gz - half) * C.INSTANCE_SPACING)
+end
+function C.ChamberOrigin(slot)
+	return C.InstanceOffset(slot) + C.EDITOR_ORIGIN
+end
+
 C.CHAPTERS = {
 	{ title = "The Courtesy Call", map = "Chapter1", preview = "" },
 	{ title = "The Cold Boot", map = "Chapter2", preview = "" },
@@ -74,7 +96,8 @@ C.MAX_SAVE_SLOTS = 20
 C.AUTOSAVE_MINUTES = 5
 
 C.CELL = 10
-C.EDITOR_LIMITS = { x = 28, yMin = -4, yMax = 10, z = 28, cells = 4000, ents = 64 }
+C.EDITOR_LIMITS = { x = 28, yMin = -4, yMax = 10, z = 28, cells = 4000, ents = 96, chips = 16, chipLen = 3000 }
+C.MERGE_PANELS = true -- built chambers join neighbouring identical wall tiles into bigger parts (far fewer parts)
 C.DIRS = { Vector3.xAxis, -Vector3.xAxis, Vector3.yAxis, -Vector3.yAxis, Vector3.zAxis, -Vector3.zAxis }
 C.OFFS = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } }
 C.SURFACES = {
@@ -122,8 +145,21 @@ C.TEAM_COLORS = {
 }
 
 C.DOOR_ASSET = "ChamberLockDoor"
-C.DOOR_RECESS = C.CELL -- doors sit this many studs back in an alcove in the wall (C.CELL = one tile, 0 = flush)
-C.DOOR_OPEN_RADIUS = 14 -- the exit door opens when a player is this close (and its buttons are pressed, if it has any)
+C.DOOR_RECESS = C.CELL -- the wall tile behind a door becomes an alcove this deep (C.CELL = one tile, 0 = no alcove)
+C.DOOR_INSET = 0 -- studs from the room's wall surface to the FRONT of the door (0 = the door frame is flush with the wall,
+                 -- C.DOOR_RECESS = pushed all the way to the back of the alcove like before)
+C.DOOR_OPEN_RADIUS = 14 -- the exit door opens when a player is this close AND it's unlocked
+-- The exit door is LOCKED until something opens it: a button / pedestal / laser catcher / gate connected to it, a chip
+-- that opens it, or the item option "Open without a button" (e[10].free). Walking up to a locked door does nothing.
+-- Doors are turned so their thinnest side faces the room. If yours ends up facing the wall, give the door model in
+-- PortalAssets a MountRotation attribute of (0, 180, 0).
+--
+-- Start / End markers: a Folder (or Model) named "Start" / "End" with a part in it.
+--   * inside the door model: used right where it is (Start = where you spawn, End = the finish trigger)
+--   * in ReplicatedStorage.PortalAssets (or .EditorAssets), ReplicatedStorage, ServerStorage or workspace: cloned and
+--     put in front of the entry / exit door
+--   * none: the plain invisible square spawn pad / finish box
+C.DOOR_MARKERS = { entry = "Start", exit = "End" }
 C.FAITH_PLATE_FLUSH = true -- faith plates sit IN the floor (top flush with the tiles, in a little pit) like Portal 2
 
 -- ALL test elements
@@ -166,6 +202,9 @@ C.ENTITY_TYPES = {
 	gel_orange   = { name = "Propulsion Gel",         mount = "floor" },
 	gel_white    = { name = "Conversion Gel",         mount = "floor" },
 	gel_water    = { name = "Cleansing Gel",          mount = "floor" },
+	-- decoration from the editor's Meshes tab: e[7] = a model name in PortalAssets.Meshes or "mesh:<meshId>[:<textureId>]"
+	-- e[10]: scale (0.25 - 4), spin (degrees), ox / oy / oz (studs, oy = up off the surface)
+	prop         = { name = "Mesh",                   mount = "any",     upright = true, deco = true },
 }
 
 -- ==========================================
@@ -175,7 +214,7 @@ C.ENTITY_TYPES = {
 -- An item with SEVERAL inputs needs ALL of them on (Portal 2). Put an OR gate in front for "any".
 C.LINK_SOURCES = { button = true, pedestal = true, lasercatcher = true, gate = true }
 C.LINK_ONLY_SOURCE = { button = true, pedestal = true, lasercatcher = true } -- nothing can drive these
-C.LINK_BLOCKED = { cube = true, entry = true, gel_blue = true, gel_orange = true, gel_white = true, gel_water = true }
+C.LINK_BLOCKED = { cube = true, entry = true, gel_blue = true, gel_orange = true, gel_white = true, gel_water = true, prop = true }
 function C.CanSource(kind) return C.LINK_SOURCES[kind] == true end
 function C.CanTarget(kind)
 	return C.ENTITY_TYPES[kind] ~= nil and not C.LINK_ONLY_SOURCE[kind] and not C.LINK_BLOCKED[kind]
@@ -236,6 +275,10 @@ end
 function C.GateMode(e)
 	local m = C.Options(e).mode
 	return table.find(C.GATE_TYPES, m) and m or "AND"
+end
+-- exit door set to open without needing a button
+function C.ExitFree(e)
+	return e[1] == "exit" and C.Options(e).free == true
 end
 
 -- sets an attribute on an item and every model inside it (the scripts running the test elements look at the inner model)
@@ -354,6 +397,163 @@ function C.CubeAsset(variant)
 	return f and type(variant) == "string" and f:FindFirstChild(variant) or nil
 end
 
+-- ==========================================
+-- TEXTURES TAB (data.textures[faceKey] = a name in PortalAssets.Textures or "id:<assetId>")
+-- ==========================================
+-- PortalAssets.Textures can hold Textures, Decals, or parts with a Texture / Decal on them (sub-folders are fine).
+local function libraryItems(folderName, accept)
+	local f = assetFolder(folderName)
+	local list, seen = {}, {}
+	if not f then return list end
+	local function walk(p, depth)
+		for _, c in ipairs(p:GetChildren()) do
+			if accept(c) then
+				if not seen[c.Name] then
+					seen[c.Name] = true
+					table.insert(list, { name = c.Name, inst = c, folder = p ~= f and p.Name or nil })
+				end
+			elseif c:IsA("Folder") and depth < 4 then
+				walk(c, depth + 1)
+			end
+		end
+	end
+	walk(f, 0)
+	table.sort(list, function(a, b) return a.name:lower() < b.name:lower() end)
+	return list
+end
+local function textureOf(inst)
+	if inst:IsA("Texture") or inst:IsA("Decal") then return inst end
+	if inst:IsA("BasePart") then return inst:FindFirstChildWhichIsA("Texture") or inst:FindFirstChildWhichIsA("Decal") end
+	return nil
+end
+function C.TextureList()
+	return libraryItems("Textures", function(c) return textureOf(c) ~= nil end)
+end
+-- image id for previews
+function C.TextureImage(v)
+	if type(v) ~= "string" then return "" end
+	local id = v:match("^id:(%d+)$")
+	if id then return "rbxassetid://" .. id end
+	for _, it in ipairs(C.TextureList()) do
+		if it.name == v then
+			local t = textureOf(it.inst)
+			return t and t.Texture or ""
+		end
+	end
+	return ""
+end
+function C.ValidTextureValue(v)
+	return type(v) == "string" and #v <= 60 and (v:match("^id:%d+$") ~= nil or v:match("^[%w _%-%.%(%)]+$") ~= nil)
+end
+function C.TextureTemplate(v)
+	if type(v) ~= "string" then return nil end
+	local id = v:match("^id:(%d+)$")
+	if id then
+		local t = Instance.new("Texture")
+		t.Texture = "rbxassetid://" .. id
+		t.StudsPerTileU, t.StudsPerTileV = C.CELL, C.CELL
+		return t
+	end
+	for _, it in ipairs(C.TextureList()) do
+		if it.name == v then
+			local t = textureOf(it.inst)
+			return t and t:Clone()
+		end
+	end
+	return nil
+end
+-- the side of part p that faces direction dir
+function C.NormalTo(p, dir)
+	local l = p.CFrame:VectorToObjectSpace(dir)
+	local ax, ay, az = math.abs(l.X), math.abs(l.Y), math.abs(l.Z)
+	if ax >= ay and ax >= az then return l.X > 0 and Enum.NormalId.Right or Enum.NormalId.Left end
+	if ay >= az then return l.Y > 0 and Enum.NormalId.Top or Enum.NormalId.Bottom end
+	return l.Z > 0 and Enum.NormalId.Back or Enum.NormalId.Front
+end
+-- puts the texture on the side of p facing roomDir (replacing the tile asset's own textures)
+function C.ApplyTexture(p, v, roomDir)
+	local t = C.TextureTemplate(v)
+	if not t then return nil end
+	for _, d in ipairs(p:GetChildren()) do
+		if d:IsA("Texture") or d:IsA("Decal") then d:Destroy() end
+	end
+	t.Face = C.NormalTo(p, roomDir)
+	t.Parent = p
+	return t
+end
+
+-- ==========================================
+-- MESHES TAB (prop items: e[7] = a name in PortalAssets.Meshes or "mesh:<meshId>[:<textureId>]")
+-- ==========================================
+function C.MeshList()
+	return libraryItems("Meshes", function(c) return c:IsA("Model") or c:IsA("BasePart") end)
+end
+function C.ValidMeshValue(v)
+	return type(v) == "string" and #v <= 60 and (v:match("^mesh:%d+$") ~= nil or v:match("^mesh:%d+:%d+$") ~= nil or v:match("^[%w _%-%.%(%)]+$") ~= nil)
+end
+function C.MeshTemplate(v)
+	if type(v) ~= "string" then return nil end
+	local mid, tid = v:match("^mesh:(%d+):?(%d*)$")
+	if mid then
+		-- MeshPart.MeshId can't be set while the game runs, a SpecialMesh can
+		local p = Instance.new("Part")
+		p.Name = "CustomMesh"
+		p.Size = Vector3.new(4, 4, 4)
+		p.Anchored = true
+		local sm = Instance.new("SpecialMesh")
+		sm.MeshType = Enum.MeshType.FileMesh
+		sm.MeshId = "rbxassetid://" .. mid
+		if tid and tid ~= "" then sm.TextureId = "rbxassetid://" .. tid end
+		sm.Parent = p
+		return p
+	end
+	for _, it in ipairs(C.MeshList()) do
+		if it.name == v then return it.inst end
+	end
+	return nil
+end
+
+-- ==========================================
+-- START / END MARKERS (see C.DOOR_MARKERS)
+-- ==========================================
+local function markerPartIn(holder)
+	if holder:IsA("BasePart") then return holder end
+	return holder:FindFirstChildWhichIsA("BasePart", true)
+end
+-- a Start / End folder somewhere in the game (cloned and put in front of the door)
+function C.MarkerTemplate(name)
+	local roots = {}
+	local assets = ReplicatedStorage:FindFirstChild("PortalAssets")
+	if assets then
+		table.insert(roots, assets)
+		local ea = assets:FindFirstChild("EditorAssets")
+		if ea then table.insert(roots, ea) end
+	end
+	table.insert(roots, ReplicatedStorage)
+	pcall(function() table.insert(roots, game:GetService("ServerStorage")) end)
+	table.insert(roots, workspace)
+	for _, r in ipairs(roots) do
+		local f = r:FindFirstChild(name)
+		if f and (f:IsA("Folder") or f:IsA("Model") or f:IsA("BasePart")) then
+			local p = markerPartIn(f)
+			if p then return p end
+		end
+	end
+	return nil
+end
+-- a Start / End folder inside a built door model (used where it is)
+local function markerInside(root, name)
+	local want = name:lower()
+	for _, d in ipairs(root:GetDescendants()) do
+		if (d:IsA("Folder") or d:IsA("Model")) and d.Name:lower() == want then
+			local p = markerPartIn(d)
+			if p then return p, d end
+		end
+	end
+	return nil
+end
+C.MarkerInside = markerInside
+
 local function eachPart(inst, fn)
 	if inst:IsA("BasePart") then fn(inst) end
 	for _, d in ipairs(inst:GetDescendants()) do
@@ -387,7 +587,8 @@ function C.EntityCFrame(origin, e)
 		local n = -d
 		local ref = math.abs(n.Y) > 0.5 and Vector3.zAxis or Vector3.yAxis
 		local look = -(ref - n * ref:Dot(n)).Unit
-		return CFrame.lookAt(surface, surface + look, n) * CFrame.Angles(0, math.rad(rot * 90), 0)
+		local spin = def.deco and (tonumber(C.Options(e).spin) or 0) or 0
+		return CFrame.lookAt(surface, surface + look, n) * CFrame.Angles(0, math.rad(rot * 90 + spin), 0)
 	end
 	if def and def.mount == "any" then
 		local up = math.abs(d.Y) > 0.5 and Vector3.zAxis or Vector3.yAxis
@@ -647,6 +848,14 @@ local function placeTemplate(template, def, cf, e, opts)
 				target = cf * CFrame.Angles(0, 0, math.rad(90)) * F:Inverse()
 			end
 		end
+	elseif def.needsFloor then
+		-- doors: keep the way the model stands in PortalAssets (up stays up) and turn it so its thinnest horizontal
+		-- side (the way you walk through it) points out of the wall
+		local T = template:GetPivot()
+		local mn0, mx0 = visibleExtents(CFrame.new(T.Position), template)
+		local w = mx0 - mn0
+		local yaw = (w.X < w.Z) and CFrame.Angles(0, math.rad(90), 0) or CFrame.new()
+		target = cf * yaw * T.Rotation
 	elseif def.upright or def.mount == "floor" or def.mount == "ceiling" then
 		-- keep the way the model stands in PortalAssets (so turrets etc. stay upright whatever their pivot is),
 		-- only add the item's turn
@@ -657,6 +866,22 @@ local function placeTemplate(template, def, cf, e, opts)
 		target = target * CFrame.Angles(math.rad(mr.X), math.rad(mr.Y), math.rad(mr.Z))
 	end
 	v:PivotTo(target)
+
+	-- meshes from the Meshes tab: their scale
+	if def.deco then
+		local k = math.clamp(tonumber(C.Options(e).scale) or 1, 0.25, 4)
+		if math.abs(k - 1) > 0.001 then
+			if v:IsA("Model") then
+				pcall(function() v:ScaleTo(v:GetScale() * k) end)
+			elseif v:IsA("BasePart") then
+				local c = v.CFrame
+				v.Size *= k
+				v.CFrame = c
+				local sm = v:FindFirstChildWhichIsA("SpecialMesh")
+				if sm then sm.Scale *= k end
+			end
+		end
+	end
 
 	-- exactly one tile (toxic goo etc.)
 	local gooOffset = Vector3.zero
@@ -676,7 +901,7 @@ local function placeTemplate(template, def, cf, e, opts)
 
 	local seatAs = def.upright and "floor" or def.mount
 	local mn, mx
-	if seatAs == "floor" or seatAs == "ceiling" then
+	if seatAs == "floor" or seatAs == "ceiling" or def.needsFloor then
 		mn, mx = visibleExtents(cf, v) -- turrets, buttons, pedestals, plates, droppers: seat on what you see
 	else
 		local bcf, size = boundsOf(v)
@@ -693,13 +918,21 @@ local function placeTemplate(template, def, cf, e, opts)
 			end
 		elseif seatAs == "ceiling" then
 			shift = Vector3.new(-cx, -mx.Y - 0.05, -cz)
+		elseif def.needsFloor then
+			-- doors: stand on the floor, front of the frame C.DOOR_INSET behind the wall surface (sticks back into the alcove)
+			shift = Vector3.new(-cx, -mn.Y, -mn.Z + math.clamp(C.DOOR_INSET or 0, 0, math.max(def.recess or 0, 0)))
 		elseif seatAs == "wall" then
 			shift = Vector3.new(-cx, -mn.Y, -mx.Z) -- stands on the panel's bottom edge, back against the wall
 		else
 			shift = Vector3.new(-cx, -cy, -mx.Z) -- centred on the panel, back against the surface
 		end
 	end
-	if (def.recess or 0) > 0 then shift += Vector3.new(0, 0, def.recess) end
+	if (def.recess or 0) > 0 and not (def.needsFloor and template:GetAttribute("Seat") ~= false) then shift += Vector3.new(0, 0, def.recess) end
+	if def.deco then
+		local o = C.Options(e)
+		local lim = C.CELL
+		shift += Vector3.new(math.clamp(tonumber(o.ox) or 0, -lim, lim), math.clamp(tonumber(o.oy) or 0, -lim, lim), math.clamp(tonumber(o.oz) or 0, -lim, lim))
+	end
 	if gooOffset ~= Vector3.zero then shift += cf:VectorToObjectSpace(gooOffset) end
 	local mo = template:GetAttribute("MountOffset")
 	if typeof(mo) == "Vector3" then shift += mo end
@@ -813,14 +1046,16 @@ local FACE_TURN = {
 	[Enum.NormalId.Right] = { CFrame.Angles(0, math.pi / 2, 0), "x" },
 	[Enum.NormalId.Left] = { CFrame.Angles(0, -math.pi / 2, 0), "x" },
 }
--- place a panel: cf = the face frame (-Z into the room), size = tile size, thick = thickness
-function C.PlacePanel(p, cf, size, thick)
+-- place a panel: cf = the face frame (-Z into the room), size = tile width (along cf X), thick = thickness,
+-- height = along cf Y (defaults to size: one square tile)
+function C.PlacePanel(p, cf, size, thick, height)
+	height = height or size
 	local turn = FACE_TURN[Enum.NormalId.Front]
 	local tex = p:FindFirstChildWhichIsA("Texture") or p:FindFirstChildWhichIsA("Decal")
 	if tex then turn = FACE_TURN[tex.Face] or turn end
-	if turn[2] == "y" then p.Size = Vector3.new(size, thick, size)
-	elseif turn[2] == "x" then p.Size = Vector3.new(thick, size, size)
-	else p.Size = Vector3.new(size, size, thick) end
+	if turn[2] == "y" then p.Size = Vector3.new(size, thick, height)
+	elseif turn[2] == "x" then p.Size = Vector3.new(thick, height, size)
+	else p.Size = Vector3.new(size, height, thick) end
 	p.CFrame = cf * turn[1]
 end
 
@@ -874,6 +1109,8 @@ function C.BuildEntity(e, origin, opts)
 	local template
 	if kind == "cube" then
 		template = C.CubeAsset(e[7])
+	elseif kind == "prop" then
+		template = C.MeshTemplate(e[7])
 	else
 		template = findAsset(def.asset)
 	end
@@ -967,32 +1204,65 @@ function C.BuildEntity(e, origin, opts)
 		m:AddTag("PortalChamberDoor")
 		m:SetAttribute("DoorType", kind)
 		m:SetAttribute("Open", false)
+		-- exit: locked until a connection / chip opens it, or it's set to open without a button
+		if kind == "exit" then m:SetAttribute("Enabled", o.free == true) end
 		if kind == "exit" then removeNamed(m, "PlayerSpawn") end
-		if not opts.editor then -- the editor doesn't need the invisible helper parts (they'd get in the way of clicking)
+		-- Start / End markers inside the door model: the entry only keeps Start, the exit only End
+		local mine = C.DOOR_MARKERS[kind]
+		local other = C.DOOR_MARKERS[kind == "entry" and "exit" or "entry"]
+		local _, otherHolder = markerInside(m, other)
+		if otherHolder then otherHolder:Destroy() end
+		local marker, holder = markerInside(m, mine)
+		if opts.editor then
+			-- the editor doesn't need the helper parts (they'd get in the way of clicking)
+			if holder then holder:Destroy() end
+		else
+			local roomZ = math.min(front, R - 0.5) -- just in front of the door, in the room
+			local function fromLibrary()
+				local t = C.MarkerTemplate(mine)
+				if not t then return nil end
+				local p = t:Clone()
+				p.Anchored = true
+				-- lying in front of the door, turned the way the part is turned in Studio
+				local depth = math.max(p.Size.Z, p.Size.X)
+				p.CFrame = cf * CFrame.new(0, p.Size.Y / 2 + 0.05, roomZ - depth / 2 - (kind == "entry" and 1.5 or 0.5)) * t.CFrame.Rotation
+				p.Parent = m
+				return p
+			end
 			if kind == "entry" then
 				if not m:FindFirstChild("PlayerSpawn", true) then
-					local spawn = Instance.new("Part")
-					spawn.Name = "PlayerSpawn"
-					spawn.Size = Vector3.new(4, 0.4, 4)
-					spawn.CFrame = cf * CFrame.new(0, 0.2, math.min(front, R - 0.5) - 3.5)
-					spawn.Transparency = 1
-					spawn.CanCollide = false
-					spawn.CanQuery = false
-					spawn.CanTouch = false
-					spawn.Parent = m
+					local spawn = marker or fromLibrary()
+					if spawn then
+						spawn.Name = "PlayerSpawn"
+						spawn.Anchored = true
+					else
+						spawn = Instance.new("Part")
+						spawn.Name = "PlayerSpawn"
+						spawn.Size = Vector3.new(4, 0.4, 4)
+						spawn.CFrame = cf * CFrame.new(0, 0.2, roomZ - 3.5)
+						spawn.Transparency = 1
+						spawn.CanCollide = false
+						spawn.CanQuery = false
+						spawn.CanTouch = false
+						spawn.Parent = m
+					end
+					spawn:SetAttribute("Facing", cf.LookVector) -- spawn looking into the room
 				end
 			else
-				local trig = m:FindFirstChild("Exit", true)
-				if not (trig and trig:IsA("BasePart")) then
+				local trig = marker or m:FindFirstChild("Exit", true)
+				if not (trig and trig:IsA("BasePart")) then trig = fromLibrary() end
+				if not trig then
 					trig = Instance.new("Part")
 					trig.Name = "Exit"
-					-- a generous box right in front of the door: you can't walk up to it without being caught
+					-- a generous box right in front of the door (it only counts once the door is unlocked)
 					trig.Size = Vector3.new(8, 9, 6)
-					trig.CFrame = cf * CFrame.new(0, 4.5, math.min(front, R - 0.5) - 1.5)
+					trig.CFrame = cf * CFrame.new(0, 4.5, roomZ - 1.5)
 					trig.Transparency = 1
 					trig.CanCollide = false
 					trig.Parent = m
 				end
+				trig.Name = "Exit"
+				trig.Anchored = true
 				trig.CanQuery = true
 				trig:AddTag("PortalChamberExit")
 			end
@@ -1105,6 +1375,20 @@ function C.BuildEntity(e, origin, opts)
 	return m
 end
 
+-- can neighbouring tiles of this panel be one big part without the look changing? (Textures that repeat every tile:
+-- yes. Decals stretch over the whole part: no)
+local function mergeable(p)
+	for _, d in ipairs(p:GetChildren()) do
+		if d:IsA("Decal") and not d:IsA("Texture") then return false end
+		if d:IsA("Texture") then
+			for _, s in ipairs({ d.StudsPerTileU, d.StudsPerTileV }) do
+				if s <= 0 or math.abs(C.CELL / s - math.floor(C.CELL / s + 0.5)) > 0.01 then return false end
+			end
+		end
+	end
+	return true
+end
+
 function C.BuildChamber(data, parent, origin, opts)
 	opts = opts or {}
 	local cell = C.CELL
@@ -1114,9 +1398,34 @@ function C.BuildChamber(data, parent, origin, opts)
 	for _, c in ipairs(data.air or {}) do air[C.Key(c[1], c[2], c[3])] = true end
 	local faces = data.faces or {}
 	local colors = type(data.colors) == "table" and data.colors or {}
+	local textures = type(data.textures) == "table" and data.textures or {}
 	local holes = C.HoleFaces(data.ents)
 	opts.air = air -- span items reach to the far wall, faith plates check their target
+	local merge = C.MERGE_PANELS and not opts.editor and opts.merge ~= false
+
+	local function makePanel(fk, f, portalable, wallTiles)
+		local p = panelPart(portalable, f, wallTiles and "wall" or nil)
+		p.Anchored = true
+		p.Name = "Panel"
+		local tex = textures[fk]
+		if tex and C.ValidTextureValue(tex) then
+			-- rotated into place below; the side facing the room gets the texture
+			p:SetAttribute("CustomTexture", tex)
+		end
+		return p
+	end
+	local function finish(p, fk, f, portalable)
+		local tex = p:GetAttribute("CustomTexture")
+		if tex then C.ApplyTexture(p, tex, -C.DIRS[f]) end
+		local tint = C.TileTint(tonumber(colors[fk]), portalable)
+		if tint then C.TintPanel(p, tint) end
+		p:SetAttribute("Portalable", portalable)
+		p:SetAttribute("Face", fk)
+		p.Parent = model
+	end
+
 	local count = 0
+	local planes, sigOk = {}, {} -- merge groups: [plane] = { cells = { [u..","..v] = face }, list = { face } }
 	for _, c in ipairs(data.air or {}) do
 		for f = 1, 6 do
 			local o = C.OFFS[f]
@@ -1127,9 +1436,8 @@ function C.BuildChamber(data, parent, origin, opts)
 					if opts.maxFaces and count > opts.maxFaces then break end
 					local fk = C.FaceKey(c[1], c[2], c[3], f)
 					local portalable, wallTiles = C.FaceInfo(faces[fk])
-					local p = panelPart(portalable, f, wallTiles and "wall" or nil)
-					p.Anchored = true
 					if opts.editor then
+						local p = makePanel(fk, f, portalable, wallTiles)
 						p.Size = Vector3.new(cell - 0.35, cell - 0.35, 0.3)
 						p.CFrame = C.FaceCFrame(origin, c[1], c[2], c[3], f, 0.15)
 						local rim = Instance.new("Part")
@@ -1137,19 +1445,80 @@ function C.BuildChamber(data, parent, origin, opts)
 						rim.CFrame = C.FaceCFrame(origin, c[1], c[2], c[3], f, 1.5)
 						rim.Color = portalable and Color3.fromRGB(198, 201, 198) or Color3.fromRGB(96, 104, 101)
 						rim.Parent = model
+						finish(p, fk, f, portalable)
 					else
-						C.PlacePanel(p, C.FaceCFrame(origin, c[1], c[2], c[3], f, 0.5), cell, 1)
+						local sig = table.concat({ f, tostring(portalable), tostring(wallTiles), tostring(colors[fk]), tostring(textures[fk]) }, "|")
+						local ok = merge
+						if ok and sigOk[sig] == nil then
+							local sample = makePanel(fk, f, portalable, wallTiles)
+							local tex = sample:GetAttribute("CustomTexture")
+							if tex then C.ApplyTexture(sample, tex, -C.DIRS[f]) end
+							sigOk[sig] = mergeable(sample)
+							sample:Destroy()
+						end
+						ok = ok and sigOk[sig]
+						local fcf = C.FaceCFrame(origin, c[1], c[2], c[3], f, 0.5)
+						if ok then
+							local cv = Vector3.new(c[1], c[2], c[3])
+							local u = math.round(cv:Dot(fcf.RightVector))
+							local v = math.round(cv:Dot(fcf.UpVector))
+							local w = math.round(cv:Dot(C.DIRS[f]))
+							local pk = sig .. "|" .. w
+							local pl = planes[pk]
+							if not pl then
+								pl = { cells = {}, list = {}, f = f, portalable = portalable, wallTiles = wallTiles }
+								planes[pk] = pl
+							end
+							local face = { u = u, v = v, fk = fk, cf = fcf }
+							pl.cells[u .. "," .. v] = face
+							table.insert(pl.list, face)
+						else
+							local p = makePanel(fk, f, portalable, wallTiles)
+							C.PlacePanel(p, fcf, cell, 1)
+							finish(p, fk, f, portalable)
+						end
 					end
-					local tint = C.TileTint(tonumber(colors[fk]), portalable)
-					if tint then C.TintPanel(p, tint) end
-					p.Name = "Panel"
-					p:SetAttribute("Portalable", portalable)
-					p:SetAttribute("Face", fk)
-					p.Parent = model
 				end
 			end
 		end
 	end
+
+	-- merged walls: greedy rectangles over each plane (max 16 x 16 tiles per part)
+	local MAXN = 16
+	for _, pl in pairs(planes) do
+		table.sort(pl.list, function(a, b) return a.v < b.v or (a.v == b.v and a.u < b.u) end)
+		local used = {}
+		for _, a in ipairs(pl.list) do
+			if not used[a] then
+				local wn = 1
+				while wn < MAXN do
+					local nb = pl.cells[(a.u + wn) .. "," .. a.v]
+					if not nb or used[nb] then break end
+					wn += 1
+				end
+				local hn = 1
+				while hn < MAXN do
+					local rowOk = true
+					for du = 0, wn - 1 do
+						local nb = pl.cells[(a.u + du) .. "," .. (a.v + hn)]
+						if not nb or used[nb] then rowOk = false break end
+					end
+					if not rowOk then break end
+					hn += 1
+				end
+				for du = 0, wn - 1 do
+					for dv = 0, hn - 1 do used[pl.cells[(a.u + du) .. "," .. (a.v + dv)]] = true end
+				end
+				local far = pl.cells[(a.u + wn - 1) .. "," .. (a.v + hn - 1)]
+				local center = (a.cf.Position + far.cf.Position) / 2
+				local p = makePanel(a.fk, pl.f, pl.portalable, pl.wallTiles)
+				C.PlacePanel(p, CFrame.new(center) * a.cf.Rotation, wn * cell, 1, hn * cell)
+				if wn * hn > 1 then p:SetAttribute("Tiles", wn * hn) end
+				finish(p, a.fk, pl.f, pl.portalable)
+			end
+		end
+	end
+
 	for i, e in ipairs(data.ents or {}) do
 		local ok, ent = pcall(C.BuildEntity, e, origin, opts)
 		if ok and ent then
@@ -1379,6 +1748,190 @@ function C.FaithPoints(path, n, g)
 	return pts, apex
 end
 
+-- ==========================================
+-- ITEM LABELS (chips talk about items by label: button1, exit, gate2 ...) - stored in e[10].label
+-- ==========================================
+C.LABEL_PREFIX = { entry = "entry", exit = "exit", button = "button", pedestal = "pedestal", gate = "gate",
+	cubedropper = "dropper", laser = "laser", lasercatcher = "catcher", laserfield = "field", fizzler = "fizzler",
+	lightbridge = "bridge", tbeam = "funnel", faithplate = "plate", turret = "turret", prop = "mesh" }
+function C.ValidLabel(l)
+	return type(l) == "string" and #l >= 1 and #l <= 20 and l:match("^%a[%w_]*$") ~= nil
+end
+function C.LabelOf(e)
+	local l = C.Options(e).label
+	return C.ValidLabel(l) and l or nil
+end
+-- gives every labellable item without a label one (entry / exit get "entry" / "exit"). Returns true if it changed any.
+function C.AutoLabel(ents)
+	local used, changed = {}, false
+	for _, e in ipairs(ents) do
+		local l = C.LabelOf(e)
+		if l then used[l:lower()] = true end
+	end
+	for _, e in ipairs(ents) do
+		local prefix = C.LABEL_PREFIX[e[1]]
+		if prefix and not C.LabelOf(e) then
+			local name
+			if (e[1] == "entry" or e[1] == "exit") and not used[prefix] then
+				name = prefix
+			else
+				local n = 1
+				while used[(prefix .. n):lower()] do n += 1 end
+				name = prefix .. n
+			end
+			used[name:lower()] = true
+			local o = table.clone(C.Options(e))
+			o.label = name
+			e[10] = o
+			changed = true
+		end
+	end
+	return changed
+end
+
+-- ==========================================
+-- CHIPS (Advanced editor, "My Chips" tab): tiny programs that run in the built chamber
+-- ==========================================
+-- Written either with blocks or as lines. Both are the same program:
+--   when button1 pressed        when <item> pressed / released   (buttons, pedestals, laser catchers, gates)
+--     open exit                 when start                       (the chamber was just built / you spawned)
+--     say "Nice one!"           when every 5                     (every 5 seconds)
+--   when button1 released
+--     wait 2
+--     close exit
+-- Actions: open / close / enable / disable / toggle <item>, drop <dropper>, reverse <funnel>, wait <seconds>,
+--          say <text>.   Lines starting with -- or # are comments.
+C.CHIP_EVENTS = { "pressed", "released", "start", "every" }
+C.CHIP_EVENT_LABELS = { pressed = "is pressed", released = "is released", start = "chamber starts", every = "every ... seconds" }
+C.CHIP_ACTIONS = { "open", "close", "toggle", "enable", "disable", "drop", "reverse", "wait", "say" }
+C.CHIP_ACTION_LABELS = {
+	open = "open", close = "close", toggle = "toggle", enable = "turn on", disable = "turn off",
+	drop = "drop a cube from", reverse = "reverse", wait = "wait (seconds)", say = "show message",
+}
+local CHIP_TARGET = { open = true, close = true, toggle = true, enable = true, disable = true, drop = true, reverse = true }
+C.CHIP_TARGET = CHIP_TARGET
+-- which items an event / action can use
+function C.ChipSourceOk(kind) return C.LINK_SOURCES[kind] == true end
+function C.ChipTargetOk(op, kind)
+	if op == "drop" then return kind == "cubedropper" end
+	if op == "reverse" then return kind == "tbeam" end
+	if CHIP_TARGET[op] then return C.SWITCHABLE[kind] == true end
+	return false
+end
+
+-- text -> { { ev, src, n, acts = { { op, target, n, text } } } }, errors (list of strings)
+function C.ParseChip(src)
+	local rules, errs = {}, {}
+	if type(src) ~= "string" then return rules, { "No program." } end
+	local cur
+	local ln = 0
+	for line in (src .. "\n"):gmatch("(.-)\r?\n") do
+		ln += 1
+		local t = line:gsub("^%s+", ""):gsub("%s+$", "")
+		if t ~= "" and not t:match("^%-%-") and not t:match("^#") then
+			local word, rest = t:match("^(%S+)%s*(.*)$")
+			word = word:lower()
+			if word == "when" then
+				local a, b = rest:match("^(%S+)%s*(%S*)")
+				a = a and a:lower()
+				if a == "start" then
+					cur = { ev = "start", acts = {} }
+				elseif a == "every" then
+					local n = tonumber(b)
+					if not n then table.insert(errs, ("line %d: 'when every' needs a number of seconds"):format(ln)) n = 1 end
+					cur = { ev = "every", n = math.clamp(n, 0.5, 600), acts = {} }
+				elseif a and (b:lower() == "pressed" or b:lower() == "released") then
+					cur = { ev = b:lower(), src = rest:match("^(%S+)"), acts = {} }
+				else
+					table.insert(errs, ("line %d: write 'when <item> pressed', 'when <item> released', 'when start' or 'when every <seconds>'"):format(ln))
+					cur = nil
+				end
+				if cur then table.insert(rules, cur) end
+			elseif not table.find(C.CHIP_ACTIONS, word) then
+				table.insert(errs, ("line %d: I don't know '%s'"):format(ln, word))
+			elseif not cur then
+				table.insert(errs, ("line %d: '%s' has to come after a 'when' line"):format(ln, word))
+			elseif word == "wait" then
+				local n = tonumber(rest)
+				if not n then table.insert(errs, ("line %d: 'wait' needs a number of seconds"):format(ln))
+				else table.insert(cur.acts, { op = "wait", n = math.clamp(n, 0, 60) }) end
+			elseif word == "say" then
+				local msg = rest:match('^"(.*)"$') or rest
+				table.insert(cur.acts, { op = "say", text = msg:sub(1, 120) })
+			else
+				local target = rest:match("^(%S+)")
+				if not target then table.insert(errs, ("line %d: '%s' needs an item, like '%s exit'"):format(ln, word, word))
+				else table.insert(cur.acts, { op = word, target = target }) end
+			end
+		end
+	end
+	return rules, errs
+end
+
+-- rules -> text
+function C.ChipText(rules)
+	local out = {}
+	for _, r in ipairs(rules or {}) do
+		if r.ev == "start" then table.insert(out, "when start")
+		elseif r.ev == "every" then table.insert(out, "when every " .. tostring(r.n or 1))
+		else table.insert(out, ("when %s %s"):format(r.src or "?", r.ev or "pressed")) end
+		for _, a in ipairs(r.acts or {}) do
+			if a.op == "wait" then table.insert(out, "    wait " .. tostring(a.n or 1))
+			elseif a.op == "say" then table.insert(out, ('    say "%s"'):format((a.text or ""):gsub('"', "'")))
+			else table.insert(out, ("    %s %s"):format(a.op, a.target or "?")) end
+		end
+	end
+	return table.concat(out, "\n")
+end
+
+-- checks the item names against a chamber's items. kinds = { [label:lower()] = kind }
+function C.CheckChip(rules, kinds)
+	local errs = {}
+	for _, r in ipairs(rules) do
+		if r.src then
+			local k = kinds[r.src:lower()]
+			if not k then table.insert(errs, ("There's no item called '%s'."):format(r.src))
+			elseif not C.ChipSourceOk(k) then table.insert(errs, ("'%s' can't be pressed (use a button, pedestal, laser catcher or gate)."):format(r.src)) end
+		end
+		for _, a in ipairs(r.acts) do
+			if a.target then
+				local k = kinds[a.target:lower()]
+				if not k then table.insert(errs, ("There's no item called '%s'."):format(a.target))
+				elseif not C.ChipTargetOk(a.op, k) then table.insert(errs, ("Can't '%s' %s."):format(a.op, a.target)) end
+			end
+		end
+	end
+	return errs
+end
+function C.LabelKinds(ents)
+	local kinds = {}
+	for _, e in ipairs(ents or {}) do
+		local l = C.LabelOf(e)
+		if l then kinds[l:lower()] = e[1] end
+	end
+	return kinds
+end
+-- does anything open the exit? (a connection to it, a chip that opens it, or "Open without a button")
+function C.ExitCanOpen(data)
+	local exitE
+	for _, e in ipairs(data.ents or {}) do if e[1] == "exit" then exitE = e end end
+	if not exitE then return false end
+	if C.ExitFree(exitE) then return true end
+	for _, l in ipairs(data.links or {}) do
+		if l[2] == exitE[8] then return true end
+	end
+	local label = (C.LabelOf(exitE) or "exit"):lower()
+	for _, chip in ipairs(type(data.chips) == "table" and data.chips or {}) do
+		local rules = C.ParseChip(chip.src)
+		for _, r in ipairs(rules) do
+			for _, a in ipairs(r.acts) do
+				if (a.op == "open" or a.op == "enable" or a.op == "toggle") and a.target and a.target:lower() == label then return true end
+			end
+		end
+	end
+	return false
+end
+
 function C.DefaultChamber()
 	local air = {}
 	for x = -3, 3 do
@@ -1386,10 +1939,12 @@ function C.DefaultChamber()
 			for y = 0, 2 do table.insert(air, { x, y, z }) end
 		end
 	end
-	return { v = 2, air = air, faces = {}, colors = {}, ents = {
-		{ "entry", -3, 0, 0, 2, 0, false, "entry000" },
-		{ "exit", 3, 0, 0, 1, 0, false, "exit0000" },
-	} }
+	-- a button wired to the exit: the exit stays locked until something opens it
+	return { v = 2, air = air, faces = {}, colors = {}, textures = {}, chips = {}, ents = {
+		{ "entry", -3, 0, 0, 2, 0, false, "entry000", false, { label = "entry" } },
+		{ "exit", 3, 0, 0, 1, 0, false, "exit0000", false, { label = "exit" } },
+		{ "button", 0, 0, 0, 4, 0, false, "button01", false, { label = "button1" } },
+	}, links = { { "button01", "exit0000" } } }
 end
 
 function C.Chapter(i) return C.CHAPTERS[i] end
