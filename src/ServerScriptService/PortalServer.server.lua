@@ -213,6 +213,19 @@ local function placeCharacter(player, cf)
 	local root = waitRoot(player, 5)
 	if not root then return end
 	local char = player.Character
+	-- far away (chambers sit thousands of studs out): with StreamingEnabled the floor isn't on the player's client yet,
+	-- so they'd drop straight through into the void. Stream it in first and hold them still until it's there.
+	local far = (root.Position - cf.Position).Magnitude > 300
+	if far then
+		root.Anchored = true
+		char:PivotTo(cf)
+		if workspace.StreamingEnabled then
+			pcall(function() player:RequestStreamAroundAsync(cf.Position, 8) end)
+		end
+		task.wait(0.2)
+		root = charRoot(player)
+		if not root or player.Character ~= char then return end
+	end
 	root.Anchored = false
 	char:PivotTo(cf)
 	for _, part in ipairs(char:GetDescendants()) do
@@ -1849,6 +1862,12 @@ function Actions.ExitToMainMenu(player)
 		testSpawn[player] = nil
 		if rigChange(player, "Restore", { source = "Editor" }) then waitForRig(player, player.Character, 4) end
 	end
+	if player:GetAttribute("WorkshopMap") then
+		-- the gun was only lent for the Workshop chamber
+		player:SetAttribute("WorkshopMap", nil)
+		testSpawn[player] = nil
+		if rigChange(player, "Restore", { source = "Workshop" }) then waitForRig(player, player.Character, 4) end
+	end
 	local root = charRoot(player)
 	if root then root.Anchored = false end
 	leaveSlot(player) -- the instance goes away once nobody is left in it
@@ -1967,15 +1986,32 @@ end
 
 function Actions.CommunitySingle(player, id)
 	if type(id) ~= "string" then return false, "No chamber picked." end
-	local data = getMapData(id)
-	if not data then return false, "Couldn't download that chamber." end
-	local model = buildChamberMap(data, "workshop_" .. id, player)
+	local raw = getMapData(id)
+	if not raw then return false, "Couldn't download that chamber." end
+	-- stored chambers go through the same checks as the editor's (older saves get upgraded on the way)
+	local data, err = cleanMap(raw)
+	if not data then return false, "That chamber is broken: " .. tostring(err) end
+	local okBuild, model = pcall(buildChamberMap, data, "workshop_" .. id, player)
+	if not okBuild then
+		warn("[PortalServer] building workshop chamber " .. id .. ":", model)
+		return false, "Couldn't build that chamber: " .. tostring(model):gsub("^.-:%d+: ", ""):sub(1, 160)
+	end
+	local cf = entrySpawnCF(model)
+	if not cf then return false, "That chamber has no entry door." end
 	player:SetAttribute("Chapter", nil)
 	player:SetAttribute("WorkshopMap", id)
 	player:SetAttribute("ChallengeStart", os.clock())
 	player:SetAttribute("ChamberDone", nil)
-	local cf = entrySpawnCF(model)
-	if cf then placeCharacter(player, cf) end
+	testSpawn[player] = cf -- dying puts you back at the entry door, not the lobby
+
+	-- Workshop chambers are played with the portal gun (it's only lent if you didn't have it)
+	local root = charRoot(player)
+	if root then root.Anchored = false end
+	local oldChar = player.Character
+	if not (oldChar and oldChar:GetAttribute("HasPortalGun")) and rigChange(player, "Equip", { source = "Workshop", silent = true }) then
+		waitForRig(player, oldChar, 4)
+	end
+	placeCharacter(player, cf)
 	updateIndex(function(list)
 		for _, m in ipairs(list) do if m.id == id then m.plays = (m.plays or 0) + 1 end end
 	end)
@@ -2320,7 +2356,9 @@ Request.OnServerInvoke = function(player, action, arg)
 	local ok, a, b = pcall(fn, player, arg)
 	if not ok then
 		warn("[PortalServer]", action, a)
-		return false, "Something went wrong."
+		-- the real error goes into the popup too (without the script path), so it can be reported
+		local msg = tostring(a):gsub("^.-:%d+: ", "")
+		return false, ("Something went wrong (%s): %s"):format(tostring(action), msg:sub(1, 160))
 	end
 	return a, b
 end
@@ -2754,14 +2792,17 @@ local function onCharacterAdded(player, char)
 	task.spawn(function()
 		local root = waitRoot(player, 5)
 		if not root or player.Character ~= char then return end
-		if player:GetAttribute("EditorPlaytest") and testSpawn[player] then
-			-- died / respawned while testing: back to the entry door
+		local playing = player:GetAttribute("EditorPlaytest") or player:GetAttribute("WorkshopMap")
+		if playing and testSpawn[player] then
+			-- died / respawned while testing or playing a Workshop chamber: back to the entry door, with the gun
 			task.wait(0.1)
 			placeCharacter(player, testSpawn[player])
+			local source = player:GetAttribute("EditorPlaytest") and "Editor" or "Workshop"
 			task.delay(1, function()
 				if player.Character == char and char.Parent and not char:GetAttribute("HasPortalGun")
-					and player:GetAttribute("EditorPlaytest") and os.clock() - (lastRig[player] or 0) > 6 then
-					rigChange(player, "Equip", { source = "Editor", silent = true })
+					and (player:GetAttribute("EditorPlaytest") or player:GetAttribute("WorkshopMap"))
+					and os.clock() - (lastRig[player] or 0) > 6 then
+					rigChange(player, "Equip", { source = source, silent = true })
 				end
 			end)
 		elseif player:GetAttribute("InEditor") then

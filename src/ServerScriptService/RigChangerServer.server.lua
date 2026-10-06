@@ -11,6 +11,7 @@
 --   silent : true = no power-up animation (the editor and co-op use this)
 --   source : "Editor" = the gun is only lent for playtesting; Restore with source "Editor"
 --            gives the normal character back ONLY if the gun came from the editor
+--            "Workshop" = lent for a Workshop chamber; Restore with source "Workshop" takes it back only if it was lent
 --            "Coop"   = co-op made you Atlas / P-body; Restore with source "Coop" puts you back the way you were
 --                       (normal character if co-op gave you the gun, Chell if you already had it)
 --
@@ -182,6 +183,9 @@ local function equip(player, options)
 	if options.source == "Coop" and not hadGun then
 		player:SetAttribute("GunFromCoop", true)
 	end
+	if options.source == "Workshop" and not hadGun then
+		player:SetAttribute("GunFromWorkshop", true)
+	end
 	if not hadGun and not options.silent then -- first pickup only: power-up anim on the client
 		player:SetAttribute("PortalGunPickupTime", workspace:GetServerTimeNow())
 	end
@@ -199,6 +203,7 @@ local function loadNormal(player)
 	player:SetAttribute("HasPortalGun", false)
 	player:SetAttribute("GunFromEditor", nil)
 	player:SetAttribute("GunFromCoop", nil)
+	player:SetAttribute("GunFromWorkshop", nil)
 	player:LoadCharacter()
 
 	local char = player.Character
@@ -218,6 +223,7 @@ local function restore(player, options)
 		return
 	end
 	if options.source == "Editor" and player:GetAttribute("GunFromEditor") ~= true then return end
+	if options.source == "Workshop" and player:GetAttribute("GunFromWorkshop") ~= true then return end
 	if player:GetAttribute("HasPortalGun") ~= true and not (old and old:GetAttribute("HasPortalGun")) then return end
 	loadNormal(player)
 end
