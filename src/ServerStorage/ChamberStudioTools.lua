@@ -20,7 +20,7 @@
 --           delete them to fill it in. A side of a cell with no cell next to it is a wall / floor / ceiling panel.
 --           Panel settings ride on the cell, per side (1 = +X, 2 = -X, 3 = up/ceiling, 4 = down/floor, 5 = +Z, 6 = -Z):
 --             Face_<side>    nothing = portalable, 0 = not portalable, 2 = portalable + wall tiles, 3 = not + wall tiles
---             Color_<side>   tile colour number (Config.TILE_COLORS), Texture_<side>  texture name or "id:<number>"
+--             Color_<side>   tile colour number (Config.TILE_COLORS) or "#rrggbb", Texture_<side>  texture name or "id:<number>"
 --   Items   one small block per item, sitting in its cell against the side it's mounted on. Move it into another
 --           cell to move the item. Attributes:
 --             Kind (button, exit, tbeam, ...), Side (1 - 6, as above), Rot (0 - 3), Variant, Id, Span,
@@ -216,7 +216,7 @@ function T.Read(wb)
 				local fk = Config.FaceKey(x, y, z, f)
 				local fv, cv, tv = p:GetAttribute("Face_" .. f), p:GetAttribute("Color_" .. f), p:GetAttribute("Texture_" .. f)
 				if fv == 0 or fv == 2 or fv == 3 then data.faces[fk] = fv end
-				if tonumber(cv) then data.colors[fk] = tonumber(cv) end
+				if Config.ValidTileColor(cv) then data.colors[fk] = tonumber(cv) or string.lower(cv) end
 				if type(tv) == "string" and tv ~= "" then data.textures[fk] = tv end
 			end
 		end

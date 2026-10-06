@@ -635,8 +635,8 @@ local function cleanMap(data)
 				n += 1
 				if n > L.cells * 6 then break end
 				if type(k) == "string" and k:match("^%-?%d+,%-?%d+,%-?%d+,[1-6]$") then
-					if field == "colors" and tonumber(v) and Config.TILE_COLORS[tonumber(v)] then
-						out.colors[k] = tonumber(v)
+					if field == "colors" and Config.ValidTileColor(v) then
+						out.colors[k] = tonumber(v) or string.lower(v) -- a palette number or a custom "#rrggbb"
 					elseif field == "textures" and Config.ValidTextureValue(v) then
 						out.textures[k] = v
 					end
@@ -964,12 +964,16 @@ runChips = function(root, data, byId, slot)
 	-- variables: shared by every chip in this chamber, start at 0
 	local vars = {}
 	local fxWindow, fxCount = 0, 0
+	local started = os.clock()
+	local callRules = {} -- [name] = { rule, ... }  ("when call <name>")
 	local function value(word)
 		if word == nil then return 0 end
 		local n = tonumber(word)
 		if n then return n end
 		local lw = word:lower()
 		if lw == "true" then return 1 elseif lw == "false" then return 0 end
+		if lw == "time" then return math.floor((os.clock() - started) * 10) / 10 end
+		if lw == "players" then return #slotPlayers(slot) end
 		local t = item(word)
 		if t then -- an item: 1 when it's pressed / on / open
 			return (isOn(t) or t:GetAttribute("Enabled") == true or t:GetAttribute("Open") == true) and 1 or 0
@@ -985,8 +989,60 @@ runChips = function(root, data, byId, slot)
 		return false
 	end
 
-	local act
-	act = function(a)
+	-- faith plates: where the plate is and how it throws (the attributes BuildEntity put on it)
+	local function plateOf(t)
+		for _, d in ipairs(t:GetDescendants()) do
+			if d:GetAttribute("StraightUp") ~= nil then return d end
+		end
+		return t
+	end
+	local function launchVelocity(el, p0)
+		local g = workspace.Gravity
+		if el:GetAttribute("StraightUp") ~= false then
+			local h = tonumber(el:GetAttribute("UpHeight")) or 25
+			return Vector3.new(0, math.sqrt(2 * g * math.max(h, 2)), 0)
+		end
+		local aim, apex = el:GetAttribute("AimPoint"), tonumber(el:GetAttribute("ApexY"))
+		if typeof(aim) ~= "Vector3" or not apex then return Vector3.new(0, math.sqrt(2 * g * 25), 0) end
+		local vy = math.sqrt(2 * g * math.max(apex - p0.Y, 2))
+		local t = vy / g + math.sqrt(2 * math.max(apex - aim.Y, 0) / g)
+		return Vector3.new((aim.X - p0.X) / t, vy, (aim.Z - p0.Z) / t)
+	end
+	local launchParams = OverlapParams.new()
+	launchParams.FilterType = Enum.RaycastFilterType.Exclude
+	local function launch(t)
+		if t:GetAttribute("Enabled") == false then return end
+		local el = plateOf(t)
+		local cf, size
+		if el:IsA("Model") then cf, size = el:GetBoundingBox() else cf, size = t:GetBoundingBox() end
+		launchParams.FilterDescendantsInstances = { t }
+		local box = Vector3.new(math.max(size.X, 6), 6, math.max(size.Z, 6))
+		local seen = {}
+		for _, part in ipairs(workspace:GetPartBoundsInBox(CFrame.new(cf.Position + Vector3.new(0, size.Y / 2 + 3, 0)), box, launchParams)) do
+			local root = part.AssemblyRootPart
+			if root and not seen[root] and not root.Anchored then
+				seen[root] = true
+				local mdl = part:FindFirstAncestorOfClass("Model")
+				local pl = mdl and Players:GetPlayerFromCharacter(mdl)
+				local v = launchVelocity(el, root.Position)
+				if pl then
+					Push:FireClient(pl, "ChipFX", { op = "launch", v = v }) -- the player's own client moves their character
+				elseif not root:GetAttribute("HeldBy") then
+					if root:CanSetNetworkOwnership() then root:SetNetworkOwner(nil) end
+					root.AssemblyLinearVelocity = v
+				end
+			end
+		end
+	end
+	local function calc(a, o, b)
+		if o == "+" then return a + b elseif o == "-" then return a - b elseif o == "*" then return a * b
+		elseif o == "/" then return b ~= 0 and a / b or 0 elseif o == "%" then return b ~= 0 and a % b or 0
+		elseif o == "min" then return math.min(a, b) elseif o == "max" then return math.max(a, b) end
+		return 0
+	end
+
+	local act, runActs
+	act = function(a, depth)
 		if a.op == "set" then
 			vars[a.var:lower()] = value(a.value)
 			return
@@ -998,16 +1054,34 @@ runChips = function(root, data, byId, slot)
 			return
 		elseif a.op == "stop" then
 			return "stop" -- run() ends the rule
+		elseif a.op == "calc" then
+			local r = calc(value(a.a), a.o, value(a.b))
+			if r ~= r or r == math.huge or r == -math.huge then r = 0 end -- NaN / infinity
+			vars[a.var:lower()] = r
+			return
+		elseif a.op == "until" then
+			local deadline = os.clock() + 600
+			while alive() and os.clock() < deadline and not compare(value(a.lhs), a.cmp, value(a.rhs)) do task.wait(0.1) end
+			return
+		elseif a.op == "call" then
+			-- your own functions: runs each "when call <name>" rule here, then carries on
+			if (depth or 0) >= 16 then warn("[PortalServer] chip: calls nested too deep (" .. a.name .. ")") return end
+			for _, r in ipairs(callRules[a.name] or {}) do runActs(r.acts, (depth or 0) + 1) end
+			return
 		elseif a.op == "repeat" then
 			for _ = 1, math.clamp(a.n or 1, 1, 50) do
 				if not alive() or not a.act then return end
-				local w = act(a.act)
+				local w = act(a.act, depth)
 				if w == "stop" then return "stop" end
 				if type(w) == "number" and w > 0 then task.wait(w) end
 			end
 			return
 		elseif a.op == "if" then
-			if a.act and compare(value(a.lhs), a.cmp, value(a.rhs)) then return act(a.act) end
+			if compare(value(a.lhs), a.cmp, value(a.rhs)) then
+				if a.act then return act(a.act, depth) end
+			elseif a.elseAct then
+				return act(a.elseAct, depth)
+			end
 			return
 		elseif a.op == "wait" then
 			return a.n or 0 -- the caller waits
@@ -1034,6 +1108,20 @@ runChips = function(root, data, byId, slot)
 			dropperIn(t):SetAttribute("Drop", true)
 		elseif a.op == "reverse" and kind == "tbeam" then
 			Config.SetAll(t, "Reversed", not (t:GetAttribute("Reversed") == true))
+		elseif (a.op == "forward" or a.op == "backward") and kind == "tbeam" then
+			Config.SetAll(t, "Reversed", a.op == "backward")
+		elseif a.op == "speed" and kind == "tbeam" then
+			Config.SetAll(t, "Speed", math.clamp(tonumber(a.n) or 13, 2, 40))
+		elseif a.op == "launch" and kind == "faithplate" then
+			launch(t)
+		elseif a.op == "color" and kind == "light" then
+			local c = Config.LightColor(a.text)
+			local glow = t:FindFirstChild("Glow", true)
+			if c and glow then
+				glow.Color = c
+				local bulb = glow.Parent
+				if bulb and bulb:IsA("BasePart") then bulb.Color = c end
+			end
 		elseif Config.ChipTargetOk(a.op, kind) then
 			local now = t:GetAttribute("Enabled") == true
 			local want = (a.op == "open" or a.op == "enable") or ((a.op == "toggle") and not now)
@@ -1041,22 +1129,37 @@ runChips = function(root, data, byId, slot)
 		end
 	end
 
+	-- runs a rule's lines in order (waits included); "stop" ends it
+	runActs = function(acts, depth)
+		for i, a in ipairs(acts) do
+			if i > 200 or not alive() then return end
+			local ok, w = pcall(act, a, depth)
+			if not ok then warn("[PortalServer] chip:", w)
+			elseif w == "stop" then return
+			elseif type(w) == "number" and w > 0 then task.wait(w) end
+		end
+	end
 	local function run(rule)
-		task.spawn(function()
-			for i, a in ipairs(rule.acts) do
-				if i > 200 or not alive() then return end
-				local ok, w = pcall(act, a)
-				if not ok then warn("[PortalServer] chip:", w)
-				elseif w == "stop" then return
-				elseif type(w) == "number" and w > 0 then task.wait(w) end
-			end
-		end)
+		task.spawn(runActs, rule.acts, 0)
 	end
 
+	-- functions first, so a "when start" in one chip can call one written in another
+	local parsed = {}
 	for _, chip in ipairs(data.chips) do
 		local rules = Config.ParseChip(chip.src)
+		table.insert(parsed, rules)
 		for _, rule in ipairs(rules) do
-			if rule.ev == "start" then
+			if rule.ev == "call" then
+				callRules[rule.name] = callRules[rule.name] or {}
+				table.insert(callRules[rule.name], rule)
+			end
+		end
+	end
+	for _, rules in ipairs(parsed) do
+		for _, rule in ipairs(rules) do
+			if rule.ev == "call" then
+				-- (only runs when called)
+			elseif rule.ev == "start" then
 				run(rule)
 			elseif rule.ev == "cond" then
 				-- when <lhs> <compare> <rhs>: checked 10 times a second, runs each time it turns true
@@ -1664,7 +1767,9 @@ function Actions.SetSettings(player, s)
 	for k, v in pairs(s) do
 		n += 1
 		if n > 64 then break end
-		if type(k) == "string" and #k < 40 and (type(v) == "string" and #v < 60 or type(v) == "number" or type(v) == "boolean") then
+		-- (custom editor styles / colours are a little longer)
+		local maxLen = (k == "edCustomTheme" or k == "edCustomColors") and 200 or 60
+		if type(k) == "string" and #k < 40 and (type(v) == "string" and #v < maxLen or type(v) == "number" or type(v) == "boolean") then
 			clean[k] = v
 		end
 	end

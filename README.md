@@ -60,6 +60,14 @@ Right-click a funnel › **Button action**: *Reverse it* (Portal 2) or *Turn it 
 Flying into a funnel stops you mid-air and carries you (TestElementsClient: swept check so you can't fly through it at speed, momentum killed on entry; `CATCH_SWEEP` / `CATCH_STOP` at the top).
 TestElementsServer now drops cubes into the chamber's slot map (`workspace.PortalInstances.Slot_<n>`), so they're cleaned up with it.
 
+## Chips and items
+Chips can drive more items: `launch plate1` (aerial faith plates throw whoever stands on them, and cubes, along their arc), `forward` / `backward` / `speed <funnel> <n>`, `color <light> <name | #hex>`, and `enable` / `disable` on faith plates (a switched-off plate gets `Enabled = false` and its parts stop touching — if your FaithPlateServer uses something other than Touched, have it skip plates with `Enabled == false`).
+More code: `if ... then ... else ...`, `wait until <a> <cmp> <b>`, `calc <var> <a> <+ - * / % min max> <b>`, functions (`when call <name>` / `call <name>`, across chips), built-in values `time` and `players`.
+
+## Editor styles + custom colours
+Styles: Classic, Dark, Blueprint, High Contrast, **SCP: CB**, **Unity**, **Blender**, Roblox Studio, Terminal, Solarized, Synthwave, Aperture '70s, Aperture Clean, Midnight and **Custom** (File › Editor style › Make a custom style… — 12 colours, live preview, saved in `Setting_edCustomTheme`). New styles are 12 colours each in `THEMES` in PortalMapEditor.
+Intermediate / Advanced: **Tile color › Custom colour…** (and the Light's colour menu) opens a colour picker; tiles store `"#rrggbb"`, the last 8 are kept as recent colours.
+
 ## Duplicate, export, import, Studio
 - **Ctrl+D** / right-click › **Duplicate**: copies the item (same options, new label) to the nearest free panel facing the same way.
 - **File › Export**: the chamber as text. **File › Import**: paste that text back (replaces the open chamber; Ctrl+Z undoes).

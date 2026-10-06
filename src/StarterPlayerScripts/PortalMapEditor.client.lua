@@ -2834,6 +2834,11 @@ do
 								if op == "tint" then a.text = Config.CHIP_TINTS[a.text or ""] ~= nil and a.text or "blue" end
 								if op == "countdown" then a.n = a.n or 30 end
 								if op == "random" then a.var, a.lo, a.hi = a.var or "roll", a.lo or 1, a.hi or 6 end
+								if op == "speed" then a.n = a.n or 20 end
+								if op == "color" then a.text = Config.LightColor(a.text or "") and a.text or "blue" end
+								if op == "calc" then a.var, a.a, a.o, a.b = a.var or "total", a.a or "score", a.o or "*", a.b or "2" end
+								if op == "call" then a.name = a.name or "reset" end
+								if op == "until" then a.lhs, a.cmp, a.rhs = a.lhs or "score", a.cmp or ">=", a.rhs or "3" end
 								if op == "repeat" then
 									a.n = math.clamp(math.floor(tonumber(a.n) or 3), 1, 50)
 									a.act = a.act or { op = "drop" }
@@ -2854,11 +2859,66 @@ do
 				end
 			end
 			-- the fields after the op, from x (w = room left)
+			local function cmpDropdown(row, x, y, get, set)
+				dropdown(row, x, y, 64, get() or "==", function()
+					local list = {}
+					for _, c in ipairs(Config.CHIP_COMPARE) do
+						table.insert(list, { text = c, icon = "radio", checked = get() == c, fn = function() set(c) render() end })
+					end
+					return list
+				end)
+			end
 			local function argFields(row, x, y, a, w)
-				if Config.CHIP_TARGET[a.op] then
+				if a.op == "speed" or a.op == "color" then
+					-- an item + one more thing
+					dropdown(row, x, y, 150, a.target or "pick an item", function()
+						return pickItems(a.target, function(k) return Config.ChipTargetOk(a.op, k) end, function(v) a.target = v end)
+					end)
+					if a.op == "speed" then
+						field(row, x + 158, y, 70, a.n or 20, function(v) a.n = math.clamp(v, 2, 40) end, true)
+						label(row, x + 234, y, 90, "studs/s")
+					else
+						dropdown(row, x + 158, y, 130, a.text or "blue", function()
+							local list = {}
+							for _, n in ipairs(Config.LIGHT_ORDER) do
+								table.insert(list, { text = n:lower(), swatch = Config.LIGHT_COLORS[n], checked = a.text == n:lower(), fn = function() a.text = n:lower() render() end })
+							end
+							table.insert(list, { text = "Custom colour...", icon = "glyph", glyph = "✎", fn = function()
+								X.colorPicker({ title = "Light colour", color = Config.LightColor(a.text or "") or Color3.new(1, 1, 1), presets = X.recentColors(),
+									onDone = function(c) a.text = Config.ToHex(c) X.addRecentColor(c) render() end })
+							end })
+							return list
+						end)
+					end
+				elseif Config.CHIP_TARGET[a.op] then
 					dropdown(row, x, y, w, a.target or "pick an item", function()
 						return pickItems(a.target, function(k) return Config.ChipTargetOk(a.op, k) end, function(v) a.target = v end)
 					end)
+				elseif a.op == "calc" then
+					local nb = field(row, x, y, 90, a.var or "total", function(v)
+						v = v:gsub("%s", "")
+						if Config.ValidVarName(v) then a.var = v else flash("Variable names: letters, numbers and _, starting with a letter.") render() end
+					end, false)
+					nb.PlaceholderText = "variable"
+					label(row, x + 94, y, 16, "=")
+					field(row, x + 110, y, 76, a.a or "0", function(v) v = v:gsub("%s", "") if v ~= "" then a.a = v end end, false)
+					dropdown(row, x + 190, y, 64, a.o or "+", function()
+						local list = {}
+						for _, o in ipairs(Config.CHIP_CALC_OPS) do
+							table.insert(list, { text = o, icon = "radio", checked = a.o == o, fn = function() a.o = o render() end })
+						end
+						return list
+					end)
+					field(row, x + 258, y, 76, a.b or "0", function(v) v = v:gsub("%s", "") if v ~= "" then a.b = v end end, false)
+				elseif a.op == "call" then
+					field(row, x, y, 160, a.name or "reset", function(v)
+						v = v:gsub("%s", ""):lower()
+						if v:match("^[%a_][%w_]*$") then a.name = v else render() end
+					end, false).PlaceholderText = "function name"
+				elseif a.op == "until" then
+					field(row, x, y, 110, a.lhs or "score", function(v) v = v:gsub("%s", "") if v ~= "" then a.lhs = v end end, false).PlaceholderText = "variable or item"
+					cmpDropdown(row, x + 116, y, function() return a.cmp end, function(c) a.cmp = c end)
+					field(row, x + 186, y, 80, a.rhs or "3", function(v) v = v:gsub("%s", "") if v ~= "" then a.rhs = v end end, false)
 				elseif a.op == "wait" then
 					field(row, x, y, 90, a.n or 1, function(v) a.n = math.clamp(v, 0, 60) end, true)
 					label(row, x + 98, y, 80, "seconds")
@@ -2919,7 +2979,10 @@ do
 					end, false)
 				end
 			end
-			local function rowHeight(a) return (a.op == "if" or a.op == "repeat") and 72 or 34 end
+			local function rowHeight(a)
+				if a.op == "if" and a.elseAct then return 108 end
+				return (a.op == "if" or a.op == "repeat") and 72 or 34
+			end
 
 			for ri, r in ipairs(rules) do
 				local h = 44 + 40
@@ -2932,6 +2995,12 @@ do
 						return pickItems(r.src, Config.ChipSourceOk, function(v) r.src = v end)
 					end)
 					ex = 310
+				elseif r.ev == "call" then
+					field(blk, 70, 7, 160, r.name or "reset", function(v)
+						v = v:gsub("%s", ""):lower()
+						if v:match("^[%a_][%w_]*$") then r.name = v else render() end
+					end, false).PlaceholderText = "function name"
+					ex = 240
 				elseif r.ev == "cond" then
 					-- when <variable | item> <compare> <value>
 					field(blk, 70, 7, 120, r.lhs or "score", function(v) v = v:gsub("%s", "") if v ~= "" then r.lhs = v end end, false).PlaceholderText = "variable or item"
@@ -2950,7 +3019,8 @@ do
 					for _, ev in ipairs(Config.CHIP_EVENTS) do
 						table.insert(list, { text = Config.CHIP_EVENT_LABELS[ev], icon = "radio", checked = r.ev == ev, fn = function()
 							r.ev = ev
-							if ev == "start" or ev == "every" or ev == "cond" then r.src = nil end
+							if ev == "start" or ev == "every" or ev == "cond" or ev == "call" then r.src = nil end
+							if ev == "call" then r.name = r.name or "reset" end
 							if ev == "every" then r.n = r.n or 5 end
 							if ev == "cond" then r.lhs, r.cmp, r.rhs = r.lhs or "score", r.cmp or ">=", r.rhs or "3" end
 							render()
@@ -2993,6 +3063,14 @@ do
 						a.act = a.act or { op = "open" }
 						dropdown(row, 110, 38, 170, Config.CHIP_ACTION_LABELS[a.act.op] or a.act.op, opMenu(a.act, false))
 						argFields(row, 288, 38, a.act, 310)
+						if a.elseAct then
+							label(row, 46, 74, 60, "ELSE")
+							dropdown(row, 110, 74, 170, Config.CHIP_ACTION_LABELS[a.elseAct.op] or a.elseAct.op, opMenu(a.elseAct, false))
+							argFields(row, 288, 74, a.elseAct, 310)
+							tinyButton(row, 46 + 560, 74, 34, "✕", function() a.elseAct = nil render() end)
+						else
+							tinyButton(row, 466, 2, 80, "+ ELSE", function() a.elseAct = { op = "close" } render() end)
+						end
 					else
 						argFields(row, 256, 2, a, 340)
 					end
@@ -3399,8 +3477,7 @@ loadData = function(data)
 	for _, c in ipairs(data.air or {}) do E.air[key(c[1], c[2], c[3])] = true end
 	for k, v in pairs(data.faces or {}) do if v == 0 or v == 2 or v == 3 then E.faces[k] = v end end
 	for k, v in pairs(type(data.colors) == "table" and data.colors or {}) do
-		local idx = tonumber(v)
-		if idx and Config.TILE_COLORS[idx] then E.colors[k] = idx end
+		if Config.ValidTileColor(v) then E.colors[k] = tonumber(v) or string.lower(v) end
 	end
 	for _, e in ipairs(data.ents or {}) do
 		local c = table.clone(e)
@@ -3490,6 +3567,172 @@ do
 			X.toast("Imported " .. (#E.ents) .. " items. Ctrl+Z undoes it.", "Import", "good")
 		end, true)
 		Dlg.dialogButton(d, 196, 372, "CANCEL", closeDialog)
+	end
+end
+
+-- ----- colour picker (custom tile / light colours, the theme creator) -----
+-- X.colorPicker({ title = "...", color = Color3, presets = { Color3 ... }, onChange = fn(c), onDone = fn(c), onCancel = fn() })
+do
+	local picker
+	local function closePicker()
+		if picker then picker:Destroy() picker = nil end
+	end
+	X.closePicker = closePicker
+	local function hsv(h, s2, v) return Color3.fromHSV(math.clamp(h, 0, 1), math.clamp(s2, 0, 1), math.clamp(v, 0, 1)) end
+
+	function X.colorPicker(o)
+		closePicker()
+		local h, sat, val = (o.color or Color3.new(1, 1, 1)):ToHSV()
+		local W2, H2 = 460, 400
+		local f = ui(new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = px(W2, H2), BackgroundColor3 = C.CTX_BG,
+			BorderSizePixel = 0, Active = true, ZIndex = 60, Parent = canvas }))
+		picker = f
+		new("UIStroke", { Color = C.CTX_EDGE, Thickness = 1, Parent = f })
+		local head = new("Frame", { Size = px(W2, 26), BackgroundColor3 = C.CTX_HEAD, BorderSizePixel = 0, ZIndex = 61, Parent = f })
+		new("TextLabel", { Size = px(W2 - 12, 26), BackgroundTransparency = 1, Text = string.upper(o.title or "Colour"), FontFace = FONT.UI_REG, TextSize = 15,
+			TextColor3 = rgb(236), TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 62, Parent = head })
+
+		-- saturation (left -> right) / brightness (top -> bottom) square, tinted by the hue
+		local sq = new("Frame", { Position = px(16, 40), Size = px(240, 200), BackgroundColor3 = hsv(h, 1, 1), BorderSizePixel = 0, Active = true, ZIndex = 61, Parent = f })
+		local wht = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = rgb(255), BorderSizePixel = 0, ZIndex = 62, Parent = sq })
+		new("UIGradient", { Transparency = NumberSequence.new(0, 1), Parent = wht })
+		local blk = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = rgb(0), BorderSizePixel = 0, ZIndex = 63, Parent = sq })
+		new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new(1, 0), Parent = blk })
+		local dot = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = px(12, 12), BackgroundTransparency = 1, ZIndex = 64, Parent = sq })
+		new("UIStroke", { Color = rgb(255), Thickness = 2, Parent = dot })
+		new("UICorner", { CornerRadius = UDim.new(1, 0), Parent = dot })
+		-- hue bar
+		local bar = new("Frame", { Position = px(16, 250), Size = px(240, 18), BackgroundColor3 = rgb(255), BorderSizePixel = 0, Active = true, ZIndex = 61, Parent = f })
+		local keys = {}
+		for i = 0, 6 do table.insert(keys, ColorSequenceKeypoint.new(i / 6, Color3.fromHSV((i / 6) % 1, 1, 1))) end
+		new("UIGradient", { Color = ColorSequence.new(keys), Parent = bar })
+		local hueMark = new("Frame", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromScale(h, 0), Size = px(4, 18), BackgroundColor3 = rgb(255),
+			BorderSizePixel = 0, ZIndex = 62, Parent = bar })
+		new("UIStroke", { Color = rgb(0), Thickness = 1, Parent = hueMark })
+
+		local preview = new("Frame", { Position = px(272, 40), Size = px(172, 70), BorderSizePixel = 0, ZIndex = 61, Parent = f })
+		new("UIStroke", { Color = C.CTX_EDGE, Thickness = 1, Parent = preview })
+		local function box(y, label)
+			new("TextLabel", { Position = px(272, y), Size = px(50, 30), BackgroundTransparency = 1, Text = label, FontFace = FONT.UI_REG, TextSize = 16,
+				TextColor3 = C.CTX_TEXT, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 61, Parent = f })
+			local b = new("TextBox", { Position = px(322, y), Size = px(122, 30), BackgroundColor3 = rgb(255), BorderSizePixel = 0, Text = "", ClearTextOnFocus = false,
+				Font = Enum.Font.Code, TextSize = 16, TextColor3 = rgb(20), ZIndex = 61, Parent = f })
+			return b
+		end
+		local hexBox = box(122, "Hex")
+		local rB, gB, bB = box(158, "R"), box(194, "G"), box(230, "B")
+
+		local function current() return hsv(h, sat, val) end
+		local busy = false
+		local function refresh(fromBoxes)
+			local c = current()
+			sq.BackgroundColor3 = hsv(h, 1, 1)
+			dot.Position = UDim2.fromScale(sat, 1 - val)
+			hueMark.Position = UDim2.fromScale(h, 0)
+			preview.BackgroundColor3 = c
+			if not fromBoxes then
+				busy = true
+				hexBox.Text = Config.ToHex(c)
+				rB.Text, gB.Text, bB.Text = tostring(math.floor(c.R * 255 + 0.5)), tostring(math.floor(c.G * 255 + 0.5)), tostring(math.floor(c.B * 255 + 0.5))
+				busy = false
+			end
+			if o.onChange then o.onChange(c) end
+		end
+		local function setColor(c, fromBoxes)
+			local nh, ns, nv = c:ToHSV()
+			if ns > 0.001 and nv > 0.001 then h = nh end -- greys keep the hue you had
+			sat, val = ns, nv
+			refresh(fromBoxes)
+		end
+		hexBox.FocusLost:Connect(function()
+			local c = Config.ParseHex(hexBox.Text)
+			if c then setColor(c) else refresh() end
+		end)
+		for _, b in ipairs({ rB, gB, bB }) do
+			b.FocusLost:Connect(function()
+				if busy then return end
+				local r, g, bl = tonumber(rB.Text), tonumber(gB.Text), tonumber(bB.Text)
+				if r and g and bl then setColor(Color3.fromRGB(math.clamp(r, 0, 255), math.clamp(g, 0, 255), math.clamp(bl, 0, 255))) else refresh() end
+			end)
+		end
+
+		-- dragging in the square / along the bar
+		local drag
+		local function frac(g)
+			local m = pointerScreen() - GuiService:GetGuiInset()
+			local rel = (m - g.AbsolutePosition) / g.AbsoluteSize
+			return math.clamp(rel.X, 0, 1), math.clamp(rel.Y, 0, 1)
+		end
+		local function update()
+			if drag == sq then
+				local x, y = frac(sq)
+				sat, val = x, 1 - y
+			elseif drag == bar then
+				h = (frac(bar))
+			end
+			refresh()
+		end
+		for _, g in ipairs({ sq, bar }) do
+			g.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					drag = g
+					update()
+				end
+			end)
+		end
+		local c1 = UserInputService.InputChanged:Connect(function(input)
+			if drag and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then update() end
+		end)
+		local c2 = UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then drag = nil end
+		end)
+		f.Destroying:Connect(function() c1:Disconnect() c2:Disconnect() end)
+
+		-- presets (the tile palette + your recent custom colours)
+		local presets = o.presets or {}
+		for i, c in ipairs(presets) do
+			if i > 18 then break end
+			local sw = new("TextButton", { Position = px(16 + ((i - 1) % 9) * 27, 280 + math.floor((i - 1) / 9) * 27), Size = px(23, 23), BackgroundColor3 = c,
+				BorderSizePixel = 0, Text = "", AutoButtonColor = true, ZIndex = 61, Parent = f })
+			new("UIStroke", { Color = C.CTX_EDGE, Thickness = 1, Parent = sw })
+			onClick(sw, function() setColor(c) sfx("Click") end)
+		end
+
+		local function button(x, text, fn, blue)
+			local b = new("TextButton", { Position = px(x, H2 - 50), Size = px(140, 36), BackgroundColor3 = blue and rgb(77, 128, 151) or rgb(200, 206, 203), BorderSizePixel = 0,
+				Text = text, FontFace = FONT.P2, TextSize = 20, TextColor3 = blue and rgb(245) or rgb(20), ZIndex = 61, Parent = f })
+			hoverable(b, function() sound("SOUND_HOVER") end, function() end)
+			onClick(b, function() sfx("Click") fn() end)
+		end
+		button(W2 - 300, "OK", function()
+			local c = current()
+			closePicker()
+			if o.onDone then o.onDone(c) end
+		end, true)
+		button(W2 - 152, "CANCEL", function()
+			closePicker()
+			if o.onCancel then o.onCancel() end
+		end)
+		refresh()
+		return f
+	end
+
+	-- recent custom colours (saved with your options, Setting_edCustomColors = "rrggbb,rrggbb,...")
+	function X.recentColors()
+		local list = {}
+		for h6 in string.gmatch(ES("edCustomColors", ""), "%x%x%x%x%x%x") do
+			local c = Config.ParseHex(h6)
+			if c then table.insert(list, c) end
+		end
+		return list
+	end
+	function X.addRecentColor(c)
+		local hx = Config.ToHex(c):sub(2)
+		local out = { hx }
+		for h6 in string.gmatch(ES("edCustomColors", ""), "%x%x%x%x%x%x") do
+			if h6:lower() ~= hx and #out < 8 then table.insert(out, h6:lower()) end
+		end
+		menuRequest("SetSetting", { key = "edCustomColors", value = table.concat(out, ",") })
 	end
 end
 
@@ -3661,6 +3904,10 @@ local MENUS = {
 						menuRequest("SetSetting", { key = "edStyle", value = st })
 					end })
 				end
+				if #list > 0 then list[#list].sep = true end
+				table.insert(list, { text = "Make a custom style...", icon = "glyph", glyph = "✎", fn = function()
+					if X.themeCreator then X.themeCreator() end
+				end })
 				return list
 			end },
 			{ text = "Editor mode", sub = function()
@@ -4160,6 +4407,24 @@ local function surfaceSection()
 		for i, tc in ipairs(Config.TILE_COLORS) do
 			table.insert(list, { text = tc.name, swatch = tc.color, checked = not mixed and color == i, fn = function() setTileColor(i) end })
 		end
+		if Pal.level() >= 2 then
+			-- Intermediate / Advanced: any colour you like ("#rrggbb"), plus the last few you used
+			if #list > 0 then list[#list].sep = true end
+			for _, c in ipairs(X.recentColors()) do
+				local hx = Config.ToHex(c)
+				table.insert(list, { text = hx, swatch = c, checked = not mixed and color == hx, fn = function() setTileColor(hx) end })
+			end
+			table.insert(list, { text = "Custom colour...", icon = "glyph", glyph = "✎", fn = function()
+				local presets = {}
+				for _, tc in ipairs(Config.TILE_COLORS) do table.insert(presets, tc.color) end
+				for _, c in ipairs(X.recentColors()) do table.insert(presets, c) end
+				X.colorPicker({ title = "Tile colour", color = (not mixed and Config.TileColor(color)) or Color3.fromRGB(230, 230, 230), presets = presets,
+					onDone = function(c)
+						setTileColor(Config.ToHex(c))
+						X.addRecentColor(c)
+					end })
+			end })
+		end
 		return list
 	end })
 	table.insert(items, { text = "Pull surface", shortcut = "+", icon = "plus", fn = function() moveSurfaces(1) end })
@@ -4280,6 +4545,14 @@ itemMenu = function(x, y)
 			for _, n in ipairs(Config.LIGHT_ORDER) do
 				table.insert(list, { text = n, swatch = Config.LIGHT_COLORS[n], checked = (o.mode or "White") == n, fn = function() setOption(index, "mode", n) end })
 			end
+			list[#list].sep = true
+			table.insert(list, { text = "Custom colour...", icon = "glyph", glyph = "✎", fn = function()
+				X.colorPicker({ title = "Light colour", color = Config.LightColor(o.mode) or Color3.new(1, 1, 1), presets = X.recentColors(),
+					onDone = function(c)
+						setOption(index, "mode", Config.ToHex(c))
+						X.addRecentColor(c)
+					end })
+			end })
 			return list
 		end })
 	elseif e[1] == "pushzone" then
@@ -5210,7 +5483,88 @@ do
 				SEL_WHITE = rgb(255, 230, 0), SEL_BLACK = rgb(255, 170, 0), BACKDROP = rgb(90) },
 		},
 	}
+	-- ----- themes from a handful of colours (the new styles and your own, File > Editor style > Make a custom style) -----
+	-- roles: out = the outer bar, bg = panels / menus, field = lists + text boxes, head = menu headers, text, dim = quieter
+	-- text + icons, accent = highlight, accent2 = "on" icons, edge = outlines, button, white / black = the room's tiles,
+	-- backdrop = behind the room
+	local ROLES = { "out", "bg", "field", "head", "text", "dim", "accent", "edge", "button", "white", "black", "backdrop" }
+	local ROLE_NAMES = { out = "Outer bar", bg = "Panels + menus", field = "Lists + text boxes", head = "Menu headers", text = "Text",
+		dim = "Quiet text + icons", accent = "Highlight", edge = "Outlines", button = "Buttons", white = "Room: white tiles",
+		black = "Room: dark tiles", backdrop = "Room: backdrop" }
+	X.THEME_ROLES, X.THEME_ROLE_NAMES = ROLES, ROLE_NAMES
+	local function makeTheme(p)
+		local c = {}
+		for k, v in pairs(p) do c[k] = typeof(v) == "Color3" and v or Config.ParseHex(v) end
+		local function mix(a, b, t) return a:Lerp(b, t) end
+		local accent2 = c.accent2 or c.accent
+		return {
+			gui = guiMap({
+				OUT = c.out, STRIP_OPEN = mix(c.out, c.text, 0.1), STRIP_SHUT = mix(c.out, c.text, 0.05), GRIP = c.dim,
+				MENU_TEXT = c.dim, MENU_HI = c.text, ICON = c.dim, ICON_HI = c.text, ICON_ON = accent2,
+				PAL_BG = c.bg, PAL_EDGE = c.edge, TILE = mix(c.bg, c.text, 0.05), TILE_LINE = mix(c.bg, c.text, 0.15), TILE_HI = mix(c.bg, c.accent, 0.5),
+				CTX_BG = c.bg, CTX_HEAD = c.head, CTX_ICONCOL = mix(c.bg, c.text, 0.07), CTX_EDGE = c.edge,
+				CTX_HI = mix(c.bg, c.accent, 0.6), CTX_TEXT = c.text, CTX_SHORT = c.dim, CTX_SEP = mix(c.bg, c.text, 0.25),
+			}, {
+				{ rgb(250), c.field }, { rgb(255), c.field }, { rgb(200, 206, 203), c.button },
+				{ rgb(214, 218, 216), mix(c.button, c.bg, 0.3) }, { rgb(206, 208, 206), mix(c.bg, c.out, 0.5) }, { rgb(232), mix(c.button, c.text, 0.12) },
+				{ rgb(240, 240, 236), c.button }, { rgb(232, 234, 232), c.field }, { rgb(77, 128, 151), c.accent },
+				{ rgb(20), c.text }, { rgb(25), c.text }, { rgb(30), c.text }, { rgb(40), c.text }, { rgb(60), mix(c.text, c.dim, 0.4) },
+				{ rgb(95), c.dim }, { rgb(105), c.dim }, { rgb(110), c.dim }, { rgb(130), c.dim }, { rgb(150), c.dim },
+			}),
+			room = { WHITE = c.white, BLACK = c.black, RIM_WHITE = mix(c.white, c.black, 0.25), RIM_BLACK = mix(c.black, c.white, 0.15),
+				SHELL = mix(c.black, Color3.new(0, 0, 0), 0.4), BACKDROP = c.backdrop },
+		}
+	end
+	local THEMES = {
+		["SCP: CB"] = { out = "0b0b0b", bg = "1a1a1a", field = "0f0f0f", head = "000000", text = "e8e8e0", dim = "8f8f88", accent = "7a1010",
+			accent2 = "c42020", edge = "4a4a4a", button = "2b2b2b", white = "8d8d86", black = "3f3f3c", backdrop = "050505" },
+		Unity = { out = "191919", bg = "383838", field = "2a2a2a", head = "282828", text = "d2d2d2", dim = "999999", accent = "2c5d87",
+			accent2 = "4c9be8", edge = "1a1a1a", button = "4a4a4a", white = "c4c4c4", black = "4a4a4a", backdrop = "2e3238" },
+		Blender = { out = "1d1d1d", bg = "303030", field = "1d1d1d", head = "242424", text = "e6e6e6", dim = "9a9a9a", accent = "4772b3",
+			accent2 = "ed9e3a", edge = "161616", button = "545454", white = "a8a8a8", black = "474747", backdrop = "393939" },
+		["Roblox Studio"] = { out = "1f1f1f", bg = "2e2e2e", field = "252525", head = "1b1b1b", text = "cccccc", dim = "9e9e9e", accent = "0e64ad",
+			accent2 = "00a2ff", edge = "1a1a1a", button = "3c3c3c", white = "f2f3f3", black = "6a6a6a", backdrop = "7fa6d6" },
+		Terminal = { out = "000000", bg = "050a05", field = "000000", head = "0a140a", text = "33ff66", dim = "1f9a42", accent = "0f4a1f",
+			accent2 = "33ff66", edge = "1f9a42", button = "0d200f", white = "1f5a2c", black = "0c2412", backdrop = "000000" },
+		Solarized = { out = "073642", bg = "fdf6e3", field = "eee8d5", head = "073642", text = "073642", dim = "93a1a1", accent = "268bd2",
+			accent2 = "b58900", edge = "93a1a1", button = "e4ddc8", white = "fdf6e3", black = "586e75", backdrop = "002b36" },
+		Synthwave = { out = "120d1a", bg = "241b2f", field = "1a1325", head = "0d0913", text = "f8f8f2", dim = "b6a0d0", accent = "ff2e97",
+			accent2 = "00e5ff", edge = "3b2a50", button = "3b2a50", white = "e8d6ff", black = "2e1f45", backdrop = "120d1a" },
+		["Aperture '70s"] = { out = "1e150f", bg = "3a2a1e", field = "2a1e15", head = "1e150f", text = "f1deb4", dim = "b89b70", accent = "d9822b",
+			accent2 = "f2b33d", edge = "5a4230", button = "5a4230", white = "d6c7a1", black = "5b4a3a", backdrop = "24180f" },
+		["Aperture Clean"] = { out = "2b2b2b", bg = "f4f4f4", field = "ffffff", head = "2b2b2b", text = "1e1e1e", dim = "7a7a7a", accent = "ff9a00",
+			accent2 = "27a7d8", edge = "2b2b2b", button = "dcdcdc", white = "ffffff", black = "3b3f40", backdrop = "9aa3a6" },
+		Midnight = { out = "0b1020", bg = "141b2d", field = "0e1424", head = "0a0f1c", text = "dfe6f5", dim = "8a96b3", accent = "3d5afe",
+			accent2 = "7c9cff", edge = "26304a", button = "26304a", white = "b8c2d9", black = "2a3350", backdrop = "080c18" },
+	}
+	X.THEMES = THEMES
+	local THEME_ORDER = { "SCP: CB", "Unity", "Blender", "Roblox Studio", "Terminal", "Solarized", "Synthwave", "Aperture '70s", "Aperture Clean", "Midnight" }
+	for _, n in ipairs(THEME_ORDER) do STYLES[n] = makeTheme(THEMES[n]) end
+	-- your own: Setting_edCustomTheme = the 12 role colours as hex, one after another (ROLES order)
+	local function decodeCustom(str)
+		local p, i = {}, 0
+		for h6 in string.gmatch(str or "", "%x%x%x%x%x%x") do
+			i += 1
+			if ROLES[i] then p[ROLES[i]] = h6 end
+		end
+		if i < #ROLES then return nil end
+		return p
+	end
+	local function encodeCustom(p)
+		local out = {}
+		for _, r in ipairs(ROLES) do
+			local c = typeof(p[r]) == "Color3" and p[r] or Config.ParseHex(p[r])
+			table.insert(out, Config.ToHex(c):sub(2))
+		end
+		return table.concat(out)
+	end
+	local function refreshCustom()
+		STYLES.Custom = makeTheme(decodeCustom(ES("edCustomTheme", "")) or THEMES.Midnight)
+	end
+	refreshCustom()
 	X.STYLES = { "Classic", "Dark", "Blueprint", "High Contrast" }
+	for _, n in ipairs(THEME_ORDER) do table.insert(X.STYLES, n) end
+	table.insert(X.STYLES, "Custom")
 
 	local PROPS = { "BackgroundColor3", "TextColor3", "ImageColor3", "PlaceholderColor3", "ScrollBarImageColor3" }
 	local current = STYLES.Classic
@@ -5278,7 +5632,87 @@ do
 		for _, d in ipairs(gui:GetDescendants()) do styleObj(d) end
 		if E.active and not E.gameView then rebuild() end
 	end
+	-- File > Editor style > Make a custom style...: pick each role's colour, see it live, save it as "Custom"
+	function X.themeCreator()
+		local start = decodeCustom(ES("edCustomTheme", "")) or THEMES[ES("edStyle", "Classic")] or THEMES.Midnight
+		local work = {}
+		for _, r in ipairs(ROLES) do work[r] = typeof(start[r]) == "Color3" and start[r] or Config.ParseHex(start[r]) or Color3.new(0.5, 0.5, 0.5) end
+		local before = ES("edStyle", "Classic")
+		local livePending = false
+		local function live() -- (dragging in the picker changes a colour every frame: restyle at most ~6 times a second)
+			if livePending then return end
+			livePending = true
+			task.delay(0.15, function()
+				livePending = false
+				STYLES.Custom = makeTheme(work)
+				X.applyStyle("Custom")
+			end)
+		end
+		local d = Dlg.makeDialog("Custom Editor Style", 560, 600)
+		local swatches = {}
+		local function row(i, r)
+			local y = 74 + (i - 1) * 34
+			new("TextLabel", { Position = px(24, y), Size = px(300, 30), BackgroundTransparency = 1, Text = ROLE_NAMES[r], FontFace = FONT.UI_REG, TextSize = 18,
+				TextColor3 = rgb(30), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = d })
+			local sw = new("TextButton", { Position = px(330, y + 2), Size = px(120, 26), BackgroundColor3 = work[r], BorderSizePixel = 0, Text = "",
+				AutoButtonColor = true, ZIndex = 32, Parent = d })
+			new("UIStroke", { Color = rgb(20), Thickness = 1, Parent = sw })
+			local hexL = new("TextLabel", { Position = px(462, y), Size = px(110, 30), BackgroundTransparency = 1, Text = Config.ToHex(work[r]),
+				Font = Enum.Font.Code, TextSize = 16, TextColor3 = rgb(60), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = d })
+			swatches[r] = { sw, hexL }
+			onClick(sw, function()
+				sfx("Click")
+				local old = work[r]
+				X.colorPicker({ title = ROLE_NAMES[r], color = old, presets = X.recentColors(),
+					onChange = function(c) work[r] = c sw.BackgroundColor3 = c hexL.Text = Config.ToHex(c) live() end,
+					onCancel = function() work[r] = old sw.BackgroundColor3 = old hexL.Text = Config.ToHex(old) live() end })
+			end)
+		end
+		for i, r in ipairs(ROLES) do row(i, r) end
+		local function load(p)
+			for _, r in ipairs(ROLES) do
+				work[r] = typeof(p[r]) == "Color3" and p[r] or Config.ParseHex(p[r]) or work[r]
+				swatches[r][1].BackgroundColor3 = work[r]
+				swatches[r][2].Text = Config.ToHex(work[r])
+			end
+			live()
+		end
+		-- start from one of the built-in themes
+		local fromBtn = new("TextButton", { Position = px(24, 36), Size = px(300, 30), BackgroundColor3 = rgb(200, 206, 203), BorderSizePixel = 0,
+			Text = "Start from a style  ▾", FontFace = FONT.UI_REG, TextSize = 17, TextColor3 = rgb(20), ZIndex = 32, Parent = d })
+		onClick(fromBtn, function()
+			sfx("Click")
+			local list = {}
+			for _, n in ipairs(THEME_ORDER) do table.insert(list, { text = n, fn = function() load(THEMES[n]) end }) end
+			local pos = (fromBtn.AbsolutePosition - canvas.AbsolutePosition) / uiScale.Scale
+			popupMenu(pos.X, pos.Y + 32, { { items = list } })
+		end)
+		local function finish(save)
+			X.closePicker()
+			closeDialog()
+			if save then
+				local str = encodeCustom(work)
+				menuRequest("SetSetting", { key = "edCustomTheme", value = str })
+				menuRequest("SetSetting", { key = "edStyle", value = "Custom" })
+				refreshCustom()
+				STYLES.Custom = makeTheme(work)
+				X.applyStyle("Custom")
+				flash("Saved your custom style.")
+			else
+				refreshCustom()
+				X.applyStyle(before)
+			end
+		end
+		Dlg.dialogButton(d, 24, 500, "SAVE", function() finish(true) end, true)
+		Dlg.dialogButton(d, 200, 500, "CANCEL", function() finish(false) end)
+		live()
+	end
+
 	gui.DescendantAdded:Connect(function(d) task.defer(function() if d.Parent then styleObj(d) end end) end)
+	player:GetAttributeChangedSignal("Setting_edCustomTheme"):Connect(function()
+		refreshCustom()
+		if ES("edStyle", "Classic") == "Custom" then X.applyStyle("Custom") end
+	end)
 	player:GetAttributeChangedSignal("Setting_edStyle"):Connect(function()
 		X.applyStyle(ES("edStyle", "Classic"))
 		if E.active then flash("Editor style: " .. ES("edStyle", "Classic")) end

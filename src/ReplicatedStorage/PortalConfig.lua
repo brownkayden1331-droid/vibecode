@@ -137,11 +137,24 @@ C.TILE_COLORS = {
 	{ name = "Brown", color = Color3.fromRGB(140, 98, 66) },
 	{ name = "Grey", color = Color3.fromRGB(140, 146, 146) },
 }
+-- data.colors values: a number (this list) or, from the Intermediate / Advanced editor, a custom colour "#rrggbb"
+function C.TileColor(v)
+	local idx = tonumber(v)
+	if idx then
+		local t = C.TILE_COLORS[idx]
+		return t and t.color or nil
+	end
+	return C.ParseHex(v)
+end
+function C.ValidTileColor(v)
+	if tonumber(v) then return C.TILE_COLORS[tonumber(v)] ~= nil end
+	return type(v) == "string" and v:match("^#%x%x%x%x%x%x$") ~= nil
+end
 -- the colour a tile ends up (non-portalable tiles get a darker shade so you can still tell them apart)
-function C.TileTint(idx, portalable)
-	local t = idx and C.TILE_COLORS[idx]
-	if not t then return nil end
-	return portalable and t.color or t.color:Lerp(Color3.new(0, 0, 0), 0.45)
+function C.TileTint(v, portalable)
+	local c = v ~= nil and C.TileColor(v)
+	if not c then return nil end
+	return portalable and c or c:Lerp(Color3.new(0, 0, 0), 0.45)
 end
 function C.TintPanel(p, color)
 	p.Color = color
@@ -242,6 +255,22 @@ C.LIGHT_COLORS = {
 	Orange = Color3.fromRGB(255, 150, 60), Red = Color3.fromRGB(255, 70, 70), Green = Color3.fromRGB(110, 255, 140),
 }
 C.LIGHT_ORDER = { "White", "Warm", "Blue", "Orange", "Red", "Green" }
+-- "#rrggbb" / "rrggbb" -> Color3 (nil if it isn't one)
+function C.ParseHex(s)
+	if type(s) ~= "string" then return nil end
+	local h = s:match("^#?(%x%x%x%x%x%x)$")
+	if not h then return nil end
+	return Color3.fromRGB(tonumber(h:sub(1, 2), 16), tonumber(h:sub(3, 4), 16), tonumber(h:sub(5, 6), 16))
+end
+function C.ToHex(c)
+	return ("#%02x%02x%02x"):format(math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+end
+-- a light colour by name or hex
+function C.LightColor(v)
+	if type(v) ~= "string" then return nil end
+	for n, c in pairs(C.LIGHT_COLORS) do if n:lower() == v:lower() then return c end end
+	return C.ParseHex(v)
+end
 C.PUSH_STRENGTHS = { 20, 40, 60, 90 } -- studs/s a push zone shoves you out of its surface
 -- funnels and buttons: what a connected button does
 C.FUNNEL_LINK_MODES = { "Reverse", "Power" }
@@ -267,9 +296,9 @@ end
 -- Linked items: what they do while their inputs are off (the item menu's "Start enabled" overrides this).
 -- Inputs on flips it. Funnels flip direction instead, droppers drop a new cube.
 C.LINK_DEFAULT_ON = { fizzler = true, laserfield = true, laser = false, lightbridge = false, exit = false,
-	tbeam = false, block = true, light = false, killzone = true, pushzone = false }
+	tbeam = false, block = true, light = false, killzone = true, pushzone = false, faithplate = false }
 C.SWITCHABLE = { fizzler = true, laserfield = true, laser = true, lightbridge = true, exit = true,
-	tbeam = true, block = true, light = true, killzone = true, pushzone = true }
+	tbeam = true, block = true, light = true, killzone = true, pushzone = true, faithplate = true }
 C.BUTTON_TYPES = { "Weighted", "Cube", "Sphere" } -- floor button: anything / cubes only / spheres only
 C.DROPPER_CUBES = { "Normal", "Companion", "Edgeless", "Reflection" } -- used when PortalAssets.Cubes is empty
 
@@ -1230,7 +1259,7 @@ function C.BuildEntity(e, origin, opts)
 			elseif kind == "light" then
 				part({ Name = "Body", Size = Vector3.new(3, 3, 0.4), CFrame = cf * CFrame.new(0, 0, -0.2), Color = Color3.fromRGB(60, 62, 64),
 					Transparency = 0.2 })
-				local bulbCol = C.LIGHT_COLORS[o.mode] or C.LIGHT_COLORS.White
+				local bulbCol = C.LightColor(o.mode) or C.LIGHT_COLORS.White
 				local bulb = part({ Name = "Bulb", Shape = Enum.PartType.Ball, Size = Vector3.one * 1.6, CFrame = cf * CFrame.new(0, 0, -1),
 					Color = bulbCol, Material = Enum.Material.Neon, CanCollide = false })
 				local light = Instance.new("PointLight")
@@ -1452,6 +1481,20 @@ function C.BuildEntity(e, origin, opts)
 		if type(o.startOn) == "boolean" then m:SetAttribute("StartOpt", o.startOn) end
 		if kind ~= "exit" then C.SetAll(m, "Enabled", C.StartOn(e, false)) end
 	end
+	-- faith plates switched off (by a button or a chip): nothing on them gets thrown. Touch is turned off on the plate's
+	-- parts and Enabled = false is on the FaithPlate model (have FaithPlateServer skip plates with Enabled == false)
+	if kind == "faithplate" and not opts.editor then
+		local touchy = {}
+		for _, d in ipairs(element:GetDescendants()) do
+			if d:IsA("BasePart") and d.CanTouch then table.insert(touchy, d) end
+		end
+		local function upd()
+			local on = m:GetAttribute("Enabled") ~= false
+			for _, d in ipairs(touchy) do d.CanTouch = on end
+		end
+		m:GetAttributeChangedSignal("Enabled"):Connect(upd)
+		upd()
+	end
 	-- the fallback laser sheet follows the field's on / off state
 	if kind == "laserfield" and not opts.editor then
 		local fb = m:FindFirstChild("FieldFallback", true)
@@ -1565,7 +1608,7 @@ function C.BuildChamber(data, parent, origin, opts)
 	local function finish(p, fk, f, portalable)
 		local tex = p:GetAttribute("CustomTexture")
 		if tex then C.ApplyTexture(p, tex, -C.DIRS[f]) end
-		local tint = C.TileTint(tonumber(colors[fk]), portalable)
+		local tint = C.TileTint(colors[fk], portalable)
 		if tint then C.TintPanel(p, tint) end
 		p:SetAttribute("Portalable", portalable)
 		p:SetAttribute("Face", fk)
@@ -1954,13 +1997,20 @@ end
 --          if <variable | item> <== != < > <= >=> <value> then <action>
 -- Advanced extras: when <variable | item> <compare> <value>   (runs each time it becomes true)
 --                  random <variable> <min> <max>, repeat <times> then <action>, stop (ends this rule)
+--                  if ... then <action> else <action>, wait until <a> <compare> <b>, calc <var> <a> <+ - * / % min max> <b>
+--                  when call <name> / call <name>  (your own functions), built-in values: time, players
+--                  items: launch <faith plate>, speed <funnel> <studs/s>, forward / backward <funnel>, color <light> <colour>
 -- Variables are shared by every chip in the chamber and start at 0. An item in an "if" counts as 1 when it's
 -- pressed / on / open, else 0. Lines starting with -- or # are comments.
-C.CHIP_EVENTS = { "pressed", "released", "start", "every", "cond" }
+C.CHIP_EVENTS = { "pressed", "released", "start", "every", "cond", "call" }
 C.CHIP_EVENT_LABELS = { pressed = "is pressed", released = "is released", start = "chamber starts", every = "every ... seconds",
-	cond = "becomes true" }
+	cond = "becomes true", call = "is called (function)" }
 C.CHIP_ACTIONS = { "open", "close", "toggle", "enable", "disable", "drop", "reverse", "wait", "say", "set", "add", "if",
-	"music", "sound", "shake", "title", "tint", "countdown", "random", "repeat", "stop" }
+	"music", "sound", "shake", "title", "tint", "countdown", "random", "repeat", "stop",
+	"launch", "speed", "forward", "backward", "color", "calc", "call", "until" }
+-- values chips can read but not set
+C.CHIP_BUILTINS = { time = "seconds since the chamber started", players = "players in the chamber (1, or 2 in co-op)" }
+C.CHIP_CALC_OPS = { "+", "-", "*", "/", "%", "min", "max" }
 -- effects: only the players in that chamber see / hear them (you, or you and your co-op partner). Never touch gameplay.
 C.CHIP_FX = { music = true, sound = true, shake = true, title = true, tint = true, countdown = true }
 C.CHIP_TINTS = {
@@ -1976,11 +2026,13 @@ C.CHIP_ACTION_LABELS = {
 	set = "set variable", add = "add to variable", ["if"] = "if ... then",
 	music = "play music", sound = "play a sound", shake = "shake the screen", title = "show a title", tint = "tint the screen",
 	countdown = "show a countdown", random = "random number", ["repeat"] = "repeat ... times", stop = "stop this rule",
+	launch = "launch a faith plate", speed = "set funnel speed", forward = "funnel forward (blue)", backward = "funnel backward (orange)",
+	color = "light colour", calc = "calculate", call = "call a function", ["until"] = "wait until",
 }
 C.CHIP_COMPARE = { "==", "!=", "<", ">", "<=", ">=" }
 -- what each line expects (the editor shows it while you type, like a code editor's parameter hints)
 C.CHIP_HINTS = {
-	when = "when <item> pressed | released   ·   when start   ·   when every <seconds>   ·   when <variable | item> <compare> <value>",
+	when = "when <item> pressed | released   ·   when start   ·   when every <seconds>   ·   when <variable | item> <compare> <value>   ·   when call <name>",
 	open = "open <item>   opens a door / turns an item on",
 	close = "close <item>   closes a door / turns an item off",
 	toggle = "toggle <item>   flips it on / off",
@@ -1992,7 +2044,7 @@ C.CHIP_HINTS = {
 	say = "say <text>   shows a message ({name} = a variable's value)",
 	set = "set <variable> <number | true | false | variable>",
 	add = "add <variable> <number>   (a negative number takes away)",
-	["if"] = "if <variable | item> <== != < > <= >=> <value> then <action>",
+	["if"] = "if <variable | item> <== != < > <= >=> <value> then <action>   [else <action>]",
 	music = "music <song name | asset id>   plays for everyone in the chamber   ·   music stop",
 	sound = "sound <sound name | asset id>   a one-shot sound effect",
 	shake = "shake <seconds>   shakes everyone's screen (up to 5)",
@@ -2002,10 +2054,20 @@ C.CHIP_HINTS = {
 	random = "random <variable> <min> <max>   a whole number from min to max",
 	["repeat"] = "repeat <times> then <action>   (1 - 50 times; a 'wait' in it waits each time)",
 	stop = "stop   ends this rule here (the rest of its lines don't run)",
+	launch = "launch <faith plate>   throws whoever is standing on it (and cubes)",
+	speed = "speed <funnel> <studs/s>   how fast a funnel carries you (2 - 40)",
+	forward = "forward <funnel>   makes it blue (pushes away from the emitter)",
+	backward = "backward <funnel>   makes it orange (pulls toward the emitter)",
+	color = "color <light> <white warm blue orange red green | #rrggbb>",
+	calc = "calc <variable> <a> <+ - * / % min max> <b>   e.g. calc total score * 2",
+	call = "call <name>   runs every 'when call <name>' rule, then carries on",
+	["until"] = "wait until <variable | item> <compare> <value>   pauses this rule until it's true",
 }
-local CHIP_TARGET = { open = true, close = true, toggle = true, enable = true, disable = true, drop = true, reverse = true }
+local CHIP_TARGET = { open = true, close = true, toggle = true, enable = true, disable = true, drop = true, reverse = true,
+	launch = true, speed = true, forward = true, backward = true, color = true }
 C.CHIP_TARGET = CHIP_TARGET
-local CHIP_KEYWORDS = { ["when"] = true, ["then"] = true, ["true"] = true, ["false"] = true, start = true, every = true, pressed = true, released = true, stop = true, ["repeat"] = true, random = true }
+local CHIP_KEYWORDS = { ["when"] = true, ["then"] = true, ["true"] = true, ["false"] = true, start = true, every = true, pressed = true, released = true, stop = true, ["repeat"] = true, random = true,
+	["else"] = true, ["until"] = true, call = true, time = true, players = true }
 for _, a in ipairs(C.CHIP_ACTIONS) do CHIP_KEYWORDS[a] = true end
 function C.ValidVarName(n)
 	return type(n) == "string" and #n <= 24 and n:match("^[%a_][%w_]*$") ~= nil and not CHIP_KEYWORDS[n:lower()]
@@ -2014,7 +2076,9 @@ end
 function C.ChipSourceOk(kind) return C.LINK_SOURCES[kind] == true end
 function C.ChipTargetOk(op, kind)
 	if op == "drop" then return kind == "cubedropper" end
-	if op == "reverse" then return kind == "tbeam" end
+	if op == "reverse" or op == "speed" or op == "forward" or op == "backward" then return kind == "tbeam" end
+	if op == "launch" then return kind == "faithplate" end
+	if op == "color" then return kind == "light" end
 	if CHIP_TARGET[op] then return C.SWITCHABLE[kind] == true end
 	return false
 end
@@ -2023,7 +2087,7 @@ for _, c in ipairs(C.CHIP_COMPARE) do COMPARE[c] = true end
 
 -- one action from its words. Returns the action, or nil and an error.
 local function parseAction(word, rest, allowIf)
-	if word == "wait" then
+	if word == "wait" and not rest:lower():match("^until%s") then
 		local n = tonumber(rest)
 		if not n then return nil, "'wait' needs a number of seconds" end
 		return { op = "wait", n = math.clamp(n, 0, 60) }
@@ -2058,6 +2122,30 @@ local function parseAction(word, rest, allowIf)
 		return { op = word, var = var, value = value }
 	elseif word == "stop" then
 		return { op = "stop" }
+	elseif word == "until" or (word == "wait" and rest:lower():match("^until%s")) then
+		local body = word == "wait" and rest:gsub("^%S+%s*", "") or rest
+		local lhs, cmp, rhs = body:match("^(%S+)%s+(%S+)%s+(%S+)%s*$")
+		if not lhs then return nil, "write it like 'wait until score >= 3'" end
+		if cmp == "~=" then cmp = "!=" elseif cmp == "=" then cmp = "==" end
+		if not COMPARE[cmp] then return nil, ("'%s' isn't a comparison: use == != < > <= >="):format(cmp) end
+		return { op = "until", lhs = lhs, cmp = cmp, rhs = rhs }
+	elseif word == "speed" then
+		local target, n = rest:match("^(%S+)%s+(%S+)")
+		if not target or not tonumber(n) then return nil, "write it like 'speed funnel1 20'" end
+		return { op = "speed", target = target, n = math.clamp(tonumber(n), 2, 40) }
+	elseif word == "color" or word == "colour" then
+		local target, c = rest:match("^(%S+)%s+(%S+)")
+		if not target or not C.LightColor(c) then return nil, "write it like 'color light1 blue' (white warm blue orange red green, or #rrggbb)" end
+		return { op = "color", target = target, text = c:lower() }
+	elseif word == "calc" then
+		local var, a, o, b = rest:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
+		if not var or not C.ValidVarName(var) then return nil, "write it like 'calc total score * 2'" end
+		if not table.find(C.CHIP_CALC_OPS, o:lower()) then return nil, "'calc' needs one of + - * / % min max" end
+		return { op = "calc", var = var, a = a, o = o:lower(), b = b }
+	elseif word == "call" then
+		local name = rest:match("^(%S+)")
+		if not name or not name:match("^[%a_][%w_]*$") then return nil, "write it like 'call reset'" end
+		return { op = "call", name = name:lower() }
 	elseif word == "random" then
 		local var, a, b = rest:match("^(%S+)%s+(%S+)%s+(%S+)")
 		if not var or not C.ValidVarName(var) then return nil, "write it like 'random roll 1 6'" end
@@ -2080,11 +2168,25 @@ local function parseAction(word, rest, allowIf)
 		if not lhs then return nil, "write it like 'if score >= 3 then open exit'" end
 		if cmp == "~=" then cmp = "!=" elseif cmp == "=" then cmp = "==" end
 		if not COMPARE[cmp] then return nil, ("'%s' isn't a comparison: use == != < > <= >="):format(cmp) end
+		-- "... else <action>" (not inside a message: say / title / music / sound take the rest of the line)
+		local elsePart
+		local firstW = (inner:match("^(%S+)") or ""):lower()
+		if firstW ~= "say" and firstW ~= "title" and firstW ~= "music" and firstW ~= "sound" then
+			local thenPart, ep = inner:match("^(.-)%s+[Ee][Ll][Ss][Ee]%s+(.+)$")
+			if thenPart then inner, elsePart = thenPart, ep end
+		end
 		local w2, r2 = inner:match("^(%S+)%s*(.*)$")
 		if w2:lower() == "repeat" then return nil, "an 'if' can't hold a 'repeat' (put the repeat on its own line)" end
 		local act, err = parseAction(w2:lower(), r2, false)
 		if not act then return nil, err end
-		return { op = "if", lhs = lhs, cmp = cmp, rhs = rhs, act = act }
+		local elseAct
+		if elsePart then
+			local w3, r3 = elsePart:match("^(%S+)%s*(.*)$")
+			if w3:lower() == "repeat" or w3:lower() == "if" then return nil, "'else' takes one simple action" end
+			elseAct, err = parseAction(w3:lower(), r3, false)
+			if not elseAct then return nil, err end
+		end
+		return { op = "if", lhs = lhs, cmp = cmp, rhs = rhs, act = act, elseAct = elseAct }
 	elseif CHIP_TARGET[word] then
 		local target = rest:match("^(%S+)")
 		if not target then return nil, ("'%s' needs an item, like '%s exit'"):format(word, word) end
@@ -2114,6 +2216,9 @@ function C.ParseChip(src)
 					local n = tonumber(b)
 					if not n then table.insert(errs, ("line %d: 'when every' needs a number of seconds"):format(ln)) n = 1 end
 					cur = { ev = "every", n = math.clamp(n, 0.5, 600), acts = {} }
+				elseif a == "call" then
+					if not b:match("^[%a_][%w_]*$") then table.insert(errs, ("line %d: write 'when call <name>'"):format(ln)) cur = nil
+					else cur = { ev = "call", name = b:lower(), acts = {} } end
 				elseif a and (b:lower() == "pressed" or b:lower() == "released") then
 					cur = { ev = b:lower(), src = rest:match("^(%S+)"), acts = {} }
 				elseif rest:match("^%S+%s+%S+%s+%S+$") then
@@ -2154,10 +2259,16 @@ local function actionText(a)
 	if a.op == "say" then return ('say "%s"'):format((a.text or ""):gsub('"', "'")) end
 	if a.op == "set" or a.op == "add" then return ("%s %s %s"):format(a.op, a.var or "?", tostring(a.value or "0")) end
 	if a.op == "stop" then return "stop" end
+	if a.op == "until" then return ("wait until %s %s %s"):format(a.lhs or "?", a.cmp or "==", a.rhs or "0") end
+	if a.op == "speed" then return ("speed %s %s"):format(a.target or "?", tostring(a.n or 13)) end
+	if a.op == "color" then return ("color %s %s"):format(a.target or "?", a.text or "white") end
+	if a.op == "calc" then return ("calc %s %s %s %s"):format(a.var or "?", a.a or "0", a.o or "+", a.b or "0") end
+	if a.op == "call" then return "call " .. (a.name or "?") end
 	if a.op == "random" then return ("random %s %d %d"):format(a.var or "?", a.lo or 1, a.hi or 6) end
 	if a.op == "repeat" then return ("repeat %d then %s"):format(a.n or 1, a.act and actionText(a.act) or "?") end
 	if a.op == "if" then
 		return ("if %s %s %s then %s"):format(a.lhs or "?", a.cmp or "==", a.rhs or "0", a.act and actionText(a.act) or "?")
+			.. (a.elseAct and (" else " .. actionText(a.elseAct)) or "")
 	end
 	return ("%s %s"):format(a.op, a.target or "?")
 end
@@ -2170,6 +2281,7 @@ function C.ChipText(rules)
 		if r.ev == "start" then table.insert(out, "when start")
 		elseif r.ev == "every" then table.insert(out, "when every " .. tostring(r.n or 1))
 		elseif r.ev == "cond" then table.insert(out, ("when %s %s %s"):format(r.lhs or "?", r.cmp or "==", r.rhs or "0"))
+		elseif r.ev == "call" then table.insert(out, "when call " .. (r.name or "?"))
 		else table.insert(out, ("when %s %s"):format(r.src or "?", r.ev or "pressed")) end
 		for _, a in ipairs(r.acts or {}) do table.insert(out, "    " .. actionText(a)) end
 	end
@@ -2182,6 +2294,7 @@ local function eachAction(rules, fn)
 		for _, a in ipairs(r.acts) do
 			fn(a)
 			if (a.op == "if" or a.op == "repeat") and a.act then fn(a.act) end
+			if a.op == "if" and a.elseAct then fn(a.elseAct) end
 		end
 	end
 end
@@ -2230,7 +2343,7 @@ end
 function C.ChipVariables(rules)
 	local vars, list = {}, {}
 	eachAction(rules, function(a)
-		if (a.op == "set" or a.op == "add" or a.op == "random") and a.var and not vars[a.var:lower()] then
+		if (a.op == "set" or a.op == "add" or a.op == "random" or a.op == "calc") and a.var and not vars[a.var:lower()] then
 			vars[a.var:lower()] = true
 			table.insert(list, a.var)
 		end
@@ -2254,7 +2367,7 @@ function C.CheckChip(rules, kinds)
 			if not k then table.insert(errs, ("There's no item called '%s'."):format(a.target))
 			elseif not C.ChipTargetOk(a.op, k) then table.insert(errs, ("Can't '%s' %s."):format(a.op, a.target)) end
 		end
-		if (a.op == "set" or a.op == "add" or a.op == "random") and a.var and kinds[a.var:lower()] then
+		if (a.op == "set" or a.op == "add" or a.op == "random" or a.op == "calc") and a.var and kinds[a.var:lower()] then
 			table.insert(errs, ("'%s' is an item's label, pick another variable name."):format(a.var))
 		end
 	end)
@@ -2341,6 +2454,8 @@ function C.ChipAutocorrect(src, labels)
 	for v in (src .. "\n"):gmatch("[Ss][Ee][Tt]%s+([%a_][%w_]*)") do vars[v:lower()] = v end
 	for v in (src .. "\n"):gmatch("[Aa][Dd][Dd]%s+([%a_][%w_]*)") do vars[v:lower()] = vars[v:lower()] or v end
 	for v in (src .. "\n"):gmatch("[Rr][Aa][Nn][Dd][Oo][Mm]%s+([%a_][%w_]*)") do vars[v:lower()] = vars[v:lower()] or v end
+	for v in (src .. "\n"):gmatch("[Cc][Aa][Ll][Cc]%s+([%a_][%w_]*)") do vars[v:lower()] = vars[v:lower()] or v end
+	for v in pairs(C.CHIP_BUILTINS) do vars[v] = v end
 	local function fixLabel(w)
 		if lower[w:lower()] then return lower[w:lower()] end
 		if vars[w:lower()] then return vars[w:lower()] end
@@ -2371,16 +2486,39 @@ function C.ChipAutocorrect(src, labels)
 			if cmp == "~=" then cmp = "!=" elseif cmp == "=" or cmp == "===" then cmp = "==" elseif cmp == "=>" then cmp = ">=" elseif cmp == "=<" then cmp = "<=" end
 			if not rhs:match("^%-?[%d%.]+$") and rhs:lower() ~= "true" and rhs:lower() ~= "false" then rhs = fixLabel(rhs) else rhs = rhs:lower() end
 			thenW = fixWord(thenW, { "then" }, 2)
+			local elsePart
+			local fw = (inner:match("^(%S+)") or ""):lower()
+			if fw ~= "say" and fw ~= "title" and fw ~= "music" and fw ~= "sound" then
+				-- "esle" / "eles" -> else (any word after the first action's word)
+				local wi = 0
+				inner = inner:gsub("%S+", function(w)
+					wi += 1
+					if wi > 1 and w:lower() ~= "else" and #w >= 3 and editDistance(w:lower(), "else") <= 1 then
+						table.insert(fixes, w .. " -> else")
+						return "else"
+					end
+					return w
+				end)
+				local tp, ep = inner:match("^(.-)%s+[Ee][Ll][Ss][Ee]%s+(.+)$")
+				if tp then inner, elsePart = tp, ep end
+			end
 			local w2, r2 = inner:match("^(%S+)%s*(.*)$")
-			return ("if %s %s %s %s"):format(lhs, cmp, rhs, thenW) .. (w2 and (" " .. fixAction(w2, r2, false)) or "")
+			local out = ("if %s %s %s %s"):format(lhs, cmp, rhs, thenW) .. (w2 and (" " .. fixAction(w2, r2, false)) or "")
+			if elsePart then
+				local w3, r3 = elsePart:match("^(%S+)%s*(.*)$")
+				out ..= " else " .. fixAction(w3, r3, false)
+			end
+			return out
 		elseif first == "say" or first == "wait" or not ACTION_SET[first] then
 			return first .. (rest ~= "" and (" " .. rest) or "")
-		elseif first == "set" or first == "add" or first == "random" or first == "stop" or first == "repeat" or C.CHIP_FX[first] then
+		elseif first == "set" or first == "add" or first == "random" or first == "stop" or first == "repeat" or first == "calc"
+			or first == "call" or first == "until" or C.CHIP_FX[first] then
 			if first == "tint" and rest ~= "" then rest = fixWord(rest, C.CHIP_TINT_ORDER, 2) end
 			return first .. (rest ~= "" and (" " .. rest) or "")
 		end
-		local target = rest:match("^(%S+)")
-		return first .. (target and (" " .. fixLabel(target)) or "")
+		local target, more = rest:match("^(%S+)%s*(.*)$")
+		if first == "color" and more ~= "" and not more:match("^#") then more = fixWord(more, { "white", "warm", "blue", "orange", "red", "green" }, 2) end
+		return first .. (target and (" " .. fixLabel(target)) or "") .. ((more and more ~= "") and (" " .. more) or "")
 	end
 	local out = {}
 	for line in (src .. "\n"):gmatch("(.-)\r?\n") do
@@ -2400,8 +2538,9 @@ function C.ChipAutocorrect(src, labels)
 					if cc == "~=" then cc = "!=" elseif cc == "=" then cc = "==" elseif cc == "=>" then cc = ">=" elseif cc == "=<" then cc = "<=" end
 					if not cr:match("^%-?[%d%.]+$") and cr:lower() ~= "true" and cr:lower() ~= "false" then cr = fixLabel(cr) else cr = cr:lower() end
 					w2, w3 = fixLabel(cl), cc .. " " .. cr
-				elseif lw2 == "start" or lw2 == "every" then
+				elseif lw2 == "start" or lw2 == "every" or lw2 == "call" then
 					w2 = lw2
+					if lw2 == "call" then w3 = w3:lower() end
 				elseif w2 ~= "" and not lower[lw2] and (editDistance(lw2, "start") <= 2 or editDistance(lw2, "every") <= 2) then
 					w2 = fixWord(w2, { "start", "every" }, 2)
 				elseif w2 ~= "" then
@@ -2431,6 +2570,8 @@ function C.ChipHighlight(src, kinds)
 	for v in (src .. "\n"):gmatch("[Ss][Ee][Tt]%s+([%a_][%w_]*)") do vars[v:lower()] = true end
 	for v in (src .. "\n"):gmatch("[Aa][Dd][Dd]%s+([%a_][%w_]*)") do vars[v:lower()] = true end
 	for v in (src .. "\n"):gmatch("[Rr][Aa][Nn][Dd][Oo][Mm]%s+([%a_][%w_]*)") do vars[v:lower()] = true end
+	for v in (src .. "\n"):gmatch("[Cc][Aa][Ll][Cc]%s+([%a_][%w_]*)") do vars[v:lower()] = true end
+	for v in pairs(C.CHIP_BUILTINS) do vars[v] = true end
 	local out = {}
 	for line in (src .. "\n"):gmatch("(.-)\n") do
 		local body = line:gsub("^%s+", "")
@@ -2453,13 +2594,15 @@ function C.ChipHighlight(src, kinds)
 				if isSay then
 					table.insert(parts, paint(line:sub(s), "text"))
 					break
-				elseif lw == "when" or lw == "if" or lw == "then" then
+				elseif lw == "when" or lw == "if" or lw == "then" or lw == "else" or (lw == "until" and prev == "wait") then
 					kind = "when"
-				elseif (idx == 1 or prev == "then") and ACTION_SET[lw] then
+				elseif (idx == 1 or prev == "then" or prev == "else") and ACTION_SET[lw] then
 					kind = "action"
 					isSay = lw == "say" or lw == "title" or lw == "music" or lw == "sound"
-				elseif EVENTS[lw] then
+				elseif EVENTS[lw] or (lw == "call" and prev == "when") then
 					kind = "event"
+				elseif prev == "call" then
+					kind = "variable"
 				elseif COMPARE[lw] or lw == "=" or lw == "~=" then
 					kind = "op"
 				elseif prev == "tint" and C.CHIP_TINTS[lw] ~= nil then
@@ -2468,7 +2611,11 @@ function C.ChipHighlight(src, kinds)
 					kind = "number"
 				elseif kinds and kinds[lw] then
 					kind = "label"
-				elseif vars[lw] or prev == "set" or prev == "add" or prev == "random" then
+				elseif table.find(C.CHIP_CALC_OPS, lw) then
+					kind = "op"
+				elseif kinds and prev and kinds[prev] == "light" and C.LightColor(lw) then
+					kind = "event"
+				elseif vars[lw] or prev == "set" or prev == "add" or prev == "random" or prev == "calc" then
 					kind = "variable"
 				else
 					kind = "unknown"
@@ -2504,26 +2651,39 @@ function C.ChipSuggest(line, kinds, varList)
 	local function actionArgs(op, at)
 		if at == 1 then
 			if CHIP_TARGET[op] then labelsWhere(function(k) return C.ChipTargetOk(op, k) end)
-			elseif op == "set" or op == "add" or op == "random" then for _, v in ipairs(varList or {}) do add(v, "variable") end
+			elseif op == "set" or op == "add" or op == "random" or op == "calc" then for _, v in ipairs(varList or {}) do add(v, "variable") end
+			elseif op == "wait" then add("until", "keyword")
 			elseif op == "music" then add("stop", "value") for _, n in ipairs(C.ChipSoundNames("music")) do add(n, "value") end
 			elseif op == "sound" then for _, n in ipairs(C.ChipSoundNames("sound")) do add(n, "value") end
 			elseif op == "tint" then for _, c in ipairs(C.CHIP_TINT_ORDER) do add(c, "value") end
 			elseif op == "countdown" then add("stop", "value") end
+		elseif at == 2 then
+			if op == "color" then for _, c in ipairs(C.LIGHT_ORDER) do add(c:lower(), "value") end
+			elseif op == "calc" or op == "until" then
+				for _, v in ipairs(varList or {}) do add(v, "variable") end
+				for b in pairs(C.CHIP_BUILTINS) do add(b, "variable") end
+			elseif op == "speed" then add("13", "value") add("20", "value") end
+		elseif at == 3 then
+			if op == "calc" then for _, o in ipairs(C.CHIP_CALC_OPS) do add(o, "compare") end
+			elseif op == "until" then for _, c in ipairs(C.CHIP_COMPARE) do add(c, "compare") end end
 		end
 	end
+	-- "... else <action>": suggest from the else on
+	local elseAt
+	for i, w in ipairs(words) do if w:lower() == "else" and i < n then elseAt = i end end
 	if n <= 1 then
 		add("when", "keyword")
 		for _, a in ipairs(C.CHIP_ACTIONS) do add(a, "action") end
 	elseif first == "when" then
 		local w2 = (words[2] or ""):lower()
 		if n == 2 then
-			add("start", "event") add("every", "event")
+			add("start", "event") add("every", "event") add("call", "event")
 			labelsWhere(C.ChipSourceOk)
 			for _, v in ipairs(varList or {}) do add(v, "variable") end
 		elseif n == 3 and kinds and kinds[w2] then
 			add("pressed", "event") add("released", "event")
 			for _, c in ipairs(C.CHIP_COMPARE) do add(c, "compare") end
-		elseif n == 3 and w2 ~= "start" and w2 ~= "every" then
+		elseif n == 3 and w2 ~= "start" and w2 ~= "every" and w2 ~= "call" then
 			for _, c in ipairs(C.CHIP_COMPARE) do add(c, "compare") end
 		elseif n == 4 and COMPARE[(words[3] or "")] then
 			add("true", "value") add("false", "value")
@@ -2536,6 +2696,12 @@ function C.ChipSuggest(line, kinds, varList)
 			for _, a in ipairs(C.CHIP_ACTIONS) do if a ~= "if" and a ~= "repeat" then add(a, "action") end end
 		elseif n == 5 then
 			actionArgs((words[4] or ""):lower(), 1)
+		end
+	elseif first == "if" and elseAt then
+		if n == elseAt + 1 then
+			for _, a in ipairs(C.CHIP_ACTIONS) do if a ~= "if" and a ~= "repeat" then add(a, "action") end end
+		else
+			actionArgs((words[elseAt + 1] or ""):lower(), n - elseAt - 1)
 		end
 	elseif first == "if" then
 		if n == 2 then
@@ -2550,9 +2716,12 @@ function C.ChipSuggest(line, kinds, varList)
 			add("then", "keyword")
 		elseif n == 6 then
 			for _, a in ipairs(C.CHIP_ACTIONS) do if a ~= "if" and a ~= "repeat" then add(a, "action") end end
-		elseif n == 7 then
-			actionArgs((words[6] or ""):lower(), 1)
+		elseif n >= 7 then
+			actionArgs((words[6] or ""):lower(), n - 6)
+			if n >= 8 then add("else", "keyword") end
 		end
+	elseif first == "wait" and (words[2] or ""):lower() == "until" then
+		actionArgs("until", n - 2)
 	else
 		actionArgs(first, n - 1)
 	end
@@ -2575,7 +2744,10 @@ end
 -- the hint for the line being typed (its keyword, or the action after "then")
 function C.ChipHintFor(line)
 	local first = (line:match("^%s*(%S+)") or ""):lower()
+	if first == "wait" and line:lower():match("^%s*wait%s+until") then return C.CHIP_HINTS["until"] end
 	if first == "if" or first == "repeat" then
+		local afterElse = line:match("%s[Ee][Ll][Ss][Ee]%s+(%S+)")
+		if afterElse and C.CHIP_HINTS[afterElse:lower()] then return C.CHIP_HINTS["if"] .. "      " .. C.CHIP_HINTS[afterElse:lower()] end
 		local after = line:match("[Tt][Hh][Ee][Nn]%s+(%S+)")
 		if after and C.CHIP_HINTS[after:lower()] then return C.CHIP_HINTS[first] .. "      " .. C.CHIP_HINTS[after:lower()] end
 	end
@@ -2658,7 +2830,24 @@ Lines starting with -- or # are comments.]] },
   <font color="#1F6FD0">repeat</font> 3 <font color="#8E44AD">then</font> <font color="#1F6FD0">drop</font> dropper1   does the action 3 times (1 - 50)
 <b>Stop</b>
   <font color="#1F6FD0">stop</font>   ends this rule right there      <font color="#8E44AD">if</font> <font color="#0E8A92">lives</font> &lt;= 0 <font color="#8E44AD">then</font> <font color="#1F6FD0">stop</font>
-Chips can also <font color="#1F6FD0">enable</font> / <font color="#1F6FD0">disable</font> funnels, invisible walls, lights, death zones and push zones.]] },
+<b>Else</b>
+  <font color="#8E44AD">if</font> <font color="#0E8A92">score</font> &gt;= 3 <font color="#8E44AD">then</font> <font color="#1F6FD0">open</font> exit <font color="#8E44AD">else</font> <font color="#1F6FD0">close</font> exit
+<b>Wait until</b>
+  <font color="#1F6FD0">wait</font> <font color="#8E44AD">until</font> <font color="#0E8A92">score</font> &gt;= 3   pauses the rule until it's true
+<b>Maths</b>
+  <font color="#1F6FD0">calc</font> <font color="#0E8A92">total</font> <font color="#0E8A92">score</font> * 2   (+ - * / % min max)
+<b>Functions</b>
+  <font color="#8E44AD">when</font> <font color="#C26A00">call</font> reset   ...lines...      <font color="#1F6FD0">call</font> reset   runs them, from any chip in the chamber
+<b>Built-in values</b>   <font color="#0E8A92">time</font> (seconds since the chamber started), <font color="#0E8A92">players</font> (1, or 2 in co-op)
+Chips can also <font color="#1F6FD0">enable</font> / <font color="#1F6FD0">disable</font> funnels, faith plates, invisible walls, lights, death zones and push zones.]] },
+	{ "Chips: items", [[
+<i>Advanced mode.</i> What chips can do to each item:
+<b>Doors, fizzlers, laser fields, lasers, bridges, funnels, faith plates, invisible blocks</b>: <font color="#1F6FD0">open close enable disable toggle</font>
+<b>Aerial faith plates</b>: <font color="#1F6FD0">launch</font> plate1   throws whoever stands on it (and cubes) along its arc. Switched off = it throws nothing.
+<b>Excursion funnels</b>: <font color="#1F6FD0">reverse</font> funnel1, <font color="#1F6FD0">forward</font> / <font color="#1F6FD0">backward</font> funnel1, <font color="#1F6FD0">speed</font> funnel1 25   (2 - 40 studs/s)
+<b>Cube droppers</b>: <font color="#1F6FD0">drop</font> dropper1
+<b>Lights</b>: <font color="#1F6FD0">color</font> light1 red   (white warm blue orange red green, or #ff8800)
+<b>In an if / when / wait until</b> an item counts as 1 when it's pressed / on / open.]] },
 	{ "Chips: effects", [[
 Effects are seen and heard <b>only by the players in this chamber</b>: you, or you and your co-op partner. They never change the puzzle.
   <font color="#1F6FD0">music</font> Still Alive   plays a song from PortalAssets.OST (or an asset id) and the game's own music steps aside
@@ -2730,10 +2919,13 @@ Flying through the air into a funnel stops you dead and carries you, like in the
 Options > Editor > <b>Editor Mode</b>, or File > Editor mode:
 <b>Simple</b>: the Items palette.
 <b>Intermediate</b>: + Textures and Meshes tabs, invisible blocks (trigger zones, delay relays, invisible walls, lights) and "Stay on after release".
-<b>Advanced</b>: + My Chips (with when-true rules, random, repeat, stop), death and push zones, item labels, mesh nudging and a coordinates readout under the pointer.]] },
+<b>Advanced</b>: + My Chips (with when-true rules, random, repeat, stop, else, functions, maths), death and push zones, item labels, mesh nudging and a coordinates readout under the pointer.
+Intermediate and Advanced also get <b>custom colours</b>: Tile color > Custom colour... (and for lights).]] },
 	{ "Editor styles", [[
 Options > Editor > <b>Editor Style</b>, or File > Editor style, changes how the editor looks:
-<b>Classic</b> the light grey Puzzle Maker look. <b>Dark</b> for night owls. <b>Blueprint</b> blue drafting paper. <b>High Contrast</b> black, white and yellow for the clearest view.]] },
+<b>Classic</b> the light grey Puzzle Maker look. <b>Dark</b> for night owls. <b>Blueprint</b> blue drafting paper. <b>High Contrast</b> black, white and yellow for the clearest view.
+Plus <b>SCP: CB</b>, <b>Unity</b>, <b>Blender</b>, <b>Roblox Studio</b>, <b>Terminal</b>, <b>Solarized</b>, <b>Synthwave</b>, <b>Aperture '70s</b>, <b>Aperture Clean</b> and <b>Midnight</b>.
+<b>Make your own</b>: File > Editor style > Make a custom style... Pick a colour for each part (panels, text, highlight, the room's tiles...), or start from one of the styles above. It changes as you pick; SAVE keeps it as <b>Custom</b>.]] },
 	{ "Controls", [[
 <b>Mouse + keyboard</b>: click select, + / - pull / push, P portalable, T paint, C connect, R rotate, Delete delete, Ctrl+Z / Y undo / redo, Ctrl+S save, Tab game view, F9 build and play.
 <b>Controller</b>: left stick cursor, A select, X menu, Y items, B cancel, D-pad pull / push / rotate / portalable, L3 connect, R3 game view, Back build and play, LT + sticks move the camera, LB / RB zoom.

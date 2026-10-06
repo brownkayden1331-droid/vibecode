@@ -307,7 +307,9 @@ settings = {
 	edAutoHide = "Enabled", edOrbitSens = 0.5, edInvertY = "Disabled", edZoomSpeed = 0.5, edCamSmooth = 0.5,
 	edSfx = 1, edDrone = 1, edHover = "Enabled", edPadCursor = 0.5, edTouchBar = "Auto", edTeamNames = "Enabled",
 	edMode = "Simple", -- Simple (Items) | Intermediate (+ Textures, Meshes) | Advanced (+ My Chips, labels, nudging)
-	edStyle = "Classic", -- how the editor looks: Classic | Dark | Blueprint | High Contrast
+	edStyle = "Classic", -- how the editor looks: Classic | Dark | Blueprint | High Contrast | SCP: CB | Unity | Blender | ... | Custom
+	edCustomTheme = "", -- File > Editor style > Make a custom style... (12 colours as hex)
+	edCustomColors = "", -- recent custom tile / light colours ("rrggbb,rrggbb,...")
 	toasts = "Enabled", -- toast notifications (achievements, saves, chamber messages...)
 	tutorial = "Enabled", -- tutorial cards when a level starts
 }
@@ -2656,7 +2658,8 @@ function Panels.EditorSettings()
 		title = "Editor", cells = 8, defaults = true, minBodyCells = 5, maxVisible = 9, listW = 8 * CFG.GRID, noPreview = true, padTop = 30,
 		rows = {
 			{ kind = "choice", text = "Editor Mode", key = "edMode", options = { "Simple", "Intermediate", "Advanced" } },
-			{ kind = "choice", text = "Editor Style", key = "edStyle", options = { "Classic", "Dark", "Blueprint", "High Contrast" } },
+			{ kind = "choice", text = "Editor Style", key = "edStyle", options = { "Classic", "Dark", "Blueprint", "High Contrast", "SCP: CB", "Unity", "Blender",
+				"Roblox Studio", "Terminal", "Solarized", "Synthwave", "Aperture '70s", "Aperture Clean", "Midnight", "Custom" } },
 			{ kind = "choice", text = "Toast Notifications", key = "toasts", options = { "Enabled", "Disabled" } },
 			{ kind = "choice", text = "Tutorials", key = "tutorial", options = { "Enabled", "Disabled" } },
 			{ kind = "choice", text = "Hide Items Palette", key = "edAutoHide", options = { "Enabled", "Disabled" } },
@@ -3836,6 +3839,15 @@ do
 			else
 				tintFX.Enabled = true
 				tween(tintFX, 0.6, { TintColor = rgb(255):Lerp(c, 0.55) })
+			end
+		elseif op == "launch" then
+			-- a chip fired the faith plate you're standing on: your character is yours to move, so it happens here
+			local char = player.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if hrp and typeof(d.v) == "Vector3" then
+				if hum then hum:ChangeState(Enum.HumanoidStateType.Freefall) end
+				hrp.AssemblyLinearVelocity = d.v
 			end
 		elseif op == "countdown" then
 			timerToken += 1
