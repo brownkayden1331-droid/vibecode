@@ -289,11 +289,13 @@ local function tileSound()
 	uiSound(CFG.SOUND_ROLLOVER, CFG.TILE_SOUND_VOLUME, 0.94 + math.random() * 0.12)
 end
 
+local settings, DEFAULTS, mode, loadingNow, refreshTouchPause, publishMode, setMode, setCrosshair, ASPECTS, updateAspect, updateWindow, rescale, bindDisplay, applySetting, onSettingChanged, loadSettingsFromProfile
+do
 -- ==========================================
 -- GAME SETTINGS (player attributes "Setting_<key>", saved on the server)
 -- ==========================================
 
-local settings = {
+settings = {
 	master = 1, music = 1, sfx = 1,
 	brightness = 0.5, aspect = "Native", resolution = "Native", quality = "Auto", textureQuality = "High", shadows = "Enabled",
 	fov = 70, crosshair = "Enabled", motionBlur = "Disabled", blurStrength = 0.5, viewBob = "Enabled",
@@ -308,14 +310,14 @@ local settings = {
 	toasts = "Enabled", -- toast notifications (achievements, saves, chamber messages...)
 	tutorial = "Enabled", -- tutorial cards when a level starts
 }
-local DEFAULTS = table.clone(settings)
+DEFAULTS = table.clone(settings)
 
 local brightnessFX = new("ColorCorrectionEffect", { Name = "PortalMenuBrightness", Parent = Lighting })
 local motionBlurFX = new("BlurEffect", { Name = "PortalMotionBlur", Size = 0, Enabled = false, Parent = Lighting })
 
-local mode = "none"      -- "none" | "main" | "pause"
-local loadingNow = false
-local refreshTouchPause
+mode = "none"      -- "none" | "main" | "pause"
+loadingNow = false
+-- (declared above the do block) local refreshTouchPause
 local syncCameraLock
 
 local function updateMute()
@@ -323,13 +325,13 @@ local function updateMute()
 	masterGroup.Volume = silent and 0 or settings.master
 end
 
-local function publishMode()
+publishMode = function()
 	player:SetAttribute("MenuMode", loadingNow and "loading" or mode)
 	updateMute()
 	if refreshTouchPause then refreshTouchPause() end
 	if syncCameraLock then syncCameraLock() end
 end
-local function setMode(m)
+setMode = function(m)
 	mode = m
 	publishMode()
 end
@@ -351,7 +353,7 @@ for _, attr in ipairs({ "Chapter", "ChallengeChamber", "WorkshopMap", "CoopPartn
 	player:GetAttributeChangedSignal(attr):Connect(syncCameraLock)
 end
 
-local function setCrosshair()
+setCrosshair = function()
 	local o = playerGui:FindFirstChild(CFG.CROSSHAIR_GUI)
 	if o and o:IsA("ScreenGui") then
 		o.Enabled = mode == "none" and settings.crosshair == "Enabled"
@@ -364,8 +366,8 @@ local bars = {}
 for i = 1, 2 do
 	bars[i] = new("Frame", { BackgroundColor3 = rgb(0), BorderSizePixel = 0, Visible = false, Active = false, Parent = aspectGui })
 end
-local ASPECTS = { ["Widescreen 16:9"] = 16 / 9, ["Widescreen 16:10"] = 16 / 10, ["Normal 4:3"] = 4 / 3 }
-local function updateAspect()
+ASPECTS = { ["Widescreen 16:9"] = 16 / 9, ["Widescreen 16:10"] = 16 / 10, ["Normal 4:3"] = 4 / 3 }
+updateAspect = function()
 	local cam = workspace.CurrentCamera
 	local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
 	bars[1].Visible, bars[2].Visible = false, false
@@ -401,7 +403,7 @@ new("TextLabel", {
 	Text = "_    []    X", FontFace = F_TITLE, TextSize = 16, TextColor3 = rgb(200), Parent = winTitle,
 })
 local realWindowed = false
-local function updateWindow()
+updateWindow = function()
 	for _, f in ipairs(winParts) do f.Visible = false end
 	winTitle.Visible = false
 	if settings.display ~= "Windowed" or realWindowed then return end
@@ -490,15 +492,15 @@ playerGui.DescendantAdded:Connect(function(d)
 	end
 end)
 
-local rescale -- forward
+-- (declared above the do block) local rescale -- forward
 
-local function bindDisplay(name)
+bindDisplay = function(name)
 	local aliases = { MouseButton1 = "MOUSE1", MouseButton2 = "MOUSE2", MouseButton3 = "MOUSE3", Backquote = "TILDE", Space = "SPACE" }
 	return aliases[name] or string.upper(name or "")
 end
 
 -- initial = true on startup: options that would overwrite the player's own engine settings are skipped
-local function applySetting(key, initial)
+applySetting = function(key, initial)
 	local v = settings[key]
 	player:SetAttribute("Setting_" .. key, v)
 	if key == "master" then
@@ -543,7 +545,7 @@ updateMute()
 -- settings go to the server a couple of seconds after the last change
 local settingsSaveQueued = false
 local optionsAchievement = false
-local function onSettingChanged()
+onSettingChanged = function()
 	if not optionsAchievement then
 		optionsAchievement = true
 		task.spawn(Net.call, "ClientAchievement", "OPTIONS")
@@ -556,7 +558,7 @@ local function onSettingChanged()
 	end)
 end
 
-local function loadSettingsFromProfile()
+loadSettingsFromProfile = function()
 	for k, v in pairs(P.settings or {}) do
 		if DEFAULTS[k] ~= nil and type(v) == type(DEFAULTS[k]) and settings[k] ~= v then
 			settings[k] = v
@@ -719,6 +721,7 @@ do
 	end)
 end
 
+end
 -- ==========================================
 -- GUI ROOTS
 -- ==========================================
@@ -2176,11 +2179,13 @@ goBack = function()
 	end)
 end
 
+local controls, menuCamPart, camT, setMenuOpen, applyJumpBinding, restoreCamera, setEffects
+do
 -- ==========================================
 -- MENU STATE (mouse, controls, camera, effects)
 -- ==========================================
 
-local controls
+-- (declared above the do block) local controls
 task.spawn(function()
 	local scripts = player:WaitForChild("PlayerScripts", 10)
 	local module = scripts and scripts:WaitForChild("PlayerModule", 5)
@@ -2204,10 +2209,10 @@ local pauseCC = new("ColorCorrectionEffect", { Name = "PortalPauseFX", Enabled =
 local menuBlur = new("BlurEffect", { Name = "PortalMenuBlur", Size = 0, Enabled = false, Parent = Lighting })
 
 local savedIcon = UserInputService.MouseIconEnabled
-local menuCamPart
-local camT = 0
+-- (declared above the do block) local menuCamPart
+camT = 0
 
-local function setMenuOpen(open)
+setMenuOpen = function(open)
 	gui.Enabled = open
 	modal.Visible = open
 	player:SetAttribute("InMenu", open)
@@ -2247,7 +2252,7 @@ local function jumpAction()
 	return Enum.ContextActionResult.Sink
 end
 
-local function applyJumpBinding()
+applyJumpBinding = function()
 	ContextActionService:UnbindAction("PortalCustomJump")
 	ContextActionService:UnbindAction("PortalOldJumpSink")
 	local bind = settings.bindJump or "Space"
@@ -2260,7 +2265,7 @@ local function applyJumpBinding()
 	end
 end
 
-local function restoreCamera()
+restoreCamera = function()
 	if not menuCamPart then return end
 	menuCamPart = nil
 	local cam = workspace.CurrentCamera
@@ -2269,7 +2274,7 @@ local function restoreCamera()
 	if hum then cam.CameraSubject = hum end
 end
 
-local function setEffects(kind)
+setEffects = function(kind)
 	if kind == "pause" then
 		pauseCC.Enabled = true
 		menuBlur.Enabled = true
@@ -2290,6 +2295,7 @@ local function setEffects(kind)
 	end
 end
 
+end
 -- ==========================================
 -- LOADING SCREEN (round "2" badge top-right, 15 dots bottom-right)
 -- ==========================================
@@ -2361,6 +2367,8 @@ local function runLoading(work, minTime, progressFn, instant)
 	return false, "Loading failed."
 end
 
+local closeAll, exitToMain, showAnywhere
+do
 -- ==========================================
 -- OPEN / CLOSE
 -- ==========================================
@@ -2408,7 +2416,7 @@ openMain = function()
 	end)
 end
 
-local function closeAll()
+closeAll = function()
 	clearStack()
 	mainHolder.Visible = false
 	setMode("none")
@@ -2455,7 +2463,7 @@ resume = function()
 	end)
 end
 
-local function exitToMain()
+exitToMain = function()
 	if busy then return end
 	busy = true
 	menuAction:Fire("ExitToMainMenu")
@@ -2471,7 +2479,7 @@ local function exitToMain()
 end
 
 -- shows a dialog whatever state we're in (in game it opens over a pause screen)
-local function showAnywhere(builder)
+showAnywhere = function(builder)
 	task.spawn(function()
 		local t0 = os.clock()
 		while (busy or loadingNow or S.enrichment) and os.clock() - t0 < 8 do task.wait(0.1) end
@@ -2480,6 +2488,7 @@ local function showAnywhere(builder)
 	end)
 end
 
+end
 -- ==========================================
 -- ROBOT ENRICHMENT (roll to black, then RobotEnrichment script takes over)
 -- ==========================================
@@ -2541,6 +2550,8 @@ menuRequest.Event:Connect(function(kind, arg)
 	end
 end)
 
+local friendIds
+do
 -- ==========================================
 -- DIALOGS / PANELS
 -- ==========================================
@@ -3077,7 +3088,7 @@ local function getMap(id, cb)
 	end)
 end
 
-local function friendIds()
+friendIds = function()
 	if not S.friendIds then
 		S.friendIds = {}
 		pcall(function()
@@ -3433,6 +3444,8 @@ openPause = function(firstBuilder)
 	openPanel(firstBuilder or Panels.Pause)
 end
 
+end
+do
 -- ==========================================
 -- TOUCH: on-screen pause button
 -- ==========================================
@@ -3459,6 +3472,7 @@ player:GetAttributeChangedSignal("InEditor"):Connect(refreshTouchPause)
 player:GetAttributeChangedSignal("EditorPlaytest"):Connect(refreshTouchPause)
 refreshTouchPause()
 
+end
 -- ==========================================
 -- BUILD MAIN LIST
 -- ==========================================
@@ -3570,6 +3584,7 @@ do
 	end)
 end
 
+do
 -- ==========================================
 -- INPUT
 -- ==========================================
@@ -3715,6 +3730,7 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
+end
 -- ==========================================
 -- SERVER PUSHES
 -- ==========================================

@@ -671,12 +671,14 @@ do
 	end
 end
 
+local menuButtons, openMenus, closeMenus, popupMenu, overUI
+do
 -- ==========================================
 -- POPUP MENUS (File / Edit / Help dropdowns and the right-click menus)
 -- ==========================================
-local menuButtons = {}
-local openMenus = {}
-local function closeMenus()
+menuButtons = {}
+openMenus = {}
+closeMenus = function()
 	for _, m in ipairs(openMenus) do m:Destroy() end
 	table.clear(openMenus)
 	for _, mb in ipairs(menuButtons) do mb.reset() end
@@ -693,7 +695,7 @@ end
 --   sub() -> items        opens a submenu to the right on hover / click (">" arrow)
 --   hover(on)             called when the row is hovered / left (used to highlight an item in the room)
 --   timer = { value, set(v), min, max }   the red LED timer row with up / down arrows
-local popupMenu
+-- (declared above the do block) local popupMenu
 do
 local TextService = game:GetService("TextService")
 local subMenu -- the open submenu frame (one level)
@@ -858,7 +860,7 @@ popupMenu = function(x, y, sections)
 end
 end
 
-local function overUI()
+overUI = function()
 	if #openMenus > 0 or dialog then return true end
 	local m = pointerScreen() - GuiService:GetGuiInset()
 	for _, o in ipairs(playerGui:GetGuiObjectsAtPosition(m.X, m.Y)) do
@@ -867,6 +869,7 @@ local function overUI()
 	return false
 end
 
+end
 -- ==========================================
 -- CHAMBER DATA
 -- ==========================================
@@ -909,6 +912,8 @@ end
 -- does placing / moving / deleting this item change the room itself (door alcove, faith plate pit)?
 local function needsRoom(kind) return Config.MakesHole(kind) end
 
+local refreshSelection, entById, canSource, canTarget, hasLinks, entLabel, buildEntity, updateCull, rebuildEnts, rebuild, refreshItems, applyCamera
+do
 -- ==========================================
 -- RENDERING
 -- ==========================================
@@ -917,7 +922,7 @@ local function panelColor(fp)
 	return fp.wallT and (fp.portal and C.WALLTILE_WHITE or C.WALLTILE_BLACK) or (fp.portal and C.WHITE or C.BLACK)
 end
 
-local function refreshSelection()
+refreshSelection = function()
 	for fk, fp in pairs(E.faceParts) do
 		local sel = E.sel[fk]
 		fp.panel.Color = sel and (fp.portal and C.SEL_WHITE or C.SEL_BLACK) or panelColor(fp)
@@ -933,20 +938,20 @@ local function refreshSelection()
 end
 
 -- ----- item links (sources -> the items they drive) -----
-local function entById(id)
+entById = function(id)
 	for i, e in ipairs(E.ents) do
 		if e[8] == id then return i, e end
 	end
 end
-local function canSource(e) return Config.CanSource(e[1]) end
-local function canTarget(e) return Config.CanTarget(e[1]) end
-local function hasLinks(e)
+canSource = function(e) return Config.CanSource(e[1]) end
+canTarget = function(e) return Config.CanTarget(e[1]) end
+hasLinks = function(e)
 	for _, l in ipairs(E.links) do
 		if l[1] == e[8] or l[2] == e[8] then return true end
 	end
 	return false
 end
-local function entLabel(e)
+entLabel = function(e)
 	local def = Config.ENTITY_TYPES[e[1]]
 	if e[1] == "gate" then return Config.GateMode(e) .. " gate" end
 	return e[7] or (def and def.name) or e[1]
@@ -990,7 +995,7 @@ end
 
 -- editor copies: no tags, scripts or sounds, and no model names other scripts react to (TestElementsClient would
 -- otherwise start funnel effects / beam hums on the editor's items, pedestal scripts would hook them...)
-local function buildEntity(e, opts, origin)
+buildEntity = function(e, opts, origin)
 	local ok, m = pcall(Config.BuildEntity, e, origin or W, opts)
 	if not ok then
 		warn("[PortalMapEditor] BuildEntity", e[1], m)
@@ -1012,9 +1017,9 @@ local function buildEntity(e, opts, origin)
 	return m
 end
 
-local updateCull -- forward (defined after rebuild)
+-- (declared above the do block) local updateCull -- forward (defined after rebuild)
 
-local function rebuildEnts()
+rebuildEnts = function()
 	entFolder:ClearAllChildren()
 	E.entModels = {}
 	for i, e in ipairs(E.ents) do
@@ -1054,7 +1059,7 @@ end
 
 -- Every panel is three flat layers that never poke past its own cell:
 --   panel (the visible tile) / rim (the light grid line between tiles) / shell (the dark wall thickness on the cut edge)
-local function rebuild()
+rebuild = function()
 	if E.gameView and X.buildGameView then X.buildGameView() return end -- game view shows the real chamber instead
 	roomFolder:ClearAllChildren()
 	E.faceParts = {}
@@ -1110,7 +1115,7 @@ local function rebuild()
 end
 
 -- after an item change: the whole room if the item cuts into it (doors, faith plates), else just the items
-local function refreshItems(kind)
+refreshItems = function(kind)
 	if kind and needsRoom(kind) then rebuild() else rebuildEnts() end
 end
 
@@ -1160,7 +1165,7 @@ updateCull = function()
 	end
 end
 
-local function applyCamera()
+applyCamera = function()
 	cam.CFrame = CFrame.new(E.cTarget) * CFrame.Angles(0, E.cYaw, 0) * CFrame.Angles(E.cPitch, 0, 0) * CFrame.new(0, 0, E.cDist)
 	local wcam = workspace.CurrentCamera
 	if wcam and E.active and not E.playtest then
@@ -1170,6 +1175,7 @@ local function applyCamera()
 	end
 end
 
+end
 -- ==========================================
 -- PICKING (rays through the camera at the pointer)
 -- ==========================================
@@ -1280,13 +1286,15 @@ do
 	end
 end
 
+local Team, slotValid
+do
 -- ==========================================
 -- TEAM BUILDERS (markers for everyone else on the team)
 -- ==========================================
 -- A coloured circle + their name (BillboardGui, always on top) at whatever they're pointing at. The shade follows
 -- what's under it: darker on white tiles, lighter on black tiles, full colour + white ring on items, full colour + dark
 -- ring out in the grey void. Behind a wall from your view it goes see-through; idle (no pointer) it shrinks.
-local Team = { markers = {} }
+Team = { markers = {} }
 do
 local teamBox -- the list in the top right (built below)
 local function memberInfo(userId)
@@ -1408,7 +1416,7 @@ local function slotTaken(x, y, z, f, ignore)
 end
 
 -- can an item of this kind sit on this panel?
-local function slotValid(kind, hit, ignore)
+slotValid = function(kind, hit, ignore)
 	if not hit or hit.kind ~= "face" then return false end
 	local def = Config.ENTITY_TYPES[kind]
 	if not def then return false end
@@ -1417,11 +1425,14 @@ local function slotValid(kind, hit, ignore)
 	return not slotTaken(hit.x, hit.y, hit.z, hit.f, ignore)
 end
 
+end
+local pushUndo, undo, redo, moveSurfaces, togglePortalable, setTileColor, paintSelection, deleteItem, rotateItem, cancelLink, startLink, linkPair, completeLink, selCount, selectRect, selectAll
+do
 -- ==========================================
 -- EDITING
 -- ==========================================
 -- every change bumps E.rev; the frame loop sends the chamber to the team when it moves on
-local function pushUndo(before)
+pushUndo = function(before)
 	table.insert(E.undo, before or snapshot())
 	if #E.undo > 60 then table.remove(E.undo, 1) end
 	table.clear(E.redo)
@@ -1437,7 +1448,7 @@ local function restore(sn)
 	E.sel, E.selItem, E.anchor = {}, nil, nil
 	rebuild()
 end
-local function undo()
+undo = function()
 	if #E.undo == 0 then sfx("Error") return end
 	table.insert(E.redo, snapshot())
 	restore(table.remove(E.undo))
@@ -1445,7 +1456,7 @@ local function undo()
 	E.rev += 1
 	sfx("Click")
 end
-local function redo()
+redo = function()
 	if #E.redo == 0 then sfx("Error") return end
 	table.insert(E.undo, snapshot())
 	restore(table.remove(E.redo))
@@ -1468,7 +1479,7 @@ local function selectionMaterial()
 end
 
 -- + pulls the selected panels toward you (extrude: fills the cell in), - pushes them away (carve: digs the next cell out)
-local function moveSurfaces(sign)
+moveSurfaces = function(sign)
 	if next(E.sel) == nil then flash("Select a surface first.") sfx("Error") return end
 	local mat = selectionMaterial()
 	local before = snapshot()
@@ -1533,7 +1544,7 @@ local function moveSurfaces(sign)
 	sfx((sign < 0 and "Carve" or "Extrude") .. mat)
 end
 
-local function togglePortalable()
+togglePortalable = function()
 	if next(E.sel) == nil then sfx("Error") return end
 	local all = true
 	for fk in pairs(E.sel) do if not Config.FaceInfo(E.faces[fk]) then all = false end end
@@ -1547,7 +1558,7 @@ local function togglePortalable()
 end
 
 -- tile colours (nil = no colour)
-local function setTileColor(idx)
+setTileColor = function(idx)
 	if next(E.sel) == nil then flash("Select a surface first.") sfx("Error") return end
 	pushUndo()
 	for fk in pairs(E.sel) do E.colors[fk] = idx end
@@ -1555,9 +1566,9 @@ local function setTileColor(idx)
 	rebuild()
 	sfx("Click")
 end
-local function paintSelection() setTileColor(E.lastColor or 1) end
+paintSelection = function() setTileColor(E.lastColor or 1) end
 
-local function deleteItem()
+deleteItem = function()
 	local e = E.selItem and E.ents[E.selItem]
 	if not e then sfx("Error") return end
 	if Config.ENTITY_TYPES[e[1]].mandatory then
@@ -1572,7 +1583,7 @@ local function deleteItem()
 	sfx("Click")
 end
 
-local function rotateItem()
+rotateItem = function()
 	local e = E.selItem and E.ents[E.selItem]
 	if not e or Config.ENTITY_TYPES[e[1]].needsFloor then sfx("Error") return end
 	pushUndo()
@@ -1582,7 +1593,7 @@ local function rotateItem()
 end
 
 -- ----- connecting items -----
-local function cancelLink()
+cancelLink = function()
 	if not E.linking then return end
 	E.linking = nil
 	connectGui.hide()
@@ -1590,7 +1601,7 @@ local function cancelLink()
 	tooltip.Text = ""
 end
 
-local function startLink()
+startLink = function()
 	local e = E.selItem and E.ents[E.selItem]
 	if not e or not (canSource(e) or canTarget(e)) then
 		flash("Select a button, a logic gate or a test element first.")
@@ -1611,13 +1622,13 @@ local function linked(a, b)
 end
 
 -- the item you started from drives the one you click, unless only the other way round makes sense
-local function linkPair(a, b)
+linkPair = function(a, b)
 	if canSource(a) and canTarget(b) then return a, b end
 	if canSource(b) and canTarget(a) then return b, a end
 	return nil
 end
 
-local function completeLink(index)
+completeLink = function(index)
 	local b = E.ents[index]
 	local _, a = entById(E.linking)
 	if not a or not b or a == b then cancelLink() return end
@@ -1651,14 +1662,14 @@ local function completeLink(index)
 	sfx("Click")
 end
 
-local function selCount()
+selCount = function()
 	local n = 0
 	for _ in pairs(E.sel) do n += 1 end
 	return n
 end
 
 -- select the panels of one wall between two panels. additive keeps what is already selected.
-local function selectRect(a, b, additive)
+selectRect = function(a, b, additive)
 	local axis = (a.f <= 2 and 1) or (a.f <= 4 and 2) or 3
 	local ca, cb = { a.x, a.y, a.z }, { b.x, b.y, b.z }
 	if b.f ~= a.f or ca[axis] ~= cb[axis] then return false end
@@ -1679,13 +1690,14 @@ local function selectRect(a, b, additive)
 	return true
 end
 
-local function selectAll()
+selectAll = function()
 	E.sel, E.selItem = {}, nil
 	for fk in pairs(E.faceParts) do E.sel[fk] = true end
 	refreshSelection()
 	sfx("SelectEnd")
 end
 
+end
 -- ==========================================
 -- PALETTE (slides in from the left strip): Items / Textures / Meshes / My Chips tabs
 -- ==========================================
@@ -3132,15 +3144,17 @@ local function start(payload)
 	end)
 end
 
+local exitEditor, newChamber, toggleGameView
+do
 -- ==========================================
 -- MENUS (File / Edit / Help + toolbar)
 -- ==========================================
-local function exitEditor()
+exitEditor = function()
 	saveDraft(true)
 	menuRequest("ExitToMain")
 end
 
-local function newChamber()
+newChamber = function()
 	task.spawn(function()
 		saveDraft(true)
 		local ok, err = netCall("CommunityCreate", nil)
@@ -3200,7 +3214,7 @@ do
 end
 
 local eyeIcon
-local function toggleGameView()
+toggleGameView = function()
 	E.gameView = not E.gameView
 	if E.gameView then
 		cancelLink()
@@ -3317,6 +3331,7 @@ toolButton(-25, 30, 24, SET.ICONS.undo, "Undo (Ctrl+Z)", undo)
 toolButton(24, 30, 24, SET.ICONS.redo, "Redo (Ctrl+Y)", redo)
 eyeIcon = toolButton(73, 32, 22, SET.ICONS.eye, function() return E.gameView and "Switch to editor view (Tab)" or "Switch to game view (Tab)" end, toggleGameView)
 
+end
 -- ==========================================
 -- HANDLES / PREVIEWS / HIGHLIGHT
 -- ==========================================
@@ -3501,6 +3516,8 @@ do
 	end
 end
 
+local surfaceMenu, itemMenu, selectionMenu
+do
 -- ==========================================
 -- CONTEXT MENUS
 -- ==========================================
@@ -3557,7 +3574,7 @@ local function surfaceSection()
 	return { title = "Surface", items = items }
 end
 
-local function surfaceMenu(x, y)
+surfaceMenu = function(x, y)
 	popupMenu(x, y, { surfaceSection() })
 end
 
@@ -3582,7 +3599,7 @@ local function radios(index, k, list, current, labels)
 	return items
 end
 
-local function itemMenu(x, y)
+itemMenu = function(x, y)
 	local index = E.selItem
 	local e = E.ents[index]
 	local def = e and Config.ENTITY_TYPES[e[1]]
@@ -3725,12 +3742,13 @@ local function itemMenu(x, y)
 end
 
 -- the menu for whatever is selected (touch toolbar's OPTIONS)
-local function selectionMenu(x, y)
+selectionMenu = function(x, y)
 	if E.selItem and E.ents[E.selItem] then itemMenu(x, y)
 	elseif next(E.sel) then surfaceMenu(x, y)
 	else flash("Select a surface or an item first.") sfx("Error") end
 end
 
+end
 -- ==========================================
 -- TOUCH TOOLBAR (bottom centre)
 -- ==========================================
@@ -3764,10 +3782,12 @@ do
 	end
 end
 
+local canEdit, orbit, zoomBy, cancelCarry, contextAt, pointerMoved
+do
 -- ==========================================
 -- INPUT
 -- ==========================================
-local function canEdit()
+canEdit = function()
 	return E.active and not E.playtest and not E.building and not dialog and not player:GetAttribute("InMenu")
 		and not UserInputService:GetFocusedTextBox()
 end
@@ -3779,14 +3799,14 @@ local function panCamera(d)
 end
 
 -- d in pixels (mouse delta); speed + invert from the editor settings
-local function orbit(d)
+orbit = function(d)
 	local s = 0.006 * curve(ES("edOrbitSens", 0.5))
 	local inv = ES("edInvertY", "Disabled") == "Enabled" and -1 or 1
 	E.yaw -= d.X * s
 	E.pitch = math.clamp(E.pitch - d.Y * s * inv, math.rad(-89), math.rad(89)) -- straight down to straight up
 end
 
-local function zoomBy(amount) -- amount > 0 = in
+zoomBy = function(amount) -- amount > 0 = in
 	E.dist = math.clamp(E.dist * (1 - amount * 0.1 * curve(ES("edZoomSpeed", 0.5))), 25, 600)
 	E.chromeHold = os.clock() + 0.9
 	E.zoomShow = os.clock() + 0.9
@@ -3802,14 +3822,14 @@ local function updateGhost(hit)
 	ghost.Parent = fxFolder
 end
 
-local function cancelCarry()
+cancelCarry = function()
 	E.carry, E.carryArm = nil, nil
 	Pal.itemName.Text = ""
 	if ghost then ghost:Destroy() ghost = nil end
 end
 
 -- right-click / X / long-press: the menu for whatever is under the pointer
-local function contextAt()
+contextAt = function()
 	local hit = pick()
 	local m = mouseCanvas()
 	if hit and hit.kind == "face" then
@@ -3920,7 +3940,7 @@ local function primaryUp()
 end
 
 -- the pointer moved (d = pixels; 0 for the controller cursor, which only matters for drags / hover)
-local function pointerMoved(d)
+pointerMoved = function(d)
 	if E.mmb then
 		if shiftDown() then panCamera(d) else orbit(d) end
 	elseif E.rmb then
@@ -4289,6 +4309,7 @@ player:GetAttributeChangedSignal("InMenu"):Connect(function()
 	end
 end)
 
+end
 -- ==========================================
 -- FRAME LOOP
 -- ==========================================
