@@ -203,7 +203,16 @@ local DEBUG_HUD = false
 ------------------------------------------------------------------------
 
 local assets = ReplicatedStorage:WaitForChild("PortalAssets")
-local ost = assets:WaitForChild("OST")
+local ost = assets:WaitForChild("OST", 15)
+if not ost then
+	for _, c in ipairs(assets:GetChildren()) do
+		if string.lower((string.gsub(c.Name, "[^%w]", ""))) == "ost" then ost = c break end
+	end
+end
+if not ost then
+	warn("[MusicDirector] There's no OST folder in " .. assets:GetFullName() .. " - no music until there is one.")
+	ost = assets:WaitForChild("OST")
+end
 -- NOT waited for: waiting up to 10 s each on these used to hold the whole script (menu music included) for 20 s
 -- when a folder was missing or named a little differently. They're looked up again later if they arrive late.
 local function findLoose(root, name)
@@ -315,6 +324,19 @@ eq.Name = "MusicEQ"
 eq.Priority = 1
 eq.Parent = musicGroup
 
+-- a song that never loads is almost always audio permissions: say so once per sound
+local loadWarned = {}
+local function checkLoads(s)
+	task.delay(10, function()
+		if s.Parent and not s.IsLoaded and not loadWarned[s.SoundId] then
+			loadWarned[s.SoundId] = true
+			warn(("[MusicDirector] %s (%s) hasn't loaded after 10 s. Look in Output for 'not authorized' / 'Failed to load sound': "
+				.. "the audio must be public, or yours / your group's with permission granted to this experience "
+				.. "(Creator Hub > the audio > Permissions)."):format(s.Name, s.SoundId))
+		end
+	end)
+end
+
 local function makeSound(original, looped)
 	-- Clone() gives nil for a Sound with Archivable off (that used to error every frame and kill all music)
 	local wasArchivable = original.Archivable
@@ -326,6 +348,7 @@ local function makeSound(original, looped)
 	s.SoundGroup = musicGroup -- set before parenting, so PortalMenu's sound routing leaves it alone
 	s.Parent = SoundService
 	s:SetAttribute("BaseSpeed", original.PlaybackSpeed)
+	checkLoads(s)
 	return s
 end
 
@@ -552,8 +575,9 @@ player.CharacterAdded:Connect(onCharacter)
 if player.Character then task.spawn(onCharacter, player.Character) end
 
 ------------------------------------------------------------------ HUD
+-- Ctrl + Shift + M shows / hides it while playing (to see why something isn't playing)
 local hud
-if DEBUG_HUD then
+local function makeHud()
 	local g = Instance.new("ScreenGui")
 	g.Name = "MusicDebug"
 	g.ResetOnSpawn = false
@@ -570,6 +594,22 @@ if DEBUG_HUD then
 	hud.TextYAlignment = Enum.TextYAlignment.Top
 	hud.Parent = g
 end
+if DEBUG_HUD then makeHud() end
+game:GetService("UserInputService").InputBegan:Connect(function(input)
+	local uis = game:GetService("UserInputService")
+	if input.KeyCode == Enum.KeyCode.M and uis:IsKeyDown(Enum.KeyCode.LeftControl) and uis:IsKeyDown(Enum.KeyCode.LeftShift) then
+		if hud then hud.Parent.Enabled = not hud.Parent.Enabled else makeHud() end
+	end
+end)
+
+-- one line in Output a few seconds in: what it found
+task.delay(4, function()
+	local seg = 0
+	if segFolder then for _, f in ipairs(segFolder:GetChildren()) do seg += #f:GetChildren() end end
+	print(("[MusicDirector] running. Menu tracks: %d, Portal 1: %d calm / %d neutral / %d tense / %d combat, short segments: %d. "
+		.. "MenuMode = %s, MusicVolume = %s. Ctrl+Shift+M shows the music HUD."):format(#menuTracks, #bgTracks.Calm, #bgTracks.Neutral,
+		#bgTracks.Tense, #combatTracks, seg, tostring(player:GetAttribute("MenuMode")), tostring(player:GetAttribute("MusicVolume"))))
+end)
 local function bar(x)
 	local n = math.floor(x * 20 + 0.5)
 	return string.rep("#", n) .. string.rep(".", 20 - n)

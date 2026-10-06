@@ -1841,22 +1841,49 @@ end
 -- ==========================================
 -- Written either with blocks or as lines. Both are the same program:
 --   when button1 pressed        when <item> pressed / released   (buttons, pedestals, laser catchers, gates)
---     open exit                 when start                       (the chamber was just built / you spawned)
---     say "Nice one!"           when every 5                     (every 5 seconds)
+--     add presses 1             when start                       (the chamber was just built / you spawned)
+--     if presses >= 3 then open exit                             when every <seconds>
+--     say "Pressed {presses} times"
 --   when button1 released
 --     wait 2
 --     close exit
 -- Actions: open / close / enable / disable / toggle <item>, drop <dropper>, reverse <funnel>, wait <seconds>,
---          say <text>.   Lines starting with -- or # are comments.
+--          say <text> ({name} shows a variable), set <variable> <value>, add <variable> <number>,
+--          if <variable | item> <== != < > <= >=> <value> then <action>
+-- Variables are shared by every chip in the chamber and start at 0. An item in an "if" counts as 1 when it's
+-- pressed / on / open, else 0. Lines starting with -- or # are comments.
 C.CHIP_EVENTS = { "pressed", "released", "start", "every" }
 C.CHIP_EVENT_LABELS = { pressed = "is pressed", released = "is released", start = "chamber starts", every = "every ... seconds" }
-C.CHIP_ACTIONS = { "open", "close", "toggle", "enable", "disable", "drop", "reverse", "wait", "say" }
+C.CHIP_ACTIONS = { "open", "close", "toggle", "enable", "disable", "drop", "reverse", "wait", "say", "set", "add", "if" }
 C.CHIP_ACTION_LABELS = {
 	open = "open", close = "close", toggle = "toggle", enable = "turn on", disable = "turn off",
 	drop = "drop a cube from", reverse = "reverse", wait = "wait (seconds)", say = "show message",
+	set = "set variable", add = "add to variable", ["if"] = "if ... then",
+}
+C.CHIP_COMPARE = { "==", "!=", "<", ">", "<=", ">=" }
+-- what each line expects (the editor shows it while you type, like a code editor's parameter hints)
+C.CHIP_HINTS = {
+	when = "when <item> pressed | released   ·   when start   ·   when every <seconds>",
+	open = "open <item>   opens a door / turns an item on",
+	close = "close <item>   closes a door / turns an item off",
+	toggle = "toggle <item>   flips it on / off",
+	enable = "enable <item>   turns an item on",
+	disable = "disable <item>   turns an item off",
+	drop = "drop <dropper>   drops a new cube",
+	reverse = "reverse <funnel>   flips an excursion funnel's direction",
+	wait = "wait <seconds>   pauses this rule",
+	say = "say <text>   shows a message ({name} = a variable's value)",
+	set = "set <variable> <number | true | false | variable>",
+	add = "add <variable> <number>   (a negative number takes away)",
+	["if"] = "if <variable | item> <== != < > <= >=> <value> then <action>",
 }
 local CHIP_TARGET = { open = true, close = true, toggle = true, enable = true, disable = true, drop = true, reverse = true }
 C.CHIP_TARGET = CHIP_TARGET
+local CHIP_KEYWORDS = { ["when"] = true, ["then"] = true, ["true"] = true, ["false"] = true, start = true, every = true, pressed = true, released = true }
+for _, a in ipairs(C.CHIP_ACTIONS) do CHIP_KEYWORDS[a] = true end
+function C.ValidVarName(n)
+	return type(n) == "string" and #n <= 24 and n:match("^[%a_][%w_]*$") ~= nil and not CHIP_KEYWORDS[n:lower()]
+end
 -- which items an event / action can use
 function C.ChipSourceOk(kind) return C.LINK_SOURCES[kind] == true end
 function C.ChipTargetOk(op, kind)
@@ -1865,8 +1892,43 @@ function C.ChipTargetOk(op, kind)
 	if CHIP_TARGET[op] then return C.SWITCHABLE[kind] == true end
 	return false
 end
+local COMPARE = {}
+for _, c in ipairs(C.CHIP_COMPARE) do COMPARE[c] = true end
 
--- text -> { { ev, src, n, acts = { { op, target, n, text } } } }, errors (list of strings)
+-- one action from its words. Returns the action, or nil and an error.
+local function parseAction(word, rest, allowIf)
+	if word == "wait" then
+		local n = tonumber(rest)
+		if not n then return nil, "'wait' needs a number of seconds" end
+		return { op = "wait", n = math.clamp(n, 0, 60) }
+	elseif word == "say" then
+		local msg = rest:match('^"(.*)"$') or rest
+		return { op = "say", text = msg:sub(1, 120) }
+	elseif word == "set" or word == "add" then
+		local var, value = rest:match("^(%S+)%s*(%S*)")
+		if not C.ValidVarName(var) then return nil, ("'%s' needs a variable name (letters, numbers, _), like '%s score 1'"):format(word, word) end
+		if word == "add" and not tonumber(value) then return nil, "'add' needs a number, like 'add score 1'" end
+		if word == "set" and value == "" then return nil, "'set' needs a value, like 'set score 0'" end
+		return { op = word, var = var, value = value }
+	elseif word == "if" then
+		if not allowIf then return nil, "an 'if' can't have another 'if' after its 'then'" end
+		local lhs, cmp, rhs, inner = rest:match("^(%S+)%s+(%S+)%s+(%S+)%s+[Tt][Hh][Ee][Nn]%s+(.+)$")
+		if not lhs then return nil, "write it like 'if score >= 3 then open exit'" end
+		if cmp == "~=" then cmp = "!=" elseif cmp == "=" then cmp = "==" end
+		if not COMPARE[cmp] then return nil, ("'%s' isn't a comparison: use == != < > <= >="):format(cmp) end
+		local w2, r2 = inner:match("^(%S+)%s*(.*)$")
+		local act, err = parseAction(w2:lower(), r2, false)
+		if not act then return nil, err end
+		return { op = "if", lhs = lhs, cmp = cmp, rhs = rhs, act = act }
+	elseif CHIP_TARGET[word] then
+		local target = rest:match("^(%S+)")
+		if not target then return nil, ("'%s' needs an item, like '%s exit'"):format(word, word) end
+		return { op = word, target = target }
+	end
+	return nil, ("I don't know '%s'"):format(word)
+end
+
+-- text -> { { ev, src, n, acts = { { op, target, n, text, var, value, lhs, cmp, rhs, act } } } }, errors (list of strings)
 function C.ParseChip(src)
 	local rules, errs = {}, {}
 	if type(src) ~= "string" then return rules, { "No program." } end
@@ -1898,22 +1960,25 @@ function C.ParseChip(src)
 				table.insert(errs, ("line %d: I don't know '%s'"):format(ln, word))
 			elseif not cur then
 				table.insert(errs, ("line %d: '%s' has to come after a 'when' line"):format(ln, word))
-			elseif word == "wait" then
-				local n = tonumber(rest)
-				if not n then table.insert(errs, ("line %d: 'wait' needs a number of seconds"):format(ln))
-				else table.insert(cur.acts, { op = "wait", n = math.clamp(n, 0, 60) }) end
-			elseif word == "say" then
-				local msg = rest:match('^"(.*)"$') or rest
-				table.insert(cur.acts, { op = "say", text = msg:sub(1, 120) })
 			else
-				local target = rest:match("^(%S+)")
-				if not target then table.insert(errs, ("line %d: '%s' needs an item, like '%s exit'"):format(ln, word, word))
-				else table.insert(cur.acts, { op = word, target = target }) end
+				local act, err = parseAction(word, rest, true)
+				if act then table.insert(cur.acts, act) else table.insert(errs, ("line %d: %s"):format(ln, err)) end
 			end
 		end
 	end
 	return rules, errs
 end
+
+local function actionText(a)
+	if a.op == "wait" then return "wait " .. tostring(a.n or 1) end
+	if a.op == "say" then return ('say "%s"'):format((a.text or ""):gsub('"', "'")) end
+	if a.op == "set" or a.op == "add" then return ("%s %s %s"):format(a.op, a.var or "?", tostring(a.value or "0")) end
+	if a.op == "if" then
+		return ("if %s %s %s then %s"):format(a.lhs or "?", a.cmp or "==", a.rhs or "0", a.act and actionText(a.act) or "?")
+	end
+	return ("%s %s"):format(a.op, a.target or "?")
+end
+C.ChipActionText = actionText
 
 -- rules -> text
 function C.ChipText(rules)
@@ -1922,13 +1987,32 @@ function C.ChipText(rules)
 		if r.ev == "start" then table.insert(out, "when start")
 		elseif r.ev == "every" then table.insert(out, "when every " .. tostring(r.n or 1))
 		else table.insert(out, ("when %s %s"):format(r.src or "?", r.ev or "pressed")) end
-		for _, a in ipairs(r.acts or {}) do
-			if a.op == "wait" then table.insert(out, "    wait " .. tostring(a.n or 1))
-			elseif a.op == "say" then table.insert(out, ('    say "%s"'):format((a.text or ""):gsub('"', "'")))
-			else table.insert(out, ("    %s %s"):format(a.op, a.target or "?")) end
-		end
+		for _, a in ipairs(r.acts or {}) do table.insert(out, "    " .. actionText(a)) end
 	end
 	return table.concat(out, "\n")
+end
+
+-- every action, including the one inside an "if"
+local function eachAction(rules, fn)
+	for _, r in ipairs(rules) do
+		for _, a in ipairs(r.acts) do
+			fn(a)
+			if a.op == "if" and a.act then fn(a.act) end
+		end
+	end
+end
+C.ChipEachAction = eachAction
+
+-- the variables a program uses (set / add)
+function C.ChipVariables(rules)
+	local vars, list = {}, {}
+	eachAction(rules, function(a)
+		if (a.op == "set" or a.op == "add") and a.var and not vars[a.var:lower()] then
+			vars[a.var:lower()] = true
+			table.insert(list, a.var)
+		end
+	end)
+	return list
 end
 
 -- checks the item names against a chamber's items. kinds = { [label:lower()] = kind }
@@ -1940,14 +2024,17 @@ function C.CheckChip(rules, kinds)
 			if not k then table.insert(errs, ("There's no item called '%s'."):format(r.src))
 			elseif not C.ChipSourceOk(k) then table.insert(errs, ("'%s' can't be pressed (use a button, pedestal, laser catcher or gate)."):format(r.src)) end
 		end
-		for _, a in ipairs(r.acts) do
-			if a.target then
-				local k = kinds[a.target:lower()]
-				if not k then table.insert(errs, ("There's no item called '%s'."):format(a.target))
-				elseif not C.ChipTargetOk(a.op, k) then table.insert(errs, ("Can't '%s' %s."):format(a.op, a.target)) end
-			end
-		end
 	end
+	eachAction(rules, function(a)
+		if a.target then
+			local k = kinds[a.target:lower()]
+			if not k then table.insert(errs, ("There's no item called '%s'."):format(a.target))
+			elseif not C.ChipTargetOk(a.op, k) then table.insert(errs, ("Can't '%s' %s."):format(a.op, a.target)) end
+		end
+		if (a.op == "set" or a.op == "add") and a.var and kinds[a.var:lower()] then
+			table.insert(errs, ("'%s' is an item's label, pick another variable name."):format(a.var))
+		end
+	end)
 	return errs
 end
 function C.LabelKinds(ents)
@@ -1968,15 +2055,13 @@ function C.ExitCanOpen(data)
 		if l[2] == exitE[8] then return true end
 	end
 	local label = (C.LabelOf(exitE) or "exit"):lower()
+	local opens = false
 	for _, chip in ipairs(type(data.chips) == "table" and data.chips or {}) do
-		local rules = C.ParseChip(chip.src)
-		for _, r in ipairs(rules) do
-			for _, a in ipairs(r.acts) do
-				if (a.op == "open" or a.op == "enable" or a.op == "toggle") and a.target and a.target:lower() == label then return true end
-			end
-		end
+		eachAction(C.ParseChip(chip.src), function(a)
+			if (a.op == "open" or a.op == "enable" or a.op == "toggle") and a.target and a.target:lower() == label then opens = true end
+		end)
 	end
-	return false
+	return opens
 end
 
 
@@ -1985,16 +2070,21 @@ local function editDistance(a, b)
 	if a == b then return 0 end
 	local la, lb = #a, #b
 	if math.abs(la - lb) > 3 then return 99 end
-	local prev = {}
+	-- Damerau (optimal string alignment): swapped neighbours ("sya" -> "say") count as one edit
+	local prev2, prev = nil, {}
 	for j = 0, lb do prev[j] = j end
 	for i = 1, la do
 		local cur = { [0] = i }
 		local ca = a:sub(i, i)
 		for j = 1, lb do
-			local cost = (ca == b:sub(j, j)) and 0 or 1
+			local cb = b:sub(j, j)
+			local cost = (ca == cb) and 0 or 1
 			cur[j] = math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+			if prev2 and i > 1 and j > 1 and ca == b:sub(j - 1, j - 1) and a:sub(i - 1, i - 1) == cb then
+				cur[j] = math.min(cur[j], prev2[j - 2] + 1)
+			end
 		end
-		prev = cur
+		prev2, prev = prev, cur
 	end
 	return prev[lb]
 end
@@ -2014,15 +2104,22 @@ local ACTION_SET = {}
 for _, a in ipairs(C.CHIP_ACTIONS) do ACTION_SET[a] = true end
 local KEYWORDS = { "when" }
 for _, a in ipairs(C.CHIP_ACTIONS) do table.insert(KEYWORDS, a) end
+local ACTION_LIST = {}
+for _, a in ipairs(C.CHIP_ACTIONS) do if a ~= "if" then table.insert(ACTION_LIST, a) end end
 
--- fixes typos and capitals in every line: keywords, events and item labels. Indents actions under their "when".
--- labels = list of the chamber's labels. Returns the new text and a list of "old -> new" fixes.
+-- fixes typos and capitals in every line: keywords, events, comparisons and item labels. Indents actions under
+-- their "when". labels = list of the chamber's labels. Returns the new text and a list of "old -> new" fixes.
 function C.ChipAutocorrect(src, labels)
 	local fixes = {}
 	local lower = {}
 	for _, l in ipairs(labels or {}) do lower[l:lower()] = l end
+	-- variable names in use, so they aren't "corrected" into labels
+	local vars = {}
+	for v in (src .. "\n"):gmatch("[Ss][Ee][Tt]%s+([%a_][%w_]*)") do vars[v:lower()] = v end
+	for v in (src .. "\n"):gmatch("[Aa][Dd][Dd]%s+([%a_][%w_]*)") do vars[v:lower()] = vars[v:lower()] or v end
 	local function fixLabel(w)
 		if lower[w:lower()] then return lower[w:lower()] end
+		if vars[w:lower()] then return vars[w:lower()] end
 		local c = closest(w, labels or {}, #w <= 4 and 1 or 2)
 		if c then table.insert(fixes, w .. " -> " .. c) return c end
 		return w
@@ -2034,6 +2131,26 @@ function C.ChipAutocorrect(src, labels)
 		if c then table.insert(fixes, w .. " -> " .. c) return c end
 		return w
 	end
+	-- an action line without its indent ("open exit", "if a > 1 then open exit")
+	local function fixAction(first, rest, allowIf)
+		first = fixWord(first, allowIf and KEYWORDS or ACTION_LIST, #first <= 3 and 1 or 2)
+		if first == "if" and allowIf then
+			local lhs, cmp, rhs, thenW, inner = rest:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s*(.*)$")
+			if not lhs then return "if " .. rest end
+			lhs = fixLabel(lhs)
+			if cmp == "~=" then cmp = "!=" elseif cmp == "=" or cmp == "===" then cmp = "==" elseif cmp == "=>" then cmp = ">=" elseif cmp == "=<" then cmp = "<=" end
+			if not rhs:match("^%-?[%d%.]+$") and rhs:lower() ~= "true" and rhs:lower() ~= "false" then rhs = fixLabel(rhs) else rhs = rhs:lower() end
+			thenW = fixWord(thenW, { "then" }, 2)
+			local w2, r2 = inner:match("^(%S+)%s*(.*)$")
+			return ("if %s %s %s %s"):format(lhs, cmp, rhs, thenW) .. (w2 and (" " .. fixAction(w2, r2, false)) or "")
+		elseif first == "say" or first == "wait" or not ACTION_SET[first] then
+			return first .. (rest ~= "" and (" " .. rest) or "")
+		elseif first == "set" or first == "add" then
+			return first .. (rest ~= "" and (" " .. rest) or "")
+		end
+		local target = rest:match("^(%S+)")
+		return first .. (target and (" " .. fixLabel(target)) or "")
+	end
 	local out = {}
 	for line in (src .. "\n"):gmatch("(.-)\r?\n") do
 		local body = line:gsub("^%s+", ""):gsub("%s+$", "")
@@ -2041,8 +2158,9 @@ function C.ChipAutocorrect(src, labels)
 			table.insert(out, line)
 		else
 			local first, rest = body:match("^(%S+)%s*(.*)$")
-			first = fixWord(first, KEYWORDS, #first <= 3 and 1 or 2)
-			if first == "when" then
+			local lf = first:lower()
+			if lf == "when" or (not ACTION_SET[lf] and closest(first, KEYWORDS, #first <= 3 and 1 or 2) == "when") then
+				if lf ~= "when" then table.insert(fixes, first .. " -> when") end
 				local w2, w3 = rest:match("^(%S*)%s*(%S*)")
 				local lw2 = (w2 or ""):lower()
 				if lw2 == "start" or lw2 == "every" then
@@ -2054,11 +2172,9 @@ function C.ChipAutocorrect(src, labels)
 					if w3 ~= "" then w3 = fixWord(w3, { "pressed", "released" }, 3) end
 				end
 				table.insert(out, (("when %s %s"):format(w2 or "", w3 or ""):gsub("%s+$", "")))
-			elseif first == "say" or first == "wait" or not ACTION_SET[first] then
-				table.insert(out, "    " .. first .. (rest ~= "" and (" " .. rest) or ""))
 			else
-				local target = rest:match("^(%S+)")
-				table.insert(out, "    " .. first .. (target and (" " .. fixLabel(target)) or ""))
+				-- (fixAction records its own keyword fix)
+				table.insert(out, "    " .. fixAction(first, rest, true))
 			end
 		end
 	end
@@ -2068,19 +2184,22 @@ end
 -- the program as RichText with colours (keeps every character where it is, for an overlay on the text box)
 C.CHIP_COLORS = {
 	when = "#8E44AD", action = "#1F6FD0", event = "#C26A00", number = "#B5522B",
-	label = "#2E8B3A", unknown = "#D03030", text = "#9A6B1F", comment = "#8A8F8F",
+	label = "#2E8B3A", variable = "#0E8A92", unknown = "#D03030", text = "#9A6B1F", comment = "#8A8F8F", op = "#5A5F66",
 }
 function C.ChipHighlight(src, kinds)
 	local function esc(t) return (t:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
 	local function paint(t, kind) return ('<font color="%s">%s</font>'):format(C.CHIP_COLORS[kind], esc(t)) end
 	local EVENTS = { pressed = true, released = true, start = true, every = true }
+	local vars = {}
+	for v in (src .. "\n"):gmatch("[Ss][Ee][Tt]%s+([%a_][%w_]*)") do vars[v:lower()] = true end
+	for v in (src .. "\n"):gmatch("[Aa][Dd][Dd]%s+([%a_][%w_]*)") do vars[v:lower()] = true end
 	local out = {}
 	for line in (src .. "\n"):gmatch("(.-)\n") do
 		local body = line:gsub("^%s+", "")
 		if body:match("^%-%-") or body:match("^#") then
 			table.insert(out, paint(line, "comment"))
 		else
-			local parts, idx, first, isSay = {}, 0, nil, false
+			local parts, idx, prev, isSay = {}, 0, nil, false
 			local pos = 1
 			while pos <= #line do
 				local s, e = line:find("%S+", pos)
@@ -2092,24 +2211,30 @@ function C.ChipHighlight(src, kinds)
 				local w = line:sub(s, e)
 				local lw = w:lower()
 				idx += 1
+				local kind
 				if isSay then
 					table.insert(parts, paint(line:sub(s), "text"))
 					break
-				elseif idx == 1 then
-					first = lw
-					if lw == "when" then table.insert(parts, paint(w, "when"))
-					elseif ACTION_SET[lw] then table.insert(parts, paint(w, "action"))
-					else table.insert(parts, paint(w, "unknown")) end
+				elseif lw == "when" or lw == "if" or lw == "then" then
+					kind = "when"
+				elseif (idx == 1 or prev == "then") and ACTION_SET[lw] then
+					kind = "action"
 					isSay = lw == "say"
-				elseif EVENTS[lw] and first == "when" then
-					table.insert(parts, paint(w, "event"))
-				elseif tonumber(w) then
-					table.insert(parts, paint(w, "number"))
+				elseif EVENTS[lw] then
+					kind = "event"
+				elseif COMPARE[lw] or lw == "=" or lw == "~=" then
+					kind = "op"
+				elseif tonumber(w) or lw == "true" or lw == "false" then
+					kind = "number"
 				elseif kinds and kinds[lw] then
-					table.insert(parts, paint(w, "label"))
+					kind = "label"
+				elseif vars[lw] or prev == "set" or prev == "add" then
+					kind = "variable"
 				else
-					table.insert(parts, paint(w, "unknown"))
+					kind = "unknown"
 				end
+				table.insert(parts, paint(w, kind))
+				prev = lw
 				pos = e + 1
 			end
 			table.insert(out, table.concat(parts))
@@ -2117,6 +2242,84 @@ function C.ChipHighlight(src, kinds)
 	end
 	if #out > 0 and out[#out] == "" then table.remove(out) end
 	return table.concat(out, "\n")
+end
+
+-- what to suggest at the cursor (the editor's autocomplete). line = the line up to the cursor.
+-- Returns { { text, kind } ... } and the partial word being typed.
+function C.ChipSuggest(line, kinds, varList)
+	local words = {}
+	for w in line:gmatch("%S+") do table.insert(words, w) end
+	local typing = line:match("(%S*)$") or ""
+	local n = #words
+	if typing == "" then n += 1 end -- starting a new word
+	local first = (words[1] or ""):lower()
+	local list = {}
+	local function add(t, kind) table.insert(list, { t, kind }) end
+	local function labelsWhere(ok)
+		local ls = {}
+		for l, k in pairs(kinds or {}) do if ok(k) then table.insert(ls, l) end end
+		table.sort(ls)
+		for _, l in ipairs(ls) do add(l, "item") end
+	end
+	local function actionArgs(op, at)
+		if at == 1 then
+			if CHIP_TARGET[op] then labelsWhere(function(k) return C.ChipTargetOk(op, k) end)
+			elseif op == "set" or op == "add" then for _, v in ipairs(varList or {}) do add(v, "variable") end end
+		end
+	end
+	if n <= 1 then
+		add("when", "keyword")
+		for _, a in ipairs(C.CHIP_ACTIONS) do add(a, "action") end
+	elseif first == "when" then
+		if n == 2 then
+			add("start", "event") add("every", "event")
+			labelsWhere(C.ChipSourceOk)
+		elseif n == 3 and kinds and kinds[(words[2] or ""):lower()] then
+			add("pressed", "event") add("released", "event")
+		end
+	elseif first == "if" then
+		if n == 2 then
+			for _, v in ipairs(varList or {}) do add(v, "variable") end
+			labelsWhere(function() return true end)
+		elseif n == 3 then
+			for _, c in ipairs(C.CHIP_COMPARE) do add(c, "compare") end
+		elseif n == 4 then
+			add("true", "value") add("false", "value")
+			for _, v in ipairs(varList or {}) do add(v, "variable") end
+		elseif n == 5 then
+			add("then", "keyword")
+		elseif n == 6 then
+			for _, a in ipairs(C.CHIP_ACTIONS) do if a ~= "if" then add(a, "action") end end
+		elseif n == 7 then
+			actionArgs((words[6] or ""):lower(), 1)
+		end
+	else
+		actionArgs(first, n - 1)
+	end
+	-- keep the ones that start with what's typed (or, failing that, contain it)
+	if typing ~= "" then
+		local lt, starts, contains = typing:lower(), {}, {}
+		for _, s in ipairs(list) do
+			local ls = s[1]:lower()
+			if ls ~= lt then
+				if ls:sub(1, #lt) == lt then table.insert(starts, s)
+				elseif ls:find(lt, 1, true) then table.insert(contains, s) end
+			end
+		end
+		for _, s in ipairs(contains) do table.insert(starts, s) end
+		list = starts
+	end
+	return list, typing
+end
+
+-- the hint for the line being typed (its keyword, or the action after "then")
+function C.ChipHintFor(line)
+	local first = (line:match("^%s*(%S+)") or ""):lower()
+	if first == "if" then
+		local after = line:match("[Tt][Hh][Ee][Nn]%s+(%S+)")
+		if after and C.CHIP_HINTS[after:lower()] then return C.CHIP_HINTS["if"] .. "      " .. C.CHIP_HINTS[after:lower()] end
+	end
+	return C.CHIP_HINTS[first]
 end
 
 -- ==========================================

@@ -746,7 +746,9 @@ local function drawConnection(root, air, ea, eb, origin)
 		local segs = Config.AntlinePath(air, { ea[2], ea[3], ea[4], ea[5] }, { eb[2], eb[3], eb[4], eb[5] }, origin, 0.06)
 		if segs then
 			for _, d in ipairs(Config.AntlineDots(segs)) do
-				table.insert(parts, Config.AntlineDot(d.cf, d.corner, Config.ANT_OFF, folder))
+				-- corners return the dot AND its hollow ring: only the dot gets recoloured
+				local dot = Config.AntlineDot(d.cf, d.corner, Config.ANT_OFF, folder)
+				table.insert(parts, dot)
 			end
 		end
 	elseif vis == "Signage" then
@@ -919,11 +921,48 @@ runChips = function(root, data, byId, slot)
 	local function item(label) return label and byLabel[label:lower()] end
 	local function alive() return root.Parent ~= nil end
 
-	local function act(a)
+	-- variables: shared by every chip in this chamber, start at 0
+	local vars = {}
+	local function value(word)
+		if word == nil then return 0 end
+		local n = tonumber(word)
+		if n then return n end
+		local lw = word:lower()
+		if lw == "true" then return 1 elseif lw == "false" then return 0 end
+		local t = item(word)
+		if t then -- an item: 1 when it's pressed / on / open
+			return (isOn(t) or t:GetAttribute("Enabled") == true or t:GetAttribute("Open") == true) and 1 or 0
+		end
+		local v = vars[lw]
+		if type(v) == "boolean" then return v and 1 or 0 end
+		return tonumber(v) or 0
+	end
+	local function compare(a, cmp, b)
+		if cmp == "==" then return a == b elseif cmp == "!=" then return a ~= b
+		elseif cmp == "<" then return a < b elseif cmp == ">" then return a > b
+		elseif cmp == "<=" then return a <= b elseif cmp == ">=" then return a >= b end
+		return false
+	end
+
+	local act
+	act = function(a)
+		if a.op == "set" then
+			vars[a.var:lower()] = value(a.value)
+			return
+		elseif a.op == "add" then
+			vars[a.var:lower()] = value(a.var) + (tonumber(a.value) or 0)
+			return
+		elseif a.op == "if" then
+			if a.act and compare(value(a.lhs), a.cmp, value(a.rhs)) then return act(a.act) end
+			return
+		elseif a.op == "wait" then
+			return a.n or 0 -- the caller waits
+		end
 		local t = item(a.target)
 		local kind = t and t:GetAttribute("Kind")
 		if a.op == "say" then
-			for _, pl in ipairs(slotPlayers(slot)) do toast(pl, a.text, "chip") end
+			local text = (a.text or ""):gsub("{([%a_][%w_]*)}", function(n) return tostring(value(n)) end)
+			for _, pl in ipairs(slotPlayers(slot)) do toast(pl, text, "chip") end
 		elseif not t then
 			return
 		elseif a.op == "drop" and kind == "cubedropper" then
@@ -941,7 +980,8 @@ runChips = function(root, data, byId, slot)
 		task.spawn(function()
 			for i, a in ipairs(rule.acts) do
 				if i > 200 or not alive() then return end
-				if a.op == "wait" then task.wait(a.n or 0) else pcall(act, a) end
+				local ok, w = pcall(act, a)
+				if not ok then warn("[PortalServer] chip:", w) elseif type(w) == "number" and w > 0 then task.wait(w) end
 			end
 		end)
 	end
@@ -1948,14 +1988,12 @@ function Actions.EditorPublish(player, arg)
 	for _, chip in ipairs(clean.chips) do
 		local rules = Config.ParseChip(chip.src)
 		local changed = false
-		for _, r in ipairs(rules) do
-			for _, a in ipairs(r.acts) do
-				if a.op == "say" and a.text ~= "" then
-					a.text = filterText(a.text, player) or ""
-					changed = true
-				end
+		Config.ChipEachAction(rules, function(a) -- (says inside an "if" too)
+			if a.op == "say" and a.text ~= "" then
+				a.text = filterText(a.text, player) or ""
+				changed = true
 			end
-		end
+		end)
 		if changed then chip.src = Config.ChipText(rules) end
 		chip.name = filterText(chip.name, player) or "Chip"
 	end
