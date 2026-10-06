@@ -138,6 +138,8 @@ local PALETTE_ORDER = {
 	"laserfield", "lightbridge", "tbeam", "turret",
 	"toxicgoo", "propulsion", "repulsion", "gate",
 	"gel_blue", "gel_orange", "gel_white", "gel_water",
+	-- invisible blocks (Intermediate / Advanced editor modes only, see ENTITY_TYPES tier)
+	"trigger", "delay", "block", "light", "killzone", "pushzone",
 }
 local GEL_KINDS = { gel_blue = true, gel_orange = true, gel_white = true, gel_water = true, propulsion = true, repulsion = true }
 
@@ -1426,6 +1428,7 @@ slotValid = function(kind, hit, ignore)
 end
 
 end
+local duplicateItem
 local pushUndo, undo, redo, moveSurfaces, togglePortalable, setTileColor, paintSelection, deleteItem, rotateItem, cancelLink, startLink, linkPair, completeLink, selCount, selectRect, selectAll
 do
 -- ==========================================
@@ -1580,6 +1583,52 @@ deleteItem = function()
 	table.remove(E.ents, E.selItem)
 	E.selItem = nil
 	refreshItems(e[1])
+	sfx("Click")
+end
+
+-- Ctrl+D / item menu > Duplicate: the same item with the same options on the nearest free panel facing the same way
+duplicateItem = function()
+	local e = E.selItem and E.ents[E.selItem]
+	if not e then flash("Select an item first.") sfx("Error") return end
+	if Config.ENTITY_TYPES[e[1]].mandatory then
+		flash("The entry and exit doors can be moved, but they can't be deleted or copied.")
+		sfx("Error")
+		return
+	end
+	if #E.ents >= LIM.ents then flash("That's the item limit.") sfx("Error") return end
+	local best, bestD
+	for r = 1, 6 do
+		for dx = -r, r do
+			for dy = -r, r do
+				for dz = -r, r do
+					if math.max(math.abs(dx), math.abs(dy), math.abs(dz)) == r then
+						local hit = { kind = "face", x = e[2] + dx, y = e[3] + dy, z = e[4] + dz, f = e[5] }
+						if isFace(hit.x, hit.y, hit.z, hit.f) and slotValid(e[1], hit) then
+							-- nearest first; same height wins ties (copies line up along the floor / wall)
+							local d = dx * dx + dz * dz + dy * dy * 1.5
+							if not bestD or d < bestD then best, bestD = hit, d end
+						end
+					end
+				end
+			end
+		end
+		if best then break end
+	end
+	if not best then flash("There's no free panel nearby for a copy.") sfx("Error") return end
+	pushUndo()
+	local c = table.clone(e)
+	c[2], c[3], c[4] = best.x, best.y, best.z
+	c[8] = newId()
+	if type(c[10]) == "table" then
+		local o = table.clone(c[10])
+		o.label = nil -- gets its own label (button2, ...)
+		c[10] = next(o) and o or nil
+	end
+	table.insert(E.ents, c)
+	Config.AutoLabel(E.ents)
+	E.selItem, E.sel = #E.ents, {}
+	refreshItems(c[1])
+	flash("Copied " .. string.lower(Config.ENTITY_TYPES[c[1]].name) .. ".")
 	sfx("Click")
 end
 
@@ -1927,7 +1976,7 @@ do
 		local items = {}
 		for _, kind in ipairs(PALETTE_ORDER) do
 			local def = Config.ENTITY_TYPES[kind]
-			if def and not def.mandatory then
+			if def and not def.mandatory and (def.tier or 1) <= Pal.level() then
 				if kind == "cube" then
 					local variants = Config.CubeVariants()
 					if #variants == 0 then table.insert(items, { kind = "cube", name = "Weighted Storage Cube" }) end
@@ -2299,6 +2348,7 @@ do
 
 	player:GetAttributeChangedSignal("Setting_edMode"):Connect(function()
 		Pal.layoutTabs()
+		if Pal.build then Pal.build() end -- the invisible blocks come and go with the mode
 		if E.active then flash(("Editor mode: %s"):format(ES("edMode", "Simple"))) end
 	end)
 	Pal.layoutTabs()
@@ -2355,6 +2405,8 @@ do
 		new("UIListLayout", { Parent = sc })
 		return sc
 	end
+
+	Dlg.makeDialog, Dlg.dialogButton = makeDialog, dialogButton -- (Export / Import, further down)
 
 	Dlg.publish = function()
 		local d = makeDialog("Publish To Workshop", 160)
@@ -2767,7 +2819,7 @@ do
 				return function()
 					local list = {}
 					for _, op in ipairs(Config.CHIP_ACTIONS) do
-						if allowIf or op ~= "if" then
+						if allowIf or (op ~= "if" and op ~= "repeat") then
 							table.insert(list, { text = Config.CHIP_ACTION_LABELS[op], icon = "radio", checked = a.op == op, fn = function()
 								a.op = op
 								if op == "wait" then a.n = a.n or 1 end
@@ -2781,6 +2833,11 @@ do
 								if op == "shake" then a.n = a.n or 1 end
 								if op == "tint" then a.text = Config.CHIP_TINTS[a.text or ""] ~= nil and a.text or "blue" end
 								if op == "countdown" then a.n = a.n or 30 end
+								if op == "random" then a.var, a.lo, a.hi = a.var or "roll", a.lo or 1, a.hi or 6 end
+								if op == "repeat" then
+									a.n = math.clamp(math.floor(tonumber(a.n) or 3), 1, 50)
+									a.act = a.act or { op = "drop" }
+								end
 								if op == "if" then
 									a.lhs, a.cmp, a.rhs = a.lhs or "score", a.cmp or ">=", a.rhs or "1"
 									a.act = a.act or { op = "open", target = Config.LabelKinds(E.ents).exit and "exit" or nil }
@@ -2838,6 +2895,16 @@ do
 						end
 						return list
 					end)
+				elseif a.op == "random" then
+					local nameBox = field(row, x, y, 130, a.var or "roll", function(v)
+						v = v:gsub("%s", "")
+						if Config.ValidVarName(v) then a.var = v else flash("Variable names: letters, numbers and _, starting with a letter.") render() end
+					end, false)
+					nameBox.PlaceholderText = "variable"
+					label(row, x + 138, y, 50, "from")
+					field(row, x + 190, y, 60, a.lo or 1, function(v) a.lo = math.floor(v) end, true)
+					label(row, x + 256, y, 24, "to")
+					field(row, x + 282, y, 60, a.hi or 6, function(v) a.hi = math.floor(v) end, true)
 				elseif a.op == "set" or a.op == "add" then
 					local nameBox = field(row, x, y, 130, a.var or "score", function(v)
 						v = v:gsub("%s", "")
@@ -2852,7 +2919,7 @@ do
 					end, false)
 				end
 			end
-			local function rowHeight(a) return a.op == "if" and 72 or 34 end
+			local function rowHeight(a) return (a.op == "if" or a.op == "repeat") and 72 or 34 end
 
 			for ri, r in ipairs(rules) do
 				local h = 44 + 40
@@ -2865,14 +2932,27 @@ do
 						return pickItems(r.src, Config.ChipSourceOk, function(v) r.src = v end)
 					end)
 					ex = 310
+				elseif r.ev == "cond" then
+					-- when <variable | item> <compare> <value>
+					field(blk, 70, 7, 120, r.lhs or "score", function(v) v = v:gsub("%s", "") if v ~= "" then r.lhs = v end end, false).PlaceholderText = "variable or item"
+					dropdown(blk, 196, 7, 70, r.cmp or ">=", function()
+						local list = {}
+						for _, c in ipairs(Config.CHIP_COMPARE) do
+							table.insert(list, { text = c, icon = "radio", checked = r.cmp == c, fn = function() r.cmp = c render() end })
+						end
+						return list
+					end)
+					field(blk, 272, 7, 80, r.rhs or "3", function(v) v = v:gsub("%s", "") if v ~= "" then r.rhs = v end end, false)
+					ex = 360
 				end
 				dropdown(blk, ex, 7, 200, Config.CHIP_EVENT_LABELS[r.ev] or r.ev, function()
 					local list = {}
 					for _, ev in ipairs(Config.CHIP_EVENTS) do
 						table.insert(list, { text = Config.CHIP_EVENT_LABELS[ev], icon = "radio", checked = r.ev == ev, fn = function()
 							r.ev = ev
-							if ev == "start" or ev == "every" then r.src = nil end
+							if ev == "start" or ev == "every" or ev == "cond" then r.src = nil end
 							if ev == "every" then r.n = r.n or 5 end
+							if ev == "cond" then r.lhs, r.cmp, r.rhs = r.lhs or "score", r.cmp or ">=", r.rhs or "3" end
 							render()
 						end })
 					end
@@ -2889,8 +2969,16 @@ do
 					local row = new("Frame", { Position = px(24, ay), Size = px(736, rh), BackgroundColor3 = rgb(126, 186, 240), BorderSizePixel = 0, ZIndex = 34, Parent = blk })
 					ay += rh + 6
 					label(row, 10, 2, 40, "DO")
-					dropdown(row, 46, 2, a.op == "if" and 110 or 200, Config.CHIP_ACTION_LABELS[a.op] or a.op, opMenu(a, true))
-					if a.op == "if" then
+					dropdown(row, 46, 2, (a.op == "if" or a.op == "repeat") and 110 or 200, Config.CHIP_ACTION_LABELS[a.op] or a.op, opMenu(a, true))
+					if a.op == "repeat" then
+						-- repeat <n> times   /   then <action>
+						field(row, 162, 2, 70, a.n or 3, function(v) a.n = math.clamp(math.floor(v), 1, 50) end, true)
+						label(row, 238, 2, 60, "times")
+						label(row, 46, 38, 60, "THEN")
+						a.act = a.act or { op = "drop" }
+						dropdown(row, 110, 38, 170, Config.CHIP_ACTION_LABELS[a.act.op] or a.act.op, opMenu(a.act, false))
+						argFields(row, 288, 38, a.act, 310)
+					elseif a.op == "if" then
 						-- if <lhs> <cmp> <rhs>   /   then <action>
 						field(row, 162, 2, 120, a.lhs or "score", function(v) v = v:gsub("%s", "") if v ~= "" then a.lhs = v end end, false).PlaceholderText = "variable or item"
 						dropdown(row, 288, 2, 70, a.cmp or "==", function()
@@ -2925,6 +3013,12 @@ do
 			tinyButton(add, 0, 2, 200, "+ WHEN PRESSED", function() table.insert(rules, { ev = "pressed", acts = {} }) render() end, rgb(250, 206, 96))
 			tinyButton(add, 210, 2, 200, "+ WHEN STARTS", function() table.insert(rules, { ev = "start", acts = {} }) render() end, rgb(250, 206, 96))
 			tinyButton(add, 420, 2, 200, "+ EVERY ... SECONDS", function() table.insert(rules, { ev = "every", n = 5, acts = {} }) render() end, rgb(250, 206, 96))
+			if Pal.level() >= 3 then
+				tinyButton(add, 630, 2, 140, "+ WHEN TRUE", function()
+					table.insert(rules, { ev = "cond", lhs = "score", cmp = ">=", rhs = "3", acts = {} })
+					render()
+				end, rgb(250, 206, 96))
+			end
 		end
 
 		-- LINES view -> rules (false + message if it doesn't parse)
@@ -3322,6 +3416,83 @@ loadData = function(data)
 	Config.AutoLabel(E.ents) -- chips talk about items by label
 end
 
+-- ----- Export / Import: the chamber as text, for Studio (ServerStorage.ChamberStudioTools) or another chamber -----
+do
+	local HttpService = game:GetService("HttpService")
+	local FORMAT = "PortalChamber"
+	local function textArea(parent, text, placeholder)
+		local sc = new("ScrollingFrame", { Position = px(20, 40), Size = px(620, 300), BackgroundColor3 = rgb(255), BorderSizePixel = 0,
+			ScrollBarThickness = 8, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = px(0, 0), ZIndex = 32, Parent = parent })
+		local box = new("TextBox", { Size = UDim2.new(1, -12, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+			Text = text, PlaceholderText = placeholder or "", MultiLine = true, TextWrapped = true, ClearTextOnFocus = false,
+			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Font = Enum.Font.Code, TextSize = 14,
+			TextColor3 = rgb(25), PlaceholderColor3 = rgb(150), ZIndex = 33, Parent = sc })
+		new("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingTop = UDim.new(0, 4), Parent = box })
+		return box
+	end
+
+	function X.exportText()
+		return HttpService:JSONEncode({ format = FORMAT, version = Config.VERSION, title = E.title, coop = E.coop, data = serialize() })
+	end
+
+	-- File > Export: copy the text (Ctrl+A, Ctrl+C), paste it into Studio's ChamberImport StringValue
+	function X.export()
+		local ok, text = pcall(X.exportText)
+		if not ok then flash("Couldn't export: " .. tostring(text)) sfx("Error") return end
+		local d = Dlg.makeDialog("Export Test Chamber", 420, 660)
+		local box = textArea(d, text)
+		box.TextEditable = false
+		new("TextLabel", { Position = px(20, 344), Size = px(620, 22), BackgroundTransparency = 1, FontFace = FONT.UI_REG, TextSize = 14,
+			TextColor3 = rgb(80), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = d,
+			Text = ("%d characters. Select it all and copy it (Ctrl+A, Ctrl+C), then File > Import here or ChamberStudioTools in Studio."):format(#text) })
+		Dlg.dialogButton(d, 20, 372, "SELECT ALL", function()
+			box:CaptureFocus()
+			box.SelectionStart = 1
+			box.CursorPosition = #box.Text + 1
+		end, true)
+		Dlg.dialogButton(d, 196, 372, "CLOSE", closeDialog)
+	end
+
+	-- the data out of an export (or bare chamber data). Returns data, title, coop / nil, error
+	function X.readImport(text)
+		local ok, t = pcall(HttpService.JSONDecode, HttpService, text)
+		if not ok or type(t) ~= "table" then return nil, "That isn't chamber text (it should start with {\"format\":\"PortalChamber\" ...)." end
+		local data = (t.format == FORMAT and type(t.data) == "table") and t.data or t
+		if type(data.air) ~= "table" or #data.air == 0 then return nil, "There's no room in that text." end
+		if #data.air > (LIM.cells or 4000) then return nil, "That chamber is too big for the editor." end
+		local doors = {}
+		for _, e in ipairs(type(data.ents) == "table" and data.ents or {}) do
+			if type(e) == "table" and (e[1] == "entry" or e[1] == "exit") then doors[e[1]] = true end
+		end
+		if not (doors.entry and doors.exit) then return nil, "That chamber has no entry or exit door." end
+		return data, type(t.title) == "string" and t.title or nil, t.coop == true or data.coop == true
+	end
+
+	-- File > Import: paste an export; replaces this chamber (Ctrl+Z puts it back)
+	function X.import()
+		local d = Dlg.makeDialog("Import Test Chamber", 420, 660)
+		local box = textArea(d, "", "Paste the text from File > Export or from ChamberStudioTools.Export (ServerStorage.ChamberExport) here")
+		local note = new("TextLabel", { Position = px(20, 344), Size = px(620, 22), BackgroundTransparency = 1, FontFace = FONT.UI_REG, TextSize = 14,
+			TextColor3 = rgb(80), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = d,
+			Text = "This replaces the chamber you have open. Ctrl+Z undoes it." })
+		Dlg.dialogButton(d, 20, 372, "IMPORT", function()
+			local data, err = X.readImport(box.Text)
+			if not data then note.Text = err note.TextColor3 = rgb(200, 50, 50) sfx("Error") return end
+			closeDialog()
+			pushUndo()
+			loadData(data)
+			E.coop = data.coop == true
+			E.sel, E.selItem, E.anchor = {}, nil, nil
+			rebuild()
+			frameCamera()
+			if Pal.refreshChips and Pal.tab == "chips" then Pal.refreshChips() end
+			flash("Imported the chamber.")
+			X.toast("Imported " .. (#E.ents) .. " items. Ctrl+Z undoes it.", "Import", "good")
+		end, true)
+		Dlg.dialogButton(d, 196, 372, "CANCEL", closeDialog)
+	end
+end
+
 local function start(payload)
 	stop(true)
 	E.active = true
@@ -3479,6 +3650,8 @@ local MENUS = {
 			{ text = "Open...", shortcut = "Ctrl+O", disabled = g, fn = function() task.spawn(Dlg.open) end },
 			{ text = "Save", shortcut = "Ctrl+S", fn = function() task.spawn(saveDraft, false) end },
 			{ text = "Save as...", shortcut = "Ctrl+Sh+S", disabled = g, fn = Dlg.saveAs },
+			{ text = "Export...", fn = function() X.export() end },
+			{ text = "Import...", fn = function() X.import() end },
 			{ text = "Cooperative puzzle", icon = "check", checked = E.coop, sep = true, fn = function() E.coop = not E.coop E.dirty = true E.rev += 1 end },
 			{ text = E.gameView and "Editor view" or "Game view", shortcut = "Tab", fn = toggleGameView },
 			{ text = "Editor style", sub = function()
@@ -4085,9 +4258,35 @@ itemMenu = function(x, y)
 		table.insert(items, { text = "Hidden in game", icon = "check", checked = o.hide == true, sep = true,
 			fn = function() setOption(index, "hide", o.hide ~= true or nil) end })
 	elseif e[1] == "tbeam" then
-		table.insert(items, { text = "Funnel direction", sep = true, sub = function()
+		table.insert(items, { text = "Funnel direction", sub = function()
 			return radios(index, "mode", { "Forward", "Reversed" }, o.mode == "Reversed" and "Reversed" or "Forward",
 			{ Forward = "Blue (forward)", Reversed = "Orange (reversed)" })
+		end })
+		-- what a connected button does: flip it (Portal 2) or switch it on / off ("auto off" while the button is up)
+		table.insert(items, { text = "Button action", sep = true, sub = function()
+			return radios(index, "link", Config.FUNNEL_LINK_MODES, Config.FunnelLinkMode(e), Config.FUNNEL_LINK_LABELS)
+		end })
+	elseif e[1] == "trigger" then
+		table.insert(items, { text = "Triggered by", sep = true, sub = function()
+			return radios(index, "mode", Config.TRIGGER_MODES, table.find(Config.TRIGGER_MODES, o.mode) and o.mode or "Players", Config.TRIGGER_LABELS)
+		end })
+	elseif e[1] == "delay" then
+		table.insert(items, { text = "Delay (seconds)", disabled = true, fn = function() end })
+		table.insert(items, { timer = { value = tonumber(o.timer) or 1, min = 1, max = 30,
+			set = function(v) setOption(index, "timer", v, true) end }, sep = true })
+	elseif e[1] == "light" then
+		table.insert(items, { text = "Light colour", sep = true, sub = function()
+			local list = {}
+			for _, n in ipairs(Config.LIGHT_ORDER) do
+				table.insert(list, { text = n, swatch = Config.LIGHT_COLORS[n], checked = (o.mode or "White") == n, fn = function() setOption(index, "mode", n) end })
+			end
+			return list
+		end })
+	elseif e[1] == "pushzone" then
+		local labels = {}
+		for i, v in ipairs(Config.PUSH_STRENGTHS) do labels[v] = ({ "Gentle", "Normal", "Strong", "Launch" })[i] or tostring(v) end
+		table.insert(items, { text = "Push strength", sep = true, sub = function()
+			return radios(index, "power", Config.PUSH_STRENGTHS, tonumber(o.power) or Config.PUSH_STRENGTHS[2], labels)
 		end })
 	elseif e[1] == "cubedropper" then
 		local cubes = Config.CubeVariants()
@@ -4153,8 +4352,18 @@ itemMenu = function(x, y)
 	end
 	if Config.SWITCHABLE[e[1]] and e[1] ~= "exit" then
 		local on = Config.StartOn(e, hasLinks(e))
-		table.insert(items, { text = "Start enabled", icon = "check", checked = on, sep = true, fn = function() setOption(index, "startOn", not on) end })
+		local lingerMenu = Pal.level() >= 2 and hasLinks(e)
+		table.insert(items, { text = "Start enabled", icon = "check", checked = on, sep = not lingerMenu, fn = function() setOption(index, "startOn", not on) end })
+		if lingerMenu then
+			-- keeps the button's effect going for a while after it lets go (a funnel / bridge you can still use)
+			local labels = {}
+			for _, v in ipairs(Config.LINGER_TIMES) do labels[v] = v == 0 and "Off (switches straight back)" or (v .. " s") end
+			table.insert(items, { text = "Stay on after release", sep = true, sub = function()
+				return radios(index, "linger", Config.LINGER_TIMES, tonumber(o.linger) or 0, labels)
+			end })
+		end
 	end
+	table.insert(items, { text = "Duplicate", shortcut = "Ctrl+D", disabled = def.mandatory == true, fn = duplicateItem })
 	table.insert(items, { text = "Delete item", shortcut = "Delete", disabled = def.mandatory == true, fn = deleteItem })
 	local title = e[1] == "gate" and (Config.GateMode(e) .. " gate") or "Item"
 	if adv and Config.LabelOf(e) then title = Config.LabelOf(e) end
@@ -4511,6 +4720,8 @@ local function keyAction(kc)
 		undo()
 	elseif ctrlDown() and kc == Enum.KeyCode.Y then
 		redo()
+	elseif ctrlDown() and kc == Enum.KeyCode.D then
+		duplicateItem()
 	elseif kc == Enum.KeyCode.F1 then
 		Dlg.wiki()
 	elseif kc == Enum.KeyCode.Tab then

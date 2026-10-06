@@ -220,15 +220,44 @@ C.ENTITY_TYPES = {
 	-- decoration from the editor's Meshes tab: e[7] = a model name in PortalAssets.Meshes or "mesh:<meshId>[:<textureId>]"
 	-- e[10]: scale (0.25 - 4), spin (degrees), ox / oy / oz (studs, oy = up off the surface)
 	prop         = { name = "Mesh",                   mount = "any",     upright = true, deco = true },
+	-- invisible logic / helper blocks (shown see-through in the editor, invisible in game).
+	--   tier: the editor mode they show up in (2 = Intermediate, 3 = Advanced)
+	--   zone: fills the whole air cell in front of the surface it's placed on
+	trigger      = { name = "Trigger Zone",           mount = "any",     hidden = true, zone = true, tier = 2 },
+	delay        = { name = "Delay Relay",            mount = "any",     hidden = true, tier = 2 },
+	block        = { name = "Invisible Wall",         mount = "any",     hidden = true, zone = true, tier = 2 },
+	light        = { name = "Light",                  mount = "any",     hidden = true, tier = 2 },
+	killzone     = { name = "Death Zone",             mount = "any",     hidden = true, zone = true, tier = 3 },
+	pushzone     = { name = "Push Zone",              mount = "any",     hidden = true, zone = true, tier = 3 },
 }
+-- editor colours of the invisible blocks
+C.HIDDEN_COLORS = {
+	trigger = Color3.fromRGB(80, 200, 120), delay = Color3.fromRGB(150, 110, 230), block = Color3.fromRGB(120, 170, 230),
+	light = Color3.fromRGB(255, 220, 120), killzone = Color3.fromRGB(230, 60, 60), pushzone = Color3.fromRGB(240, 150, 60),
+}
+C.TRIGGER_MODES = { "Players", "Cubes", "Anything" }
+C.TRIGGER_LABELS = { Players = "Players", Cubes = "Cubes", Anything = "Players and cubes" }
+C.LIGHT_COLORS = {
+	White = Color3.fromRGB(255, 255, 255), Warm = Color3.fromRGB(255, 214, 160), Blue = Color3.fromRGB(110, 180, 255),
+	Orange = Color3.fromRGB(255, 150, 60), Red = Color3.fromRGB(255, 70, 70), Green = Color3.fromRGB(110, 255, 140),
+}
+C.LIGHT_ORDER = { "White", "Warm", "Blue", "Orange", "Red", "Green" }
+C.PUSH_STRENGTHS = { 20, 40, 60, 90 } -- studs/s a push zone shoves you out of its surface
+-- funnels and buttons: what a connected button does
+C.FUNNEL_LINK_MODES = { "Reverse", "Power" }
+C.FUNNEL_LINK_LABELS = { Reverse = "Reverse it (blue <-> orange)", Power = "Turn it on / off" }
+C.LINGER_TIMES = { 0, 1, 2, 3, 5, 10 } -- "stay on after the button lets go" seconds
+function C.FunnelLinkMode(e)
+	return C.Options(e).link == "Power" and "Power" or "Reverse"
+end
 
 -- ==========================================
 -- CONNECTIONS (the editor and PortalServer both use these - nothing to keep in sync any more)
 -- ==========================================
 -- sources drive things; logic gates are both (things go in, the gate drives something else).
 -- An item with SEVERAL inputs needs ALL of them on (Portal 2). Put an OR gate in front for "any".
-C.LINK_SOURCES = { button = true, pedestal = true, lasercatcher = true, gate = true }
-C.LINK_ONLY_SOURCE = { button = true, pedestal = true, lasercatcher = true } -- nothing can drive these
+C.LINK_SOURCES = { button = true, pedestal = true, lasercatcher = true, gate = true, trigger = true, delay = true }
+C.LINK_ONLY_SOURCE = { button = true, pedestal = true, lasercatcher = true, trigger = true } -- nothing can drive these
 C.LINK_BLOCKED = { cube = true, entry = true, gel_blue = true, gel_orange = true, gel_white = true, gel_water = true, prop = true }
 function C.CanSource(kind) return C.LINK_SOURCES[kind] == true end
 function C.CanTarget(kind)
@@ -237,8 +266,10 @@ end
 
 -- Linked items: what they do while their inputs are off (the item menu's "Start enabled" overrides this).
 -- Inputs on flips it. Funnels flip direction instead, droppers drop a new cube.
-C.LINK_DEFAULT_ON = { fizzler = true, laserfield = true, laser = false, lightbridge = false, exit = false }
-C.SWITCHABLE = { fizzler = true, laserfield = true, laser = true, lightbridge = true, exit = true }
+C.LINK_DEFAULT_ON = { fizzler = true, laserfield = true, laser = false, lightbridge = false, exit = false,
+	tbeam = false, block = true, light = false, killzone = true, pushzone = false }
+C.SWITCHABLE = { fizzler = true, laserfield = true, laser = true, lightbridge = true, exit = true,
+	tbeam = true, block = true, light = true, killzone = true, pushzone = true }
 C.BUTTON_TYPES = { "Weighted", "Cube", "Sphere" } -- floor button: anything / cubes only / spheres only
 C.DROPPER_CUBES = { "Normal", "Companion", "Edgeless", "Reflection" } -- used when PortalAssets.Cubes is empty
 
@@ -280,6 +311,8 @@ end
 function C.StartOn(e, linked)
 	local o = C.Options(e)
 	if type(o.startOn) == "boolean" then return o.startOn end
+	-- a funnel whose button reverses it is on from the start; one the button powers starts off ("auto off")
+	if e[1] == "tbeam" then return not (linked and o.link == "Power") end
 	if linked then return C.LINK_DEFAULT_ON[e[1]] == true end
 	return true
 end
@@ -1185,7 +1218,35 @@ function C.BuildEntity(e, origin, opts)
 			p.Parent = m
 			return p
 		end
-		if kind == "entry" or kind == "exit" then
+		if def.hidden then
+			-- invisible blocks: see-through in the editor (the plate on the surface is what you click), gone in game
+			local col = C.HIDDEN_COLORS[kind] or Color3.fromRGB(200, 200, 200)
+			local center = origin + Vector3.new(e[2], e[3], e[4]) * C.CELL
+			if def.zone then
+				part({ Name = "Plate", Size = Vector3.new(C.CELL - 1, C.CELL - 1, 0.3), CFrame = cf * CFrame.new(0, 0, -0.15),
+					Color = col, Transparency = 0.35, Material = Enum.Material.SmoothPlastic })
+				part({ Name = "Zone", Size = Vector3.one * (C.CELL - 0.4), CFrame = CFrame.new(center), Color = col,
+					Transparency = 0.8, Material = Enum.Material.SmoothPlastic, CanCollide = false, CanQuery = false, CanTouch = false })
+			elseif kind == "light" then
+				part({ Name = "Body", Size = Vector3.new(3, 3, 0.4), CFrame = cf * CFrame.new(0, 0, -0.2), Color = Color3.fromRGB(60, 62, 64),
+					Transparency = 0.2 })
+				local bulbCol = C.LIGHT_COLORS[o.mode] or C.LIGHT_COLORS.White
+				local bulb = part({ Name = "Bulb", Shape = Enum.PartType.Ball, Size = Vector3.one * 1.6, CFrame = cf * CFrame.new(0, 0, -1),
+					Color = bulbCol, Material = Enum.Material.Neon, CanCollide = false })
+				local light = Instance.new("PointLight")
+				light.Name = "Glow"
+				light.Color = bulbCol
+				light.Range = 24
+				light.Brightness = 1.6
+				light.Shadows = true
+				light.Parent = bulb
+			else -- delay relay: a little panel like a logic gate
+				part({ Name = "Body", Size = Vector3.new(4.6, 4.6, 0.5), CFrame = cf * CFrame.new(0, 0, -0.25), Color = Color3.fromRGB(46, 50, 52),
+					Transparency = 0.2 })
+				part({ Name = "Light", Size = Vector3.new(3, 3, 0.1), CFrame = cf * CFrame.new(0, 0, -0.55), Color = col, Material = Enum.Material.Neon })
+			end
+			front = def.zone and -0.3 or -1
+		elseif kind == "entry" or kind == "exit" then
 			part({ Name = "Door", Size = Vector3.new(7, 9, 1), CFrame = cf * CFrame.new(0, 4.5, -0.5), Color = Color3.fromRGB(60, 64, 66) })
 			part({ Name = "Ring", Size = Vector3.new(5, 7, 0.3), CFrame = cf * CFrame.new(0, 4.2, -1.1),
 				Color = kind == "entry" and Color3.fromRGB(70, 170, 220) or Color3.fromRGB(240, 140, 50), Material = Enum.Material.Neon })
@@ -1349,6 +1410,15 @@ function C.BuildEntity(e, origin, opts)
 	if kind == "tbeam" then
 		m:SetAttribute("BaseReversed", o.mode == "Reversed")
 		C.SetAll(m, "Reversed", o.mode == "Reversed")
+		m:SetAttribute("FunnelLink", C.FunnelLinkMode(e)) -- what a connected button does: Reverse / Power
+	elseif kind == "trigger" then
+		m:SetAttribute("TriggerMode", table.find(C.TRIGGER_MODES, o.mode) and o.mode or "Players")
+		m:SetAttribute("Pressed", false)
+	elseif kind == "delay" then
+		m:SetAttribute("Delay", tonumber(o.timer) or 1)
+		m:SetAttribute("Pressed", false)
+	elseif kind == "pushzone" then
+		m:SetAttribute("PushVelocity", cf.LookVector * (tonumber(o.power) or C.PUSH_STRENGTHS[2]))
 	elseif kind == "cubedropper" then
 		C.SetAll(m, "CubeType", type(o.mode) == "string" and o.mode or "Normal")
 		C.SetAll(m, "DropOnStart", o.dropOnStart ~= false)
@@ -1376,6 +1446,8 @@ function C.BuildEntity(e, origin, opts)
 		m:SetAttribute("GateMode", C.GateMode(e))
 		m:SetAttribute("Pressed", false)
 	end
+	-- "stay on for N s after the button lets go" (any switchable item / funnel)
+	if tonumber(o.linger) and tonumber(o.linger) > 0 then m:SetAttribute("Linger", tonumber(o.linger)) end
 	if C.SWITCHABLE[kind] then
 		if type(o.startOn) == "boolean" then m:SetAttribute("StartOpt", o.startOn) end
 		if kind ~= "exit" then C.SetAll(m, "Enabled", C.StartOn(e, false)) end
@@ -1412,6 +1484,35 @@ function C.BuildEntity(e, origin, opts)
 		end
 	end)
 
+	-- invisible blocks in game: nothing to see; zones keep one invisible box the server checks
+	if def.hidden and not opts.editor then
+		eachPart(m, function(p)
+			p.Transparency, p.CanCollide, p.CanQuery, p.CanTouch = 1, false, false, false
+			p.CastShadow = false
+		end)
+		local zone = m:FindFirstChild("Zone")
+		if zone then
+			zone.Size = Vector3.one * C.CELL
+			zone:SetAttribute("Portalable", false)
+			m:AddTag("PeTIZone")
+		end
+		local plate = m:FindFirstChild("Plate")
+		if plate then plate:Destroy() end
+		if kind == "block" and zone then
+			-- solid while enabled; portal shots pass straight through it (CanQuery off)
+			local function upd() zone.CanCollide = m:GetAttribute("Enabled") ~= false end
+			m:GetAttributeChangedSignal("Enabled"):Connect(upd)
+			upd()
+		elseif kind == "light" then
+			local glow = m:FindFirstChild("Glow", true)
+			if glow then
+				local function upd() glow.Enabled = m:GetAttribute("Enabled") ~= false end
+				m:GetAttributeChangedSignal("Enabled"):Connect(upd)
+				upd()
+			end
+		end
+		m:SetAttribute("Hidden", true)
+	end
 	-- hidden logic gates: still work, you just can't see them in game
 	if kind == "gate" and not opts.editor and o.hide == true then
 		eachPart(m, function(p)
@@ -1800,7 +1901,8 @@ end
 -- ==========================================
 C.LABEL_PREFIX = { entry = "entry", exit = "exit", button = "button", pedestal = "pedestal", gate = "gate",
 	cubedropper = "dropper", laser = "laser", lasercatcher = "catcher", laserfield = "field", fizzler = "fizzler",
-	lightbridge = "bridge", tbeam = "funnel", faithplate = "plate", turret = "turret", prop = "mesh" }
+	lightbridge = "bridge", tbeam = "funnel", faithplate = "plate", turret = "turret", prop = "mesh",
+	trigger = "trigger", delay = "delay", block = "wall", light = "light", killzone = "death", pushzone = "push" }
 function C.ValidLabel(l)
 	return type(l) == "string" and #l >= 1 and #l <= 20 and l:match("^%a[%w_]*$") ~= nil
 end
@@ -1850,12 +1952,15 @@ end
 -- Actions: open / close / enable / disable / toggle <item>, drop <dropper>, reverse <funnel>, wait <seconds>,
 --          say <text> ({name} shows a variable), set <variable> <value>, add <variable> <number>,
 --          if <variable | item> <== != < > <= >=> <value> then <action>
+-- Advanced extras: when <variable | item> <compare> <value>   (runs each time it becomes true)
+--                  random <variable> <min> <max>, repeat <times> then <action>, stop (ends this rule)
 -- Variables are shared by every chip in the chamber and start at 0. An item in an "if" counts as 1 when it's
 -- pressed / on / open, else 0. Lines starting with -- or # are comments.
-C.CHIP_EVENTS = { "pressed", "released", "start", "every" }
-C.CHIP_EVENT_LABELS = { pressed = "is pressed", released = "is released", start = "chamber starts", every = "every ... seconds" }
+C.CHIP_EVENTS = { "pressed", "released", "start", "every", "cond" }
+C.CHIP_EVENT_LABELS = { pressed = "is pressed", released = "is released", start = "chamber starts", every = "every ... seconds",
+	cond = "becomes true" }
 C.CHIP_ACTIONS = { "open", "close", "toggle", "enable", "disable", "drop", "reverse", "wait", "say", "set", "add", "if",
-	"music", "sound", "shake", "title", "tint", "countdown" }
+	"music", "sound", "shake", "title", "tint", "countdown", "random", "repeat", "stop" }
 -- effects: only the players in that chamber see / hear them (you, or you and your co-op partner). Never touch gameplay.
 C.CHIP_FX = { music = true, sound = true, shake = true, title = true, tint = true, countdown = true }
 C.CHIP_TINTS = {
@@ -1870,12 +1975,12 @@ C.CHIP_ACTION_LABELS = {
 	drop = "drop a cube from", reverse = "reverse", wait = "wait (seconds)", say = "show message",
 	set = "set variable", add = "add to variable", ["if"] = "if ... then",
 	music = "play music", sound = "play a sound", shake = "shake the screen", title = "show a title", tint = "tint the screen",
-	countdown = "show a countdown",
+	countdown = "show a countdown", random = "random number", ["repeat"] = "repeat ... times", stop = "stop this rule",
 }
 C.CHIP_COMPARE = { "==", "!=", "<", ">", "<=", ">=" }
 -- what each line expects (the editor shows it while you type, like a code editor's parameter hints)
 C.CHIP_HINTS = {
-	when = "when <item> pressed | released   ·   when start   ·   when every <seconds>",
+	when = "when <item> pressed | released   ·   when start   ·   when every <seconds>   ·   when <variable | item> <compare> <value>",
 	open = "open <item>   opens a door / turns an item on",
 	close = "close <item>   closes a door / turns an item off",
 	toggle = "toggle <item>   flips it on / off",
@@ -1894,10 +1999,13 @@ C.CHIP_HINTS = {
 	title = "title <text>   big text in the middle of the screen ({name} = a variable)",
 	tint = "tint <none red orange yellow green cyan blue purple pink white dark>   colours the screen",
 	countdown = "countdown <seconds>   a timer on screen   ·   countdown stop",
+	random = "random <variable> <min> <max>   a whole number from min to max",
+	["repeat"] = "repeat <times> then <action>   (1 - 50 times; a 'wait' in it waits each time)",
+	stop = "stop   ends this rule here (the rest of its lines don't run)",
 }
 local CHIP_TARGET = { open = true, close = true, toggle = true, enable = true, disable = true, drop = true, reverse = true }
 C.CHIP_TARGET = CHIP_TARGET
-local CHIP_KEYWORDS = { ["when"] = true, ["then"] = true, ["true"] = true, ["false"] = true, start = true, every = true, pressed = true, released = true, stop = true }
+local CHIP_KEYWORDS = { ["when"] = true, ["then"] = true, ["true"] = true, ["false"] = true, start = true, every = true, pressed = true, released = true, stop = true, ["repeat"] = true, random = true }
 for _, a in ipairs(C.CHIP_ACTIONS) do CHIP_KEYWORDS[a] = true end
 function C.ValidVarName(n)
 	return type(n) == "string" and #n <= 24 and n:match("^[%a_][%w_]*$") ~= nil and not CHIP_KEYWORDS[n:lower()]
@@ -1948,6 +2056,24 @@ local function parseAction(word, rest, allowIf)
 		if word == "add" and not tonumber(value) then return nil, "'add' needs a number, like 'add score 1'" end
 		if word == "set" and value == "" then return nil, "'set' needs a value, like 'set score 0'" end
 		return { op = word, var = var, value = value }
+	elseif word == "stop" then
+		return { op = "stop" }
+	elseif word == "random" then
+		local var, a, b = rest:match("^(%S+)%s+(%S+)%s+(%S+)")
+		if not var or not C.ValidVarName(var) then return nil, "write it like 'random roll 1 6'" end
+		if not tonumber(a) or not tonumber(b) then return nil, "'random' needs two numbers, like 'random roll 1 6'" end
+		local lo, hi = math.floor(tonumber(a)), math.floor(tonumber(b))
+		if lo > hi then lo, hi = hi, lo end
+		return { op = "random", var = var, lo = lo, hi = hi }
+	elseif word == "repeat" then
+		if not allowIf then return nil, "a 'repeat' can't go inside an 'if' or another 'repeat'" end
+		local times, inner = rest:match("^(%S+)%s+[Tt][Hh][Ee][Nn]%s+(.+)$")
+		if not times or not tonumber(times) then return nil, "write it like 'repeat 3 then drop dropper1'" end
+		local w2, r2 = inner:match("^(%S+)%s*(.*)$")
+		if w2:lower() == "repeat" or w2:lower() == "if" then return nil, "a 'repeat' can't hold an 'if' or another 'repeat'" end
+		local act, err = parseAction(w2:lower(), r2, false)
+		if not act then return nil, err end
+		return { op = "repeat", n = math.clamp(math.floor(tonumber(times)), 1, 50), act = act }
 	elseif word == "if" then
 		if not allowIf then return nil, "an 'if' can't have another 'if' after its 'then'" end
 		local lhs, cmp, rhs, inner = rest:match("^(%S+)%s+(%S+)%s+(%S+)%s+[Tt][Hh][Ee][Nn]%s+(.+)$")
@@ -1955,6 +2081,7 @@ local function parseAction(word, rest, allowIf)
 		if cmp == "~=" then cmp = "!=" elseif cmp == "=" then cmp = "==" end
 		if not COMPARE[cmp] then return nil, ("'%s' isn't a comparison: use == != < > <= >="):format(cmp) end
 		local w2, r2 = inner:match("^(%S+)%s*(.*)$")
+		if w2:lower() == "repeat" then return nil, "an 'if' can't hold a 'repeat' (put the repeat on its own line)" end
 		local act, err = parseAction(w2:lower(), r2, false)
 		if not act then return nil, err end
 		return { op = "if", lhs = lhs, cmp = cmp, rhs = rhs, act = act }
@@ -1989,8 +2116,18 @@ function C.ParseChip(src)
 					cur = { ev = "every", n = math.clamp(n, 0.5, 600), acts = {} }
 				elseif a and (b:lower() == "pressed" or b:lower() == "released") then
 					cur = { ev = b:lower(), src = rest:match("^(%S+)"), acts = {} }
+				elseif rest:match("^%S+%s+%S+%s+%S+$") then
+					-- when <lhs> <compare> <rhs>: runs every time it turns true
+					local lhs, cmp, rhs = rest:match("^(%S+)%s+(%S+)%s+(%S+)$")
+					if cmp == "~=" then cmp = "!=" elseif cmp == "=" then cmp = "==" end
+					if COMPARE[cmp] then
+						cur = { ev = "cond", lhs = lhs, cmp = cmp, rhs = rhs, acts = {} }
+					else
+						table.insert(errs, ("line %d: '%s' isn't a comparison: use == != < > <= >="):format(ln, cmp))
+						cur = nil
+					end
 				else
-					table.insert(errs, ("line %d: write 'when <item> pressed', 'when <item> released', 'when start' or 'when every <seconds>'"):format(ln))
+					table.insert(errs, ("line %d: write 'when <item> pressed', 'when <item> released', 'when start', 'when every <seconds>' or 'when score >= 3'"):format(ln))
 					cur = nil
 				end
 				if cur then table.insert(rules, cur) end
@@ -2016,6 +2153,9 @@ local function actionText(a)
 	if a.op == "countdown" then return (a.n or 0) <= 0 and "countdown stop" or ("countdown " .. tostring(a.n)) end
 	if a.op == "say" then return ('say "%s"'):format((a.text or ""):gsub('"', "'")) end
 	if a.op == "set" or a.op == "add" then return ("%s %s %s"):format(a.op, a.var or "?", tostring(a.value or "0")) end
+	if a.op == "stop" then return "stop" end
+	if a.op == "random" then return ("random %s %d %d"):format(a.var or "?", a.lo or 1, a.hi or 6) end
+	if a.op == "repeat" then return ("repeat %d then %s"):format(a.n or 1, a.act and actionText(a.act) or "?") end
 	if a.op == "if" then
 		return ("if %s %s %s then %s"):format(a.lhs or "?", a.cmp or "==", a.rhs or "0", a.act and actionText(a.act) or "?")
 	end
@@ -2029,6 +2169,7 @@ function C.ChipText(rules)
 	for _, r in ipairs(rules or {}) do
 		if r.ev == "start" then table.insert(out, "when start")
 		elseif r.ev == "every" then table.insert(out, "when every " .. tostring(r.n or 1))
+		elseif r.ev == "cond" then table.insert(out, ("when %s %s %s"):format(r.lhs or "?", r.cmp or "==", r.rhs or "0"))
 		else table.insert(out, ("when %s %s"):format(r.src or "?", r.ev or "pressed")) end
 		for _, a in ipairs(r.acts or {}) do table.insert(out, "    " .. actionText(a)) end
 	end
@@ -2040,7 +2181,7 @@ local function eachAction(rules, fn)
 	for _, r in ipairs(rules) do
 		for _, a in ipairs(r.acts) do
 			fn(a)
-			if a.op == "if" and a.act then fn(a.act) end
+			if (a.op == "if" or a.op == "repeat") and a.act then fn(a.act) end
 		end
 	end
 end
@@ -2089,7 +2230,7 @@ end
 function C.ChipVariables(rules)
 	local vars, list = {}, {}
 	eachAction(rules, function(a)
-		if (a.op == "set" or a.op == "add") and a.var and not vars[a.var:lower()] then
+		if (a.op == "set" or a.op == "add" or a.op == "random") and a.var and not vars[a.var:lower()] then
 			vars[a.var:lower()] = true
 			table.insert(list, a.var)
 		end
@@ -2113,7 +2254,7 @@ function C.CheckChip(rules, kinds)
 			if not k then table.insert(errs, ("There's no item called '%s'."):format(a.target))
 			elseif not C.ChipTargetOk(a.op, k) then table.insert(errs, ("Can't '%s' %s."):format(a.op, a.target)) end
 		end
-		if (a.op == "set" or a.op == "add") and a.var and kinds[a.var:lower()] then
+		if (a.op == "set" or a.op == "add" or a.op == "random") and a.var and kinds[a.var:lower()] then
 			table.insert(errs, ("'%s' is an item's label, pick another variable name."):format(a.var))
 		end
 	end)
@@ -2187,7 +2328,7 @@ for _, a in ipairs(C.CHIP_ACTIONS) do ACTION_SET[a] = true end
 local KEYWORDS = { "when" }
 for _, a in ipairs(C.CHIP_ACTIONS) do table.insert(KEYWORDS, a) end
 local ACTION_LIST = {}
-for _, a in ipairs(C.CHIP_ACTIONS) do if a ~= "if" then table.insert(ACTION_LIST, a) end end
+for _, a in ipairs(C.CHIP_ACTIONS) do if a ~= "if" and a ~= "repeat" then table.insert(ACTION_LIST, a) end end
 
 -- fixes typos and capitals in every line: keywords, events, comparisons and item labels. Indents actions under
 -- their "when". labels = list of the chamber's labels. Returns the new text and a list of "old -> new" fixes.
@@ -2199,6 +2340,7 @@ function C.ChipAutocorrect(src, labels)
 	local vars = {}
 	for v in (src .. "\n"):gmatch("[Ss][Ee][Tt]%s+([%a_][%w_]*)") do vars[v:lower()] = v end
 	for v in (src .. "\n"):gmatch("[Aa][Dd][Dd]%s+([%a_][%w_]*)") do vars[v:lower()] = vars[v:lower()] or v end
+	for v in (src .. "\n"):gmatch("[Rr][Aa][Nn][Dd][Oo][Mm]%s+([%a_][%w_]*)") do vars[v:lower()] = vars[v:lower()] or v end
 	local function fixLabel(w)
 		if lower[w:lower()] then return lower[w:lower()] end
 		if vars[w:lower()] then return vars[w:lower()] end
@@ -2216,7 +2358,13 @@ function C.ChipAutocorrect(src, labels)
 	-- an action line without its indent ("open exit", "if a > 1 then open exit")
 	local function fixAction(first, rest, allowIf)
 		first = fixWord(first, allowIf and KEYWORDS or ACTION_LIST, #first <= 3 and 1 or 2)
-		if first == "if" and allowIf then
+		if first == "repeat" and allowIf then
+			local times, thenW, inner = rest:match("^(%S+)%s+(%S+)%s*(.*)$")
+			if not times then return "repeat " .. rest end
+			thenW = fixWord(thenW, { "then" }, 2)
+			local w2, r2 = inner:match("^(%S+)%s*(.*)$")
+			return ("repeat %s %s"):format(times, thenW) .. (w2 and (" " .. fixAction(w2, r2, false)) or "")
+		elseif first == "if" and allowIf then
 			local lhs, cmp, rhs, thenW, inner = rest:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s*(.*)$")
 			if not lhs then return "if " .. rest end
 			lhs = fixLabel(lhs)
@@ -2227,7 +2375,7 @@ function C.ChipAutocorrect(src, labels)
 			return ("if %s %s %s %s"):format(lhs, cmp, rhs, thenW) .. (w2 and (" " .. fixAction(w2, r2, false)) or "")
 		elseif first == "say" or first == "wait" or not ACTION_SET[first] then
 			return first .. (rest ~= "" and (" " .. rest) or "")
-		elseif first == "set" or first == "add" or C.CHIP_FX[first] then
+		elseif first == "set" or first == "add" or first == "random" or first == "stop" or first == "repeat" or C.CHIP_FX[first] then
 			if first == "tint" and rest ~= "" then rest = fixWord(rest, C.CHIP_TINT_ORDER, 2) end
 			return first .. (rest ~= "" and (" " .. rest) or "")
 		end
@@ -2246,7 +2394,13 @@ function C.ChipAutocorrect(src, labels)
 				if lf ~= "when" then table.insert(fixes, first .. " -> when") end
 				local w2, w3 = rest:match("^(%S*)%s*(%S*)")
 				local lw2 = (w2 or ""):lower()
-				if lw2 == "start" or lw2 == "every" then
+				local cl, cc, cr = rest:match("^(%S+)%s+(%S+)%s+(%S+)$")
+				if cl and (COMPARE[cc] or cc == "=" or cc == "~=" or cc == "=>" or cc == "=<") then
+					-- when <lhs> <compare> <rhs>
+					if cc == "~=" then cc = "!=" elseif cc == "=" then cc = "==" elseif cc == "=>" then cc = ">=" elseif cc == "=<" then cc = "<=" end
+					if not cr:match("^%-?[%d%.]+$") and cr:lower() ~= "true" and cr:lower() ~= "false" then cr = fixLabel(cr) else cr = cr:lower() end
+					w2, w3 = fixLabel(cl), cc .. " " .. cr
+				elseif lw2 == "start" or lw2 == "every" then
 					w2 = lw2
 				elseif w2 ~= "" and not lower[lw2] and (editDistance(lw2, "start") <= 2 or editDistance(lw2, "every") <= 2) then
 					w2 = fixWord(w2, { "start", "every" }, 2)
@@ -2276,6 +2430,7 @@ function C.ChipHighlight(src, kinds)
 	local vars = {}
 	for v in (src .. "\n"):gmatch("[Ss][Ee][Tt]%s+([%a_][%w_]*)") do vars[v:lower()] = true end
 	for v in (src .. "\n"):gmatch("[Aa][Dd][Dd]%s+([%a_][%w_]*)") do vars[v:lower()] = true end
+	for v in (src .. "\n"):gmatch("[Rr][Aa][Nn][Dd][Oo][Mm]%s+([%a_][%w_]*)") do vars[v:lower()] = true end
 	local out = {}
 	for line in (src .. "\n"):gmatch("(.-)\n") do
 		local body = line:gsub("^%s+", "")
@@ -2313,7 +2468,7 @@ function C.ChipHighlight(src, kinds)
 					kind = "number"
 				elseif kinds and kinds[lw] then
 					kind = "label"
-				elseif vars[lw] or prev == "set" or prev == "add" then
+				elseif vars[lw] or prev == "set" or prev == "add" or prev == "random" then
 					kind = "variable"
 				else
 					kind = "unknown"
@@ -2349,7 +2504,7 @@ function C.ChipSuggest(line, kinds, varList)
 	local function actionArgs(op, at)
 		if at == 1 then
 			if CHIP_TARGET[op] then labelsWhere(function(k) return C.ChipTargetOk(op, k) end)
-			elseif op == "set" or op == "add" then for _, v in ipairs(varList or {}) do add(v, "variable") end
+			elseif op == "set" or op == "add" or op == "random" then for _, v in ipairs(varList or {}) do add(v, "variable") end
 			elseif op == "music" then add("stop", "value") for _, n in ipairs(C.ChipSoundNames("music")) do add(n, "value") end
 			elseif op == "sound" then for _, n in ipairs(C.ChipSoundNames("sound")) do add(n, "value") end
 			elseif op == "tint" then for _, c in ipairs(C.CHIP_TINT_ORDER) do add(c, "value") end
@@ -2360,11 +2515,27 @@ function C.ChipSuggest(line, kinds, varList)
 		add("when", "keyword")
 		for _, a in ipairs(C.CHIP_ACTIONS) do add(a, "action") end
 	elseif first == "when" then
+		local w2 = (words[2] or ""):lower()
 		if n == 2 then
 			add("start", "event") add("every", "event")
 			labelsWhere(C.ChipSourceOk)
-		elseif n == 3 and kinds and kinds[(words[2] or ""):lower()] then
+			for _, v in ipairs(varList or {}) do add(v, "variable") end
+		elseif n == 3 and kinds and kinds[w2] then
 			add("pressed", "event") add("released", "event")
+			for _, c in ipairs(C.CHIP_COMPARE) do add(c, "compare") end
+		elseif n == 3 and w2 ~= "start" and w2 ~= "every" then
+			for _, c in ipairs(C.CHIP_COMPARE) do add(c, "compare") end
+		elseif n == 4 and COMPARE[(words[3] or "")] then
+			add("true", "value") add("false", "value")
+			for _, v in ipairs(varList or {}) do add(v, "variable") end
+		end
+	elseif first == "repeat" then
+		if n == 3 then
+			add("then", "keyword")
+		elseif n == 4 then
+			for _, a in ipairs(C.CHIP_ACTIONS) do if a ~= "if" and a ~= "repeat" then add(a, "action") end end
+		elseif n == 5 then
+			actionArgs((words[4] or ""):lower(), 1)
 		end
 	elseif first == "if" then
 		if n == 2 then
@@ -2378,7 +2549,7 @@ function C.ChipSuggest(line, kinds, varList)
 		elseif n == 5 then
 			add("then", "keyword")
 		elseif n == 6 then
-			for _, a in ipairs(C.CHIP_ACTIONS) do if a ~= "if" then add(a, "action") end end
+			for _, a in ipairs(C.CHIP_ACTIONS) do if a ~= "if" and a ~= "repeat" then add(a, "action") end end
 		elseif n == 7 then
 			actionArgs((words[6] or ""):lower(), 1)
 		end
@@ -2404,9 +2575,9 @@ end
 -- the hint for the line being typed (its keyword, or the action after "then")
 function C.ChipHintFor(line)
 	local first = (line:match("^%s*(%S+)") or ""):lower()
-	if first == "if" then
+	if first == "if" or first == "repeat" then
 		local after = line:match("[Tt][Hh][Ee][Nn]%s+(%S+)")
-		if after and C.CHIP_HINTS[after:lower()] then return C.CHIP_HINTS["if"] .. "      " .. C.CHIP_HINTS[after:lower()] end
+		if after and C.CHIP_HINTS[after:lower()] then return C.CHIP_HINTS[first] .. "      " .. C.CHIP_HINTS[after:lower()] end
 	end
 	return C.CHIP_HINTS[first]
 end
@@ -2476,6 +2647,18 @@ Items are called by their <b>label</b> (right-click an item to see or change it)
   Compare with == != &lt; &gt; &lt;= &gt;=. An item in an if counts as 1 when it's pressed / on / open, else 0: <font color="#8E44AD">if</font> button2 == 1 <font color="#8E44AD">then</font> ...
 
 Lines starting with -- or # are comments.]] },
+	{ "Chips: advanced", [[
+<i>Advanced mode.</i>
+<b>When something becomes true</b>
+  <font color="#8E44AD">when</font> <font color="#0E8A92">score</font> &gt;= 3   runs every time it turns true (checked 10 times a second)
+  <font color="#8E44AD">when</font> trigger1 == 1   works with items too (1 = pressed / on / open)
+<b>Random numbers</b>
+  <font color="#1F6FD0">random</font> <font color="#0E8A92">roll</font> 1 6   a whole number from 1 to 6
+<b>Repeat</b> (one line)
+  <font color="#1F6FD0">repeat</font> 3 <font color="#8E44AD">then</font> <font color="#1F6FD0">drop</font> dropper1   does the action 3 times (1 - 50)
+<b>Stop</b>
+  <font color="#1F6FD0">stop</font>   ends this rule right there      <font color="#8E44AD">if</font> <font color="#0E8A92">lives</font> &lt;= 0 <font color="#8E44AD">then</font> <font color="#1F6FD0">stop</font>
+Chips can also <font color="#1F6FD0">enable</font> / <font color="#1F6FD0">disable</font> funnels, invisible walls, lights, death zones and push zones.]] },
 	{ "Chips: effects", [[
 Effects are seen and heard <b>only by the players in this chamber</b>: you, or you and your co-op partner. They never change the puzzle.
   <font color="#1F6FD0">music</font> Still Alive   plays a song from PortalAssets.OST (or an asset id) and the game's own music steps aside
@@ -2524,11 +2707,30 @@ when button2 pressed
 <b>A cube every 10 seconds</b>
 when every 10
     drop dropper1]] },
+	{ "Invisible blocks", [[
+<i>Intermediate and Advanced modes.</i> See-through in the editor, invisible in game. Find them at the end of the Items tab.
+<b>Trigger Zone</b>   fills its cell. On while players (or cubes: right-click > Triggered by) are inside. Connect it like a button.
+<b>Delay Relay</b>   connect a button to it and it to an item: passes the signal on a few seconds later (right-click for the time).
+<b>Invisible Wall</b>   a solid cell you can't see. Portal shots go through it. Connect a button to switch it off.
+<b>Light</b>   a coloured light (right-click > Light colour). Can be switched by a button or chip.
+<b>Death Zone</b> <i>(Advanced)</i>   anyone who walks into the cell dies.
+<b>Push Zone</b> <i>(Advanced)</i>   shoves players and cubes straight out of the surface it's on (right-click > Push strength).]] },
+	{ "Funnels + buttons", [[
+Right-click an excursion funnel > <b>Button action</b>:
+<b>Reverse it</b>   the Portal 2 way: a connected button flips it blue &lt;-&gt; orange.
+<b>Turn it on / off</b>   the funnel is off ("auto off") until the button is pressed. Tick <b>Start enabled</b> to make the button turn it off instead.
+<b>Stay on after release</b> keeps a button's effect going for a few seconds after you step off (funnels, bridges, lasers, fizzlers...).
+Flying through the air into a funnel stops you dead and carries you, like in the real game.]] },
+	{ "Copy, export + import", [[
+<b>Duplicate</b>: select an item and press <b>Ctrl+D</b> (or right-click > Duplicate). The copy goes on the nearest free panel facing the same way, with the same options.
+<b>File > Export</b> gives you the chamber as text: copy it (Ctrl+A, Ctrl+C).
+<b>File > Import</b> takes that text back and replaces the open chamber (Ctrl+Z undoes it).
+<b>In Studio</b>: paste the text into a StringValue <b>ServerStorage.ChamberImport</b> and run <font color="#1F6FD0">require(game.ServerStorage.ChamberStudioTools).Import()</font> in the command bar. You get plain blocks (Cells + Items) to move around - no game assets copied out. <font color="#1F6FD0">.Preview()</font> builds the real chamber next to it, <font color="#1F6FD0">.Export()</font> writes the text to ServerStorage.ChamberExport for File > Import.]] },
 	{ "Editor modes", [[
 Options > Editor > <b>Editor Mode</b>, or File > Editor mode:
 <b>Simple</b>: the Items palette.
-<b>Intermediate</b>: + Textures and Meshes tabs.
-<b>Advanced</b>: + My Chips, item labels, mesh nudging and a coordinates readout under the pointer.]] },
+<b>Intermediate</b>: + Textures and Meshes tabs, invisible blocks (trigger zones, delay relays, invisible walls, lights) and "Stay on after release".
+<b>Advanced</b>: + My Chips (with when-true rules, random, repeat, stop), death and push zones, item labels, mesh nudging and a coordinates readout under the pointer.]] },
 	{ "Editor styles", [[
 Options > Editor > <b>Editor Style</b>, or File > Editor style, changes how the editor looks:
 <b>Classic</b> the light grey Puzzle Maker look. <b>Dark</b> for night owls. <b>Blueprint</b> blue drafting paper. <b>High Contrast</b> black, white and yellow for the clearest view.]] },

@@ -52,7 +52,7 @@
 --   Your cubes: models/parts named Normal, Companion, Edgeless, Reflection in
 --   ReplicatedStorage.PortalAssets.Cubes (or ServerStorage.Cubes); missing ones
 --   get a simple placeholder.
---   Dropped cubes go into the map the dropper belongs to (inside workspace.ActiveMap), so rebuilding / leaving a
+--   Dropped cubes go into the map the dropper belongs to (workspace.PortalInstances.Slot_<n>, or workspace.ActiveMap), so rebuilding / leaving a
 --   chamber cleans them up.
 --
 -- FIXED BRIDGES: a bridge with an end piece (a child named "g2..." like
@@ -1463,16 +1463,24 @@ local function makeCube(kind)
 	return cube
 end
 
--- where a dropper's cubes live: the map the dropper is part of (workspace.ActiveMap > Chamber), so clearing /
--- rebuilding the map takes the cubes with it. Droppers placed straight in workspace drop into workspace.
+-- where a dropper's cubes live: the map the dropper is part of, so clearing / rebuilding the map takes the cubes
+-- with it. Maps live in workspace.PortalInstances.Slot_<n> (one per player / co-op pair), older setups in
+-- workspace.ActiveMap. Droppers placed straight in workspace drop into workspace.
 local function cubeHome(m)
-	local active = workspace:FindFirstChild("ActiveMap")
-	if active and m:IsDescendantOf(active) then
+	local function under(root)
+		if not (root and m:IsDescendantOf(root)) then return nil end
 		local node = m
-		while node.Parent and node.Parent ~= active do node = node.Parent end
+		while node.Parent and node.Parent ~= root do node = node.Parent end
 		return node
 	end
-	return workspace
+	local slot = under(workspace:FindFirstChild("PortalInstances")) -- the Slot_<n> folder
+	if slot then
+		-- the map inside the slot (the slot folder itself is kept; its children are what gets cleared)
+		local node = m
+		while node.Parent and node.Parent ~= slot do node = node.Parent end
+		return node ~= m and node or slot
+	end
+	return under(workspace:FindFirstChild("ActiveMap")) or workspace
 end
 
 local function setCubeCollide(cube, on)
@@ -1788,6 +1796,7 @@ local function updateElement(m, el, now)
 	if on ~= el.on then
 		el.on = on
 		setVisible(el, on)
+		if on then el.lastSegs = nil end -- switched back on (button / chip / "auto off"): redraw it from scratch
 	end
 	if not on then
 		return

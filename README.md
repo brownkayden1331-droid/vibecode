@@ -8,6 +8,9 @@
 | `src/StarterPlayerScripts/PortalMapEditor.client.lua` | StarterPlayerScripts › LocalScript `PortalMapEditor` |
 | `src/StarterPlayerScripts/MusicDirector.client.lua` | StarterPlayerScripts › LocalScript `MusicDirector` |
 | `src/ServerScriptService/RigChangerServer.server.lua` | ServerScriptService › Script `RigChangerServer` |
+| `src/ServerScriptService/TestElementsServer.server.lua` | ServerScriptService › Script `TestElementsServer` |
+| `src/StarterPlayerScripts/TestElementsClient.client.lua` | StarterPlayerScripts › LocalScript `TestElementsClient` |
+| `src/ServerStorage/ChamberStudioTools.lua` | ServerStorage › ModuleScript `ChamberStudioTools` (Studio only) |
 
 ## Editor modes and tabs
 Options › Editor › **Editor Mode** (also File › Editor mode inside the editor):
@@ -45,7 +48,30 @@ Actions: `open|close|enable|disable|toggle <item>`, `drop <dropper>`, `reverse <
 In the LINES view words are coloured (keywords, items, numbers, text, comments; unknown words in red), and typos are fixed when you press Enter or click away (e.g. `opne exitt` → `open exit`), with actions indented under their `when`.
 Chips also have **variables** (`set score 0`, `add score 1`, `say "Score: {score}"`) and one-line **if** (`if score >= 3 then open exit`). In the LINES view suggestions pop up as you type (Tab takes the top one) and the bar under the text shows what the line expects.
 **Effects** (look and sound only, for the players in that chamber: you, or you and your co-op partner): `music <song | id>` / `music stop` (the game's own music steps aside while it plays), `sound <name | id>`, `shake <seconds>`, `title "text"`, `tint <colour>`, `countdown <seconds>` / `countdown stop`. They stop when you leave, rebuild or go back to editing; a chip can send at most 20 a second. Songs come from `PortalAssets.OST`, sounds from `PortalAssets.Sounds`.
+**Advanced code**: `when score >= 3` (runs each time it turns true), `random roll 1 6`, `repeat 3 then drop dropper1`, `stop` (ends the rule).
 Items are named by label (right-click an item in Advanced mode). **To My Chips** stores a chip in your profile so you can use it in any chamber.
+
+## Invisible blocks
+At the end of the Items palette, Intermediate mode and up (Advanced adds the last two). See-through in the editor, invisible in game:
+**Trigger Zone** (a source, on while players / cubes are in its cell), **Delay Relay** (passes a signal on 1–30 s later), **Invisible Wall** (solid, portal shots pass through, switchable), **Light** (coloured, switchable), **Death Zone**, **Push Zone** (shoves players and cubes out of its surface).
+
+## Funnels and buttons
+Right-click a funnel › **Button action**: *Reverse it* (Portal 2) or *Turn it on / off* — the funnel is off until the button is pressed ("auto off"). **Stay on after release** (Intermediate+, linked items) keeps it going 1–10 s after the button lets go.
+Flying into a funnel stops you mid-air and carries you (TestElementsClient: swept check so you can't fly through it at speed, momentum killed on entry; `CATCH_SWEEP` / `CATCH_STOP` at the top).
+TestElementsServer now drops cubes into the chamber's slot map (`workspace.PortalInstances.Slot_<n>`), so they're cleaned up with it.
+
+## Duplicate, export, import, Studio
+- **Ctrl+D** / right-click › **Duplicate**: copies the item (same options, new label) to the nearest free panel facing the same way.
+- **File › Export**: the chamber as text. **File › Import**: paste that text back (replaces the open chamber; Ctrl+Z undoes).
+- **Studio**: put the text in a StringValue `ServerStorage.ChamberImport`, then in the command bar:
+  ```lua
+  local T = require(game.ServerStorage.ChamberStudioTools)
+  T.Import()   -- workspace.ChamberWorkbench: Cells (one block per open cell) + Items (one block per item, attributes) + Chips
+  T.Preview()  -- the real chamber, built from your PortalAssets, next to it (T.ClearPreview() removes it)
+  T.Export()   -- text into ServerStorage.ChamberExport -> copy its Value -> File › Import in the editor
+  T.New()      -- a fresh workbench
+  ```
+  Set Studio's move snap to 10 (one cell). Panel settings live on the cells as `Face_<side>`, `Color_<side>`, `Texture_<side>`; items have `Kind`, `Side`, `Rot`, `Options` (JSON), `LinksTo` (Ids, comma separated). Nothing from the game's assets is copied out.
 
 ## Exit door
 The exit is **locked** until something opens it: connect a button/pedestal/laser catcher/gate to it, open it with a chip, or right-click it › **Open without a button**. Standing at a locked exit does nothing. Publishing a chamber nobody can finish is refused.

@@ -686,6 +686,9 @@ local function cleanMap(data)
 					if type(oo.hide) == "boolean" then opt.hide = oo.hide end
 					if oo.vis == "Antline" or oo.vis == "Signage" or oo.vis == "None" then opt.vis = oo.vis end
 					if type(oo.free) == "boolean" and e[1] == "exit" then opt.free = oo.free end
+					if oo.link == "Power" or oo.link == "Reverse" then opt.link = oo.link end
+					if tonumber(oo.linger) and table.find(Config.LINGER_TIMES, tonumber(oo.linger)) then opt.linger = tonumber(oo.linger) end
+					if tonumber(oo.power) and table.find(Config.PUSH_STRENGTHS, tonumber(oo.power)) then opt.power = tonumber(oo.power) end
 					if Config.ValidLabel(oo.label) then opt.label = oo.label end
 					if tonumber(oo.scale) then opt.scale = math.clamp(tonumber(oo.scale), 0.25, 4) end
 					if tonumber(oo.spin) then opt.spin = math.floor(tonumber(oo.spin)) % 360 end
@@ -760,6 +763,7 @@ local function drawConnection(root, air, ea, eb, origin)
 	return parts
 end
 
+local updateZones -- forward (ZONES below)
 local function isOn(s)
 	return s:GetAttribute("Pressed") == true or s:GetAttribute("PressesButton") == true
 end
@@ -833,22 +837,58 @@ local function wireLinks(root, links, data, origin, slot)
 		end
 	end
 
-	local state = {}
-	local function apply(t, on)
-		if state[t] == on then return end
-		local first = state[t] == nil
-		state[t] = on
+	local state, pendingOff, delayToken = {}, {}, {}
+	local function applyNow(t, on, first)
 		local kind = t:GetAttribute("Kind")
 		if kind == "cubedropper" then
 			-- every time the inputs turn on: the old cube fizzles and a new one drops (TestElementsServer)
 			if on and not first then dropperIn(t):SetAttribute("Drop", true) end
-		elseif kind == "tbeam" then
+		elseif kind == "delay" then
+			-- delay relay: its output follows its inputs, Delay seconds later
+			local token = {}
+			delayToken[t] = token
+			if first then
+				t:SetAttribute("Pressed", on)
+			else
+				task.delay(t:GetAttribute("Delay") or 1, function()
+					if delayToken[t] == token and t.Parent then t:SetAttribute("Pressed", on) end
+				end)
+			end
+		elseif kind == "tbeam" and t:GetAttribute("FunnelLink") ~= "Power" then
 			Config.SetAll(t, "Reversed", (t:GetAttribute("BaseReversed") == true) ~= on)
+		elseif kind == "tbeam" then
+			-- powered by its button: off while the button is up (unless "Start enabled" flips that)
+			local startOpt = t:GetAttribute("StartOpt")
+			Config.SetAll(t, "Enabled", ((startOpt ~= nil) and startOpt or false) ~= on)
 		else
 			local startOpt = t:GetAttribute("StartOpt")
 			local startOn = (startOpt ~= nil) and startOpt or (Config.LINK_DEFAULT_ON[kind] == true)
 			Config.SetAll(t, "Enabled", startOn ~= on)
 		end
+	end
+	local function apply(t, on)
+		if state[t] == on then
+			pendingOff[t] = nil -- back on before the linger ran out: stay on
+			return
+		end
+		local first = state[t] == nil
+		-- "Stay on after release": keep it on for Linger seconds after the inputs let go
+		local linger = t:GetAttribute("Linger")
+		if not first and not on and type(linger) == "number" and linger > 0 then
+			if pendingOff[t] then return end
+			local token = {}
+			pendingOff[t] = token
+			task.delay(linger, function()
+				if pendingOff[t] ~= token or not t.Parent then return end
+				pendingOff[t] = nil
+				state[t] = false
+				applyNow(t, false, false)
+			end)
+			return
+		end
+		pendingOff[t] = nil
+		state[t] = on
+		applyNow(t, on, first)
 	end
 
 	local busy, again = false, false
@@ -953,6 +993,19 @@ runChips = function(root, data, byId, slot)
 		elseif a.op == "add" then
 			vars[a.var:lower()] = value(a.var) + (tonumber(a.value) or 0)
 			return
+		elseif a.op == "random" then
+			vars[a.var:lower()] = math.random(a.lo or 1, math.max(a.hi or 6, a.lo or 1))
+			return
+		elseif a.op == "stop" then
+			return "stop" -- run() ends the rule
+		elseif a.op == "repeat" then
+			for _ = 1, math.clamp(a.n or 1, 1, 50) do
+				if not alive() or not a.act then return end
+				local w = act(a.act)
+				if w == "stop" then return "stop" end
+				if type(w) == "number" and w > 0 then task.wait(w) end
+			end
+			return
 		elseif a.op == "if" then
 			if a.act and compare(value(a.lhs), a.cmp, value(a.rhs)) then return act(a.act) end
 			return
@@ -993,7 +1046,9 @@ runChips = function(root, data, byId, slot)
 			for i, a in ipairs(rule.acts) do
 				if i > 200 or not alive() then return end
 				local ok, w = pcall(act, a)
-				if not ok then warn("[PortalServer] chip:", w) elseif type(w) == "number" and w > 0 then task.wait(w) end
+				if not ok then warn("[PortalServer] chip:", w)
+				elseif w == "stop" then return
+				elseif type(w) == "number" and w > 0 then task.wait(w) end
 			end
 		end)
 	end
@@ -1003,6 +1058,17 @@ runChips = function(root, data, byId, slot)
 		for _, rule in ipairs(rules) do
 			if rule.ev == "start" then
 				run(rule)
+			elseif rule.ev == "cond" then
+				-- when <lhs> <compare> <rhs>: checked 10 times a second, runs each time it turns true
+				task.spawn(function()
+					local was = false
+					while alive() do
+						local now = compare(value(rule.lhs), rule.cmp, value(rule.rhs))
+						if now and not was then run(rule) end
+						was = now
+						task.wait(0.1)
+					end
+				end)
 			elseif rule.ev == "every" then
 				task.spawn(function()
 					while alive() do
@@ -2439,6 +2505,59 @@ for _, tag in ipairs({ "PeTIMirror", "PeTIPedestal" }) do
 	CollectionService:GetInstanceAddedSignal(tag):Connect(function(m) task.defer(setupMirror, m) end)
 end
 
+-- invisible zones from the editor (Trigger Zone, Death Zone, Push Zone): one box per item, checked 10 times a second.
+-- Players are pushed by TestElementsClient (it owns their character); cubes are pushed here.
+local zoneSet = taggedSet("PeTIZone")
+local zoneParams = OverlapParams.new()
+zoneParams.FilterType = Enum.RaycastFilterType.Exclude
+updateZones = function()
+	for m in pairs(zoneSet) do
+		if not m.Parent then
+			zoneSet[m] = nil
+		elseif m:IsDescendantOf(workspace) then
+			local kind = m:GetAttribute("Kind")
+			local zone = m:FindFirstChild("Zone")
+			local active = m:GetAttribute("Enabled") ~= false
+			if zone and (kind == "trigger" or active) and kind ~= "block" then
+				zoneParams.FilterDescendantsInstances = { m }
+				local mode = m:GetAttribute("TriggerMode") or "Players"
+				local hit, seen = false, {}
+				for _, part in ipairs(workspace:GetPartBoundsInBox(zone.CFrame, zone.Size, zoneParams)) do
+					local mdl = part:FindFirstAncestorOfClass("Model")
+					local hum = mdl and mdl:FindFirstChildOfClass("Humanoid")
+					if hum and hum.Health > 0 and Players:GetPlayerFromCharacter(mdl) then
+						if kind == "killzone" then
+							hum.Health = 0
+						elseif kind == "trigger" and mode ~= "Cubes" then
+							hit = true
+						end
+					elseif not part.Anchored and not (hum) then
+						local root = part.AssemblyRootPart
+						if kind == "trigger" and mode ~= "Players" and isCube(part) then
+							hit = true
+						elseif kind == "pushzone" and root and not seen[root] and not root.Anchored and not root:GetAttribute("HeldBy") then
+							seen[root] = true
+							local v = m:GetAttribute("PushVelocity")
+							if typeof(v) == "Vector3" and v.Magnitude > 0 then
+								if root:CanSetNetworkOwnership() then root:SetNetworkOwner(nil) end -- (like the funnels do)
+								local cur = root.AssemblyLinearVelocity
+								local dir = v.Unit
+								if cur:Dot(dir) < v.Magnitude then
+									root.AssemblyLinearVelocity = cur - dir * cur:Dot(dir) + v
+								end
+							end
+						end
+					end
+					if hit and kind == "trigger" then break end
+				end
+				if kind == "trigger" and (m:GetAttribute("Pressed") == true) ~= hit then
+					m:SetAttribute("Pressed", hit)
+				end
+			end
+		end
+	end
+end
+
 local doorClock, pruneClock = 0, 0
 RunService.Heartbeat:Connect(function(dt)
 	pruneClock += dt
@@ -2454,6 +2573,7 @@ RunService.Heartbeat:Connect(function(dt)
 		doorClock = 0
 		updateDoors()
 		updateButtons()
+		updateZones()
 	end
 end)
 

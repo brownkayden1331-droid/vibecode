@@ -1315,3 +1315,43 @@ player.CharacterAdded:Connect(function()
 	setRideLoop(nil)
 	player:SetAttribute("InFunnel", false)
 end)
+
+-- ==========================================
+-- PUSH ZONES (editor's Advanced "Push Zone": an invisible cell that shoves you out of its surface)
+-- ==========================================
+-- The server pushes cubes; your character is yours to move, so this does it. Zones: tag PeTIZone, Kind = "pushzone",
+-- a child part "Zone" (the box) and the attribute PushVelocity (studs/s). Enabled = false switches it off.
+do
+	local CollectionService = game:GetService("CollectionService")
+	local zones = {}
+	local function add(m)
+		if m:GetAttribute("Kind") == "pushzone" then zones[m] = true end
+	end
+	for _, m in ipairs(CollectionService:GetTagged("PeTIZone")) do add(m) end
+	CollectionService:GetInstanceAddedSignal("PeTIZone"):Connect(add)
+	CollectionService:GetInstanceRemovedSignal("PeTIZone"):Connect(function(m) zones[m] = nil end)
+
+	RunService.PreSimulation:Connect(function()
+		if not next(zones) then return end
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+		for m in pairs(zones) do
+			local zone = m.Parent and m:FindFirstChild("Zone")
+			local v = m:GetAttribute("PushVelocity")
+			if zone and typeof(v) == "Vector3" and v.Magnitude > 0 and m:GetAttribute("Enabled") ~= false then
+				local l = zone.CFrame:PointToObjectSpace(hrp.Position)
+				local h = zone.Size / 2
+				if math.abs(l.X) <= h.X and math.abs(l.Y) <= h.Y and math.abs(l.Z) <= h.Z then
+					local cur = hrp.AssemblyLinearVelocity
+					local dir = v.Unit
+					if cur:Dot(dir) < v.Magnitude then
+						hrp.AssemblyLinearVelocity = cur - dir * cur:Dot(dir) + v
+						local hum = char:FindFirstChildOfClass("Humanoid")
+						if hum and dir.Y > 0.5 then hum:ChangeState(Enum.HumanoidStateType.Freefall) end -- off the ground
+					end
+				end
+			end
+		end
+	end)
+end
