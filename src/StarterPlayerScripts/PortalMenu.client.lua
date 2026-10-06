@@ -39,6 +39,9 @@ local getRobloxSettings = settings -- the local `settings` table below shadows t
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local Config = require(ReplicatedStorage:WaitForChild("PortalConfig"))
+if Config.VERSION ~= 3 then
+	warn("[PortalMenu] ReplicatedStorage.PortalConfig is out of date (version " .. tostring(Config.VERSION) .. ", need 3). Replace it with the new PortalConfig - things will break until you do.")
+end
 
 -- ==========================================
 -- SETTINGS + LOOK
@@ -301,6 +304,9 @@ local settings = {
 	-- test chamber editor (PortalMapEditor reads these from the Setting_<key> attributes)
 	edAutoHide = "Enabled", edOrbitSens = 0.5, edInvertY = "Disabled", edZoomSpeed = 0.5, edCamSmooth = 0.5,
 	edSfx = 1, edDrone = 1, edHover = "Enabled", edPadCursor = 0.5, edTouchBar = "Auto", edTeamNames = "Enabled",
+	edMode = "Simple", -- Simple (Items) | Intermediate (+ Textures, Meshes) | Advanced (+ My Chips, labels, nudging)
+	toasts = "Enabled", -- toast notifications (achievements, saves, chamber messages...)
+	tutorial = "Enabled", -- tutorial cards when a level starts
 }
 local DEFAULTS = table.clone(settings)
 
@@ -728,6 +734,268 @@ local gui = new("ScreenGui", {
 })
 local menuAction = new("BindableEvent", { Name = "MenuAction", Parent = gui })
 local menuRequest = new("BindableEvent", { Name = "MenuRequest", Parent = gui })
+
+-- ==========================================
+-- TOASTS (Options > Gameplay / Editor / Advanced Video > Toast Notifications turns them off)
+-- ==========================================
+-- Same look as the "Achievement Unlocked!" popup (PortalAchievementToast), but they slide DOWN out of the top right
+-- corner. Up to TOAST.MAX stack under each other, the rest wait their turn.
+-- Other scripts: MenuRequest:Fire("Toast", { title = "...", text = "...", kind = "info" | "good" | "bad" | "locked" | "chip", icon = "rbxassetid://..." })
+-- The server: Push "Toast" { text, title, kind }
+local TOAST = {
+	SOUND = "rbxassetid://78959439349986", -- played when one pops (blank = silent)
+	HOLD = 4.5,                            -- seconds on screen
+	WIDTH = 460, HEIGHT = 120,             -- card size at 1080p
+	MARGIN = 28,                           -- gap to the screen corner
+	GAP = 10,                              -- gap between stacked toasts
+	MAX = 3,                               -- on screen at once
+	SCALE = 1,                             -- overall size multiplier
+}
+local toast
+do
+	local toastGui = new("ScreenGui", {
+		Name = "PortalToasts", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 590,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = playerGui,
+	})
+	local W, H, PAD = TOAST.WIDTH, TOAST.HEIGHT, 16
+	local stack = new("Frame", {
+		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -TOAST.MARGIN, 0, TOAST.MARGIN),
+		Size = UDim2.fromOffset(W, (H + TOAST.GAP) * TOAST.MAX), BackgroundTransparency = 1, Parent = toastGui,
+	})
+	new("UIListLayout", { Padding = UDim.new(0, TOAST.GAP), SortOrder = Enum.SortOrder.LayoutOrder, Parent = stack })
+	local toastScale = new("UIScale", { Parent = stack })
+	local function rescaleToasts()
+		local c = workspace.CurrentCamera
+		local s = c and math.clamp(c.ViewportSize.Y / 1080, 0.7, 2) or 1
+		toastScale.Scale = s * TOAST.SCALE
+		-- clear of Roblox's own top bar buttons
+		local top = math.max(TOAST.MARGIN, GuiService.TopbarInset.Max.Y + 10)
+		stack.Position = UDim2.new(1, -TOAST.MARGIN * s, 0, top)
+	end
+	local function hookToastCamera()
+		local c = workspace.CurrentCamera
+		if c then c:GetPropertyChangedSignal("ViewportSize"):Connect(rescaleToasts) end
+		rescaleToasts()
+	end
+	hookToastCamera()
+	workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(hookToastCamera)
+	pcall(function() GuiService:GetPropertyChangedSignal("TopbarInset"):Connect(rescaleToasts) end)
+
+	local GOTHAM = "rbxasset://fonts/families/GothamSSm.json"
+	local ACCENT = {
+		info = rgb(38, 178, 214), good = rgb(110, 210, 90), bad = rgb(230, 90, 70), locked = rgb(240, 150, 50),
+		achievement = rgb(240, 205, 70), chip = rgb(170, 110, 255),
+	}
+	local GLYPH = { info = "i", good = "+", bad = "!", locked = "!", achievement = "A", chip = "C" }
+	local queue, live, order = {}, 0, 0
+	local recent = {}
+
+	local function popSound()
+		if TOAST.SOUND == "" then return end
+		local s = new("Sound", { SoundId = TOAST.SOUND, Volume = 0.6, Parent = SoundService })
+		local ui = SoundService:FindFirstChild("PortalUI")
+		if ui then s.SoundGroup = ui end
+		s:Play()
+		s.Ended:Once(function() s:Destroy() end)
+	end
+
+	local showNext
+	local function showOne(t)
+		live += 1
+		order += 1
+		-- a clipping slot in the stack; the card slides down into it from above, and back up out of it
+		local slot = new("Frame", { Size = UDim2.fromOffset(W, H), BackgroundTransparency = 1, ClipsDescendants = true, LayoutOrder = order, Parent = stack })
+		local card = new("Frame", { Position = UDim2.fromScale(0, -1), Size = UDim2.fromScale(1, 1), BackgroundColor3 = rgb(255), BorderSizePixel = 0, Parent = slot })
+		new("UIGradient", { Rotation = 90, Color = ColorSequence.new(rgb(30, 32, 35), rgb(14, 42, 64)), Parent = card })
+		new("UIStroke", { Color = rgb(70, 90, 110), Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = card })
+		local accent = ACCENT[t.kind or "info"] or ACCENT.info
+		local ICON = H - PAD * 2
+		local iconBox = new("Frame", { Position = UDim2.fromOffset(PAD, PAD), Size = UDim2.fromOffset(ICON, ICON), BackgroundColor3 = rgb(30),
+			BorderSizePixel = 0, Parent = card })
+		new("UIStroke", { Color = accent, Thickness = 2, Parent = iconBox })
+		if type(t.icon) == "string" and t.icon ~= "" then
+			new("ImageLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Image = t.icon, ScaleType = Enum.ScaleType.Fit, Parent = iconBox })
+		else
+			new("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = GLYPH[t.kind or "info"] or "i",
+				FontFace = Font.new(GOTHAM, Enum.FontWeight.Bold), TextSize = 44, TextColor3 = accent, Parent = iconBox })
+		end
+		local textX = PAD * 2 + ICON
+		local textW = W - textX - PAD
+		new("TextLabel", {
+			Position = UDim2.fromOffset(textX, PAD - 4), Size = UDim2.fromOffset(textW, 30), BackgroundTransparency = 1,
+			Text = (t.title and t.title ~= "") and t.title or "Notice", FontFace = Font.new(GOTHAM, Enum.FontWeight.Medium), TextSize = 24,
+			TextColor3 = rgb(255), TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = card,
+		})
+		local desc = new("TextLabel", {
+			Position = UDim2.fromOffset(textX, PAD + 30), Size = UDim2.fromOffset(textW, H - PAD * 2 - 30), BackgroundTransparency = 1, Text = t.text,
+			FontFace = Font.new(GOTHAM, Enum.FontWeight.Regular), TextSize = 19, TextWrapped = true, TextScaled = true,
+			TextColor3 = rgb(205), TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Parent = card,
+		})
+		new("UITextSizeConstraint", { MaxTextSize = 19, MinTextSize = 12, Parent = desc })
+		popSound()
+		TweenService:Create(card, TweenInfo.new(0.45, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { Position = UDim2.fromScale(0, 0) }):Play()
+		task.delay(0.45 + TOAST.HOLD, function()
+			local out = TweenService:Create(card, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.In), { Position = UDim2.fromScale(0, -1) })
+			out:Play()
+			out.Completed:Wait()
+			slot:Destroy()
+			live -= 1
+			showNext()
+		end)
+	end
+	showNext = function()
+		while live < TOAST.MAX and #queue > 0 do showOne(table.remove(queue, 1)) end
+	end
+
+	toast = function(text, title, kind, iconImage)
+		if settings.toasts == "Disabled" or type(text) ~= "string" or text == "" then return end
+		local key = tostring(title) .. "|" .. text
+		if recent[key] and os.clock() - recent[key] < 1.5 then return end -- the same toast twice in a row
+		recent[key] = os.clock()
+		if #queue >= 8 then table.remove(queue, 1) end
+		table.insert(queue, { text = text, title = title, kind = kind, icon = iconImage })
+		showNext()
+	end
+end
+
+-- ==========================================
+-- TUTORIALS (a card bottom left when a level starts; Options > Gameplay > Tutorials turns them off)
+-- ==========================================
+-- Every chapter, challenge, Workshop chamber, co-op game, the editor and editor playtests get one (PortalConfig
+-- C.TUTORIALS, or a chapter's own `tutorial` list). Enter = next, Backspace = skip. Other scripts can show one with
+-- MenuRequest:Fire("Tutorial", "editor") (forces it even if it was already seen this session).
+local showTutorial
+do
+	local tutGui = new("ScreenGui", {
+		Name = "PortalTutorial", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 425,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Enabled = false, Parent = playerGui,
+	})
+	local card = new("Frame", {
+		AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 24, 1, -90), Size = UDim2.fromOffset(460, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = Color3.fromRGB(28, 32, 34), BackgroundTransparency = 0.1, BorderSizePixel = 0, Parent = tutGui,
+	})
+	new("UICorner", { CornerRadius = UDim.new(0, 8), Parent = card })
+	new("UIStroke", { Color = COL.CYAN, Thickness = 2, Transparency = 0.3, Parent = card })
+	new("UIPadding", { PaddingLeft = UDim.new(0, 18), PaddingRight = UDim.new(0, 18), PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12), Parent = card })
+	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = card })
+	local tutScale = new("UIScale", { Parent = card })
+	local head = new("TextLabel", { Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "TUTORIAL", FontFace = F_SET, TextSize = 15,
+		TextColor3 = COL.CYAN, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 1, Parent = card })
+	local title = new("TextLabel", { Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, Text = "", FontFace = F_TITLE, TextSize = 26,
+		TextColor3 = Color3.fromRGB(240, 246, 244), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 2, Parent = card })
+	local body = new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = "",
+		FontFace = F_SET, TextSize = 20, TextWrapped = true, TextColor3 = Color3.fromRGB(220, 228, 226), TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = 3, Parent = card })
+	local row = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = 4, Parent = card })
+	local function btn(x, w, text, fn, blue)
+		local b = new("TextButton", { Position = UDim2.fromOffset(x, 2), Size = UDim2.fromOffset(w, 28), BorderSizePixel = 0, AutoButtonColor = true,
+			BackgroundColor3 = blue and COL.BLUE_BTN or Color3.fromRGB(70, 76, 78), Text = text, FontFace = F_ROW, TextSize = 16,
+			TextColor3 = Color3.fromRGB(240, 244, 244), Parent = row })
+		new("UICorner", { CornerRadius = UDim.new(0, 4), Parent = b })
+		b.MouseButton1Click:Connect(function() uiSound(CFG.SOUND_CLICK) fn() end)
+		return b
+	end
+	local hint = new("TextLabel", { Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "ENTER  next      BACKSPACE  skip", FontFace = F_SET,
+		TextSize = 13, TextColor3 = Color3.fromRGB(150, 160, 158), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 5, Parent = card })
+	local steps, idx, token = nil, 1, 0
+	local seen = {}
+	local nextBtn
+
+	local function close()
+		token += 1
+		tutGui.Enabled = false
+		steps = nil
+	end
+	local function render()
+		if not steps then return end
+		local st = steps[idx]
+		head.Text = ("TUTORIAL  %d / %d"):format(idx, #steps)
+		title.Text = st[1] or ""
+		body.Text = st[2] or ""
+		nextBtn.Text = idx >= #steps and "DONE" or "NEXT"
+		hint.Visible = not UserInputService.TouchEnabled or UserInputService.KeyboardEnabled
+		token += 1
+		local my = token
+		-- moves on by itself if you're busy playing (the mouse is locked in first person)
+		task.delay(12, function()
+			if my == token and steps then
+				if idx < #steps then idx += 1 render() else close() end
+			end
+		end)
+	end
+	local function nextStep()
+		if not steps then return end
+		if idx < #steps then idx += 1 render() else close() end
+	end
+	btn(0, 90, "BACK", function() if steps and idx > 1 then idx -= 1 render() end end)
+	nextBtn = btn(98, 90, "NEXT", nextStep, true)
+	btn(196, 70, "SKIP", close)
+	btn(274, 150, "TURN OFF TUTORIALS", function()
+		close()
+		settings.tutorial = "Disabled"
+		applySetting("tutorial")
+		onSettingChanged()
+		toast("Turn them back on in Options > Gameplay.", "Tutorials off", "info")
+	end)
+
+	UserInputService.InputBegan:Connect(function(input, gpe)
+		if not steps or gpe or UserInputService:GetFocusedTextBox() then return end
+		if input.KeyCode == Enum.KeyCode.Return then nextStep()
+		elseif input.KeyCode == Enum.KeyCode.Backspace then close() end
+	end)
+	player:GetAttributeChangedSignal("Setting_tutorial"):Connect(function()
+		if settings.tutorial == "Disabled" then close() end
+	end)
+
+	showTutorial = function(key, list, force)
+		if type(list) ~= "table" or #list == 0 then return end
+		if not force and (settings.tutorial == "Disabled" or seen[key]) then return end
+		seen[key] = true
+		task.spawn(function()
+			-- wait for the loading screen / menus to get out of the way
+			local t0 = os.clock()
+			while (loadingNow or mode ~= "none") and os.clock() - t0 < 30 do task.wait(0.25) end
+			task.wait(0.8)
+			if loadingNow or mode ~= "none" then return end
+			local c = workspace.CurrentCamera
+			tutScale.Scale = math.clamp((c and c.ViewportSize.Y or 1080) / 1080, 0.6, 1.4)
+			steps, idx = list, 1
+			tutGui.Enabled = true
+			render()
+		end)
+	end
+
+	-- which tutorial goes with what you're doing now
+	local function chapterSteps(n)
+		local ch = Config.Chapter(n)
+		if ch and type(ch.tutorial) == "table" then return ch.tutorial end
+		local basics = Config.TUTORIALS.chapter or {}
+		if n == 1 then return basics end
+		-- later chapters: the chapter's name and one reminder
+		local tip = basics[((n - 2) % math.max(#basics, 1)) + 1]
+		local list = { { ("Chapter %d: %s"):format(n, ch and ch.title or ""), "New chamber, new tricks. Look for what opens the exit door." } }
+		if tip then table.insert(list, tip) end
+		return list
+	end
+	local function check()
+		local T = Config.TUTORIALS or {}
+		if player:GetAttribute("InEditor") then
+			if player:GetAttribute("EditorPlaytest") then showTutorial("playtest", T.playtest)
+			else showTutorial("editor", T.editor) end
+		elseif player:GetAttribute("ChallengeChamber") then
+			showTutorial("challenge", T.challenge)
+		elseif player:GetAttribute("WorkshopMap") then
+			showTutorial("workshop", T.workshop)
+		elseif type(player:GetAttribute("Chapter")) == "number" then
+			local n = player:GetAttribute("Chapter")
+			showTutorial("chapter" .. n, chapterSteps(n))
+		end
+		if player:GetAttribute("CoopPartner") then showTutorial("coop", T.coop) end
+	end
+	for _, attr in ipairs({ "Chapter", "ChallengeChamber", "WorkshopMap", "CoopPartner", "InEditor", "EditorPlaytest" }) do
+		player:GetAttributeChangedSignal(attr):Connect(function() task.defer(check) end)
+	end
+end
 
 local loadGui = new("ScreenGui", {
 	Name = "PortalLoading", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 420,
@@ -2232,6 +2500,22 @@ local function openEnrichment()
 end
 
 menuRequest.Event:Connect(function(kind, arg)
+	if kind == "Tutorial" then
+		local T = Config.TUTORIALS or {}
+		if type(arg) == "string" and T[arg] then showTutorial(arg, T[arg], true) end
+		return
+	elseif kind == "Toast" then
+		if type(arg) == "table" then toast(arg.text, arg.title, arg.kind, arg.icon) else toast(tostring(arg)) end
+		return
+	elseif kind == "SetSetting" then
+		-- other scripts changing a setting (the editor's File > Editor mode): saved like any other option
+		if type(arg) == "table" and type(arg.key) == "string" and DEFAULTS[arg.key] ~= nil and type(arg.value) == type(DEFAULTS[arg.key]) then
+			settings[arg.key] = arg.value
+			applySetting(arg.key)
+			onSettingChanged()
+		end
+		return
+	end
 	if kind == "Sound" then
 		uiSound(CFG[arg] or arg)
 	elseif kind == "TileSound" then
@@ -2284,6 +2568,7 @@ function Panels.AdvancedVideo()
 			{ kind = "choice", text = "Motion Blur", key = "motionBlur", options = { "Disabled", "Enabled" } },
 			{ kind = "slider", text = "Motion Blur Amount", key = "blurStrength", min = 0, max = 1, step = 0.05 },
 			{ kind = "choice", text = "Weapon Bob", key = "viewBob", options = { "Enabled", "Disabled" } },
+			{ kind = "choice", text = "Toast Notifications", key = "toasts", options = { "Enabled", "Disabled" } },
 		},
 	})
 end
@@ -2354,6 +2639,9 @@ function Panels.EditorSettings()
 	return buildPanel({
 		title = "Editor", cells = 8, defaults = true, minBodyCells = 5, maxVisible = 9, listW = 8 * CFG.GRID, noPreview = true, padTop = 30,
 		rows = {
+			{ kind = "choice", text = "Editor Mode", key = "edMode", options = { "Simple", "Intermediate", "Advanced" } },
+			{ kind = "choice", text = "Toast Notifications", key = "toasts", options = { "Enabled", "Disabled" } },
+			{ kind = "choice", text = "Tutorials", key = "tutorial", options = { "Enabled", "Disabled" } },
 			{ kind = "choice", text = "Hide Items Palette", key = "edAutoHide", options = { "Enabled", "Disabled" } },
 			{ kind = "slider", text = "Orbit Speed", key = "edOrbitSens", min = 0, max = 1, step = 0.05 },
 			{ kind = "choice", text = "Invert Orbit", key = "edInvertY", options = { "Disabled", "Enabled" } },
@@ -2369,6 +2657,16 @@ function Panels.EditorSettings()
 	})
 end
 
+function Panels.Gameplay()
+	return buildPanel({
+		title = "Gameplay", cells = 7, defaults = true, minBodyCells = 3,
+		rows = {
+			{ kind = "choice", text = "Tutorials", key = "tutorial", options = { "Enabled", "Disabled" } },
+			{ kind = "choice", text = "Toast Notifications", key = "toasts", options = { "Enabled", "Disabled" } },
+		},
+	})
+end
+
 function Panels.Options()
 	return buildPanel({
 		title = "OPTIONS",
@@ -2377,6 +2675,7 @@ function Panels.Options()
 			{ kind = "button", text = "VIDEO", action = function() openPanel(Panels.Video) end },
 			{ kind = "button", text = "KEYBOARD/MOUSE", action = function() openPanel(Panels.Keyboard) end },
 			{ kind = "button", text = "CONTROLLER", action = function() openPanel(Panels.Controller) end },
+			{ kind = "button", text = "GAMEPLAY", action = function() openPanel(Panels.Gameplay) end },
 			{ kind = "button", text = "EDITOR", action = function() openPanel(Panels.EditorSettings) end },
 		},
 	})
@@ -3421,12 +3720,21 @@ end)
 -- ==========================================
 
 local Push = {}
-function Push.Achievement(d) P.achievements[d.id] = os.time() end
-function Push.ChapterUnlocked(d) P.maxChapter = d.maxChapter end
+function Push.Achievement(d)
+	P.achievements[d.id] = os.time()
+end
+function Push.ChapterUnlocked(d)
+	local new = (d.maxChapter or 1) > (P.maxChapter or 1)
+	P.maxChapter = d.maxChapter
+	local ch = new and Config.Chapter(d.maxChapter)
+	if ch then toast(("Chapter %d: %s"):format(d.maxChapter, ch.title), "Chapter unlocked", "good") end
+end
+function Push.Toast(d) toast(d.text, d.title, d.kind) end
 function Push.Inventory(d) P.inventory = d.inventory end
 function Push.LoadChapter(d) startGame("NewGame", d.chapter) end
 function Push.SkipMenu() if mode ~= "none" then closeAll() end end
 function Push.Autosaved()
+	toast("Your progress was saved.", "Autosave", "info")
 	task.spawn(function()
 		local ok, prof = Net.call("GetProfile")
 		if ok then P.saves = prof.saves end
@@ -3471,7 +3779,8 @@ function Push.TeamInvite(d)
 		}, 2)
 	end)
 end
-function Push.CoopStart()
+function Push.CoopStart(d)
+	if d.partner then toast(("Playing with %s (you're %s)."):format(tostring(d.partner), tostring(d.color or "")), "Co-op", "good") end
 	task.spawn(function()
 		local t0 = os.clock()
 		while busy and os.clock() - t0 < 5 do task.wait() end
@@ -3485,6 +3794,7 @@ function Push.CoopStart()
 end
 function Push.ChamberComplete(d)
 	if d.editor then return end -- the editor shows its own message
+	toast(("Solved in %s."):format(fmtTime(d.time)), "Chamber complete", "good")
 	if d.mapId then
 		showAnywhere(function()
 			return Panels.dialog("Chamber Complete", ("Solved in %s. What did you think of this test chamber?"):format(fmtTime(d.time)), {

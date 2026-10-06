@@ -28,8 +28,13 @@
 --   PortalAchievement  Part, string attribute "Achievement".
 --   PortalChamberExit  Part. Finishes a Workshop chamber / challenge chamber / editor playtest.
 --
+-- Instances: every player (a co-op pair shares one) plays in their own spot, workspace.PortalInstances.Slot_<n>, far
+-- away from everyone else (PortalConfig "INSTANCES"). Chapters, challenges, Workshop chambers and playtests all load there.
+--
 -- Chamber doors (ChamberLockDoor, tagged PortalChamberDoor by PortalConfig) get these attributes, kept up to date:
---   Open (bool)        exit door: a player is near AND (it has no inputs connected OR they're all on). entry: false
+--   Open (bool)        exit door: a player is near AND it's unlocked. entry: false
+--   Unlocked (bool)    exit door: its inputs are all on / a chip opened it / it's set to open without a button.
+--                      Editor-built exits with nothing connected stay LOCKED, and their finish trigger does nothing.
 --   PlayerNear (bool)  someone is within Config.DOOR_OPEN_RADIUS
 -- Have your door's own script open / close on the "Open" attribute.
 --
@@ -54,6 +59,9 @@ local TextService = game:GetService("TextService")
 local RunService = game:GetService("RunService")
 
 local Config = require(ReplicatedStorage:WaitForChild("PortalConfig"))
+if Config.VERSION ~= 3 then
+	warn("[PortalServer] ReplicatedStorage.PortalConfig is out of date (version " .. tostring(Config.VERSION) .. ", need 3). Replace it with the new PortalConfig - things will break until you do.")
+end
 
 -- ==========================================
 -- NETWORK
@@ -117,6 +125,7 @@ local function newProfile()
 		follows = {},
 		drafts = {},
 		published = {},
+		chips = {}, -- the My Chips library: { id, name, src }
 		stats = { portals = 0, playtime = 0 },
 	}
 end
@@ -216,7 +225,8 @@ local function placeCharacter(player, cf)
 end
 
 local function spawnCF(spawnPart)
-	local look = spawnPart.CFrame.LookVector
+	local facing = spawnPart:GetAttribute("Facing") -- built chambers: look into the room
+	local look = typeof(facing) == "Vector3" and facing or spawnPart.CFrame.LookVector
 	local flat = Vector3.new(look.X, 0, look.Z)
 	if flat.Magnitude < 0.01 then flat = Vector3.new(0, 0, -1) end
 	local pos = spawnPart.Position + Vector3.new(0, spawnPart.Size.Y / 2 + 3.5, 0)
@@ -297,39 +307,132 @@ local function waitForRig(player, oldChar, timeout)
 end
 
 -- ==========================================
--- MAPS
+-- MAPS + INSTANCES
 -- ==========================================
-local activeMapName = nil
+-- Every player (a co-op pair shares one) gets a slot: workspace.PortalInstances.Slot_<n>, placed far away from every
+-- other slot (Config.InstanceOffset). Chapters, challenge maps, Workshop chambers and editor playtests load into the
+-- player's own slot, so people playing different things never see / clear / trip each other's maps.
+local instancesRoot = workspace:FindFirstChild("PortalInstances") or Instance.new("Folder")
+instancesRoot.Name = "PortalInstances"
+instancesRoot.Parent = workspace
 
-local function activeFolder()
-	local f = workspace:FindFirstChild("ActiveMap")
+local slotOf = {}    -- [player] = slot number
+local slotUsers = {} -- [slot] = { [player] = true }
+
+local function slotFolder(slot)
+	local name = "Slot_" .. slot
+	local f = instancesRoot:FindFirstChild(name)
 	if not f then
 		f = Instance.new("Folder")
-		f.Name = "ActiveMap"
-		f.Parent = workspace
+		f.Name = name
+		f:SetAttribute("Slot", slot)
+		f.Parent = instancesRoot
 	end
 	return f
 end
 
-local function clearActive()
-	activeFolder():ClearAllChildren()
-	activeMapName = nil
+local function joinSlot(player, slot)
+	local old = slotOf[player]
+	if old == slot then return slot end
+	if old and slotUsers[old] then
+		slotUsers[old][player] = nil
+		if next(slotUsers[old]) == nil then
+			slotUsers[old] = nil
+			local f = instancesRoot:FindFirstChild("Slot_" .. old)
+			if f then f:Destroy() end
+		end
+	end
+	slotOf[player] = slot
+	slotUsers[slot] = slotUsers[slot] or {}
+	slotUsers[slot][player] = true
+	player:SetAttribute("InstanceSlot", slot)
+	return slot
 end
 
-local function loadMap(name, force)
-	if activeMapName == name and not force and #activeFolder():GetChildren() > 0 then
-		return activeFolder()
+local function acquireSlot(player)
+	if slotOf[player] then return slotOf[player] end
+	local n = 1
+	while slotUsers[n] do n += 1 end
+	return joinSlot(player, n)
+end
+
+-- leaves the slot (its maps are cleared once nobody is left in it)
+local function leaveSlot(player)
+	local old = slotOf[player]
+	if not old then return end
+	slotOf[player] = nil
+	player:SetAttribute("InstanceSlot", nil)
+	local users = slotUsers[old]
+	if users then
+		users[player] = nil
+		if next(users) == nil then
+			slotUsers[old] = nil
+			local f = instancesRoot:FindFirstChild("Slot_" .. old)
+			if f then f:Destroy() end
+		end
+	end
+end
+
+local function slotPlayers(slot)
+	local list = {}
+	for pl in pairs(slotUsers[slot] or {}) do
+		if pl.Parent then table.insert(list, pl) end
+	end
+	return list
+end
+
+-- the player's own instance folder (made on demand)
+local function activeFolder(player)
+	return slotFolder(acquireSlot(player))
+end
+
+local function clearActive(player)
+	local slot = slotOf[player]
+	if not slot then return end
+	local f = instancesRoot:FindFirstChild("Slot_" .. slot)
+	if f then
+		f:ClearAllChildren()
+		f:SetAttribute("Map", nil)
+	end
+end
+
+-- moves a freshly cloned map out to the slot
+local function offsetMap(root, offset)
+	if offset.Magnitude < 0.01 then return end
+	if root:IsA("Model") or root:IsA("BasePart") then
+		root:PivotTo(root:GetPivot() + offset)
+		return
+	end
+	for _, c in ipairs(root:GetChildren()) do
+		if c:IsA("PVInstance") then
+			c:PivotTo(c:GetPivot() + offset)
+		elseif c:IsA("Folder") then
+			offsetMap(c, offset)
+		end
+	end
+end
+
+local function loadMap(name, force, player)
+	if not player then
+		warn("[PortalServer] loadMap needs the player now (each player has their own instance)")
+		return nil
+	end
+	local folder = activeFolder(player)
+	if folder:GetAttribute("Map") == name and not force and #folder:GetChildren() > 0 then
+		return folder
 	end
 	local maps = ServerStorage:FindFirstChild(Config.MAPS_FOLDER)
 	local src = maps and maps:FindFirstChild(name)
-	clearActive()
+	clearActive(player)
 	if not src then
 		warn(("[PortalServer] map '%s' not found in ServerStorage.%s"):format(tostring(name), Config.MAPS_FOLDER))
 		return nil
 	end
-	src:Clone().Parent = activeFolder()
-	activeMapName = name
-	return activeFolder()
+	local clone = src:Clone()
+	if Config.OFFSET_CHAPTER_MAPS then offsetMap(clone, Config.InstanceOffset(slotOf[player])) end
+	clone.Parent = folder
+	folder:SetAttribute("Map", name)
+	return folder
 end
 
 -- ==========================================
@@ -367,8 +470,12 @@ local function makeSave(player, slotId, auto)
 	end
 	entry.time = os.time()
 	entry.chapter = chapter
-	entry.map = activeMapName
-	entry.cf = root and { root.CFrame:GetComponents() } or nil
+	local folder = slotOf[player] and instancesRoot:FindFirstChild("Slot_" .. slotOf[player])
+	entry.map = folder and folder:GetAttribute("Map") or nil
+	-- stored relative to the player's instance, so it loads back into whatever slot they get next time
+	local off = (Config.OFFSET_CHAPTER_MAPS and slotOf[player]) and Config.InstanceOffset(slotOf[player]) or Vector3.zero
+	entry.cf = root and { (root.CFrame - off):GetComponents() } or nil
+	entry.rel = true
 	entry.hooks = {}
 	for name, h in pairs(saveHooks) do
 		local ok, data = pcall(h.save, player)
@@ -399,7 +506,7 @@ local function startChapter(player, index)
 		end)
 		return ok, err
 	end
-	local root = loadMap(def.map, true)
+	local root = loadMap(def.map, true, player)
 	player:SetAttribute("Chapter", index)
 	player:SetAttribute("ChallengeChamber", nil)
 	player:SetAttribute("WorkshopMap", nil)
@@ -420,12 +527,13 @@ local function loadSave(player, save)
 		end)
 		return ok, err
 	end
-	local root = loadMap(save.map or def.map, true)
+	local root = loadMap(save.map or def.map, true, player)
 	player:SetAttribute("Chapter", save.chapter)
 	player:SetAttribute("ChallengeChamber", nil)
 	player:SetAttribute("WorkshopMap", nil)
 	if save.cf then
-		placeCharacter(player, CFrame.new(table.unpack(save.cf)))
+		local off = (save.rel and Config.OFFSET_CHAPTER_MAPS and slotOf[player]) and Config.InstanceOffset(slotOf[player]) or Vector3.zero
+		placeCharacter(player, CFrame.new(table.unpack(save.cf)) + off)
 	else
 		local s = findSpawn(root)
 		if s then placeCharacter(player, spawnCF(s)) end
@@ -497,7 +605,7 @@ end
 local function cleanMap(data)
 	if type(data) ~= "table" then return nil, "Bad data." end
 	local L = Config.EDITOR_LIMITS
-	local out = { v = 2, air = {}, faces = {}, ents = {}, links = {}, coop = data.coop == true }
+	local out = { v = 2, air = {}, faces = {}, colors = {}, textures = {}, ents = {}, links = {}, chips = {}, coop = data.coop == true }
 	if type(data.air) ~= "table" or #data.air > L.cells then return nil, "That chamber is too big." end
 	local air = {}
 	for _, c in ipairs(data.air) do
@@ -519,6 +627,35 @@ local function cleanMap(data)
 			if type(k) == "string" and (v == 0 or v == 2 or v == 3) and k:match("^%-?%d+,%-?%d+,%-?%d+,[1-6]$") then out.faces[k] = v end
 		end
 	end
+	-- tile colours and textures (Textures tab)
+	for _, field in ipairs({ "colors", "textures" }) do
+		if type(data[field]) == "table" then
+			local n = 0
+			for k, v in pairs(data[field]) do
+				n += 1
+				if n > L.cells * 6 then break end
+				if type(k) == "string" and k:match("^%-?%d+,%-?%d+,%-?%d+,[1-6]$") then
+					if field == "colors" and tonumber(v) and Config.TILE_COLORS[tonumber(v)] then
+						out.colors[k] = tonumber(v)
+					elseif field == "textures" and Config.ValidTextureValue(v) then
+						out.textures[k] = v
+					end
+				end
+			end
+		end
+	end
+	-- chips (My Chips tab): kept as their source text, run by wireLinks
+	if type(data.chips) == "table" then
+		for i, c in ipairs(data.chips) do
+			if i > (L.chips or 16) then break end
+			if type(c) == "table" and type(c.src) == "string" then
+				table.insert(out.chips, {
+					name = type(c.name) == "string" and c.name:sub(1, 30) or ("Chip " .. i),
+					src = c.src:sub(1, L.chipLen or 3000),
+				})
+			end
+		end
+	end
 	local uniques, taken, ids = {}, {}, {}
 	if type(data.ents) == "table" then
 		for i, e in ipairs(data.ents) do
@@ -537,6 +674,7 @@ local function cleanMap(data)
 					taken[slot] = true
 					uniques[e[1]] = true
 					local variant = (e[1] == "cube" and type(e[7]) == "string") and e[7]:sub(1, 50) or false
+					if e[1] == "prop" then variant = Config.ValidMeshValue(e[7]) and e[7] or false end
 					local id = type(e[8]) == "string" and e[8]:sub(1, 16) or HttpService:GenerateGUID(false):gsub("-", ""):sub(1, 8)
 					if ids[id] then id = HttpService:GenerateGUID(false):gsub("-", ""):sub(1, 8) end
 					ids[id] = e[1]
@@ -547,6 +685,13 @@ local function cleanMap(data)
 					if type(oo.dropOnStart) == "boolean" then opt.dropOnStart = oo.dropOnStart end
 					if type(oo.hide) == "boolean" then opt.hide = oo.hide end
 					if oo.vis == "Antline" or oo.vis == "Signage" or oo.vis == "None" then opt.vis = oo.vis end
+					if type(oo.free) == "boolean" and e[1] == "exit" then opt.free = oo.free end
+					if Config.ValidLabel(oo.label) then opt.label = oo.label end
+					if tonumber(oo.scale) then opt.scale = math.clamp(tonumber(oo.scale), 0.25, 4) end
+					if tonumber(oo.spin) then opt.spin = math.floor(tonumber(oo.spin)) % 360 end
+					for _, ok in ipairs({ "ox", "oy", "oz" }) do
+						if tonumber(oo[ok]) then opt[ok] = math.clamp(tonumber(oo[ok]), -Config.CELL, Config.CELL) end
+					end
 					if tonumber(oo.timer) then opt.timer = math.clamp(math.floor(tonumber(oo.timer)), 1, 30) end
 					for _, gk in ipairs({ "gx0", "gx1", "gz0", "gz1" }) do
 						if tonumber(oo[gk]) then opt[gk] = math.clamp(math.floor(tonumber(oo[gk])), 0, 28) end
@@ -591,14 +736,14 @@ local function dropperIn(t)
 end
 
 -- antlines (dotted lines over the panels) or signs for one link; recoloured blue / orange by the source's state
-local function drawConnection(root, air, ea, eb)
+local function drawConnection(root, air, ea, eb, origin)
 	local vis = (type(ea[10]) == "table" and ea[10].vis) or "Antline"
 	local parts = {}
 	local folder = root:FindFirstChild("Antlines") or Instance.new("Folder")
 	folder.Name = "Antlines"
 	folder.Parent = root
 	if vis == "Antline" then
-		local segs = Config.AntlinePath(air, { ea[2], ea[3], ea[4], ea[5] }, { eb[2], eb[3], eb[4], eb[5] }, Config.EDITOR_ORIGIN, 0.06)
+		local segs = Config.AntlinePath(air, { ea[2], ea[3], ea[4], ea[5] }, { eb[2], eb[3], eb[4], eb[5] }, origin, 0.06)
 		if segs then
 			for _, d in ipairs(Config.AntlineDots(segs)) do
 				table.insert(parts, Config.AntlineDot(d.cf, d.corner, Config.ANT_OFF, folder))
@@ -606,7 +751,7 @@ local function drawConnection(root, air, ea, eb)
 		end
 	elseif vis == "Signage" then
 		for _, e in ipairs({ ea, eb }) do
-			local sign = Config.BuildSign(Config.ItemFrame(Config.EDITOR_ORIGIN, e), folder)
+			local sign = Config.BuildSign(Config.ItemFrame(origin, e), folder)
 			table.insert(parts, sign:FindFirstChild("Light"))
 		end
 	end
@@ -620,8 +765,10 @@ end
 -- Wires up a built chamber. Sources report on their item model ("Pressed"). Logic gates work out their output from
 -- their inputs and set their own "Pressed". Every other item turns on when ALL of its inputs are on: flips from its
 -- start state (Config.LINK_DEFAULT_ON / "Start enabled"), flips a funnel's direction, or makes a dropper drop.
-local function wireLinks(root, links, data)
-	if not root or type(links) ~= "table" or #links == 0 then return end
+local runChips -- forward (CHIPS below)
+local function wireLinks(root, links, data, origin, slot)
+	if not root then return end
+	links = type(links) == "table" and links or {}
 	local air, entOf = {}, {}
 	for _, c in ipairs(data and data.air or {}) do air[Config.Key(c[1], c[2], c[3])] = true end
 	for _, e in ipairs(data and data.ents or {}) do if e[8] then entOf[e[8]] = e end end
@@ -636,7 +783,7 @@ local function wireLinks(root, links, data)
 	for _, l in ipairs(links) do
 		local ea, eb, s = entOf[l[1]], entOf[l[2]], byId[l[1]]
 		if ea and eb and s then
-			local ok, parts = pcall(drawConnection, root, air, ea, eb)
+			local ok, parts = pcall(drawConnection, root, air, ea, eb, origin)
 			if ok then
 				linkParts[s] = linkParts[s] or {}
 				for _, p in ipairs(parts) do table.insert(linkParts[s], p) end
@@ -751,13 +898,195 @@ local function wireLinks(root, links, data)
 	end
 	for _, g in ipairs(gates) do paintGate(g) end
 	evaluate()
+	if type(data and data.chips) == "table" and #data.chips > 0 then runChips(root, data, byId, slot) end
 end
 
-local function buildChamberMap(data, name)
-	clearActive()
-	local model = Config.BuildChamber(data, activeFolder(), Config.EDITOR_ORIGIN, {})
-	activeMapName = name
-	wireLinks(model, data.links, data)
+-- ==========================================
+-- CHIPS (programs from the editor's My Chips tab, see PortalConfig "CHIPS")
+-- ==========================================
+local lastLockedToast = {}
+local function toast(player, text, kind)
+	Push:FireClient(player, "Toast", { text = text, kind = kind })
+end
+
+runChips = function(root, data, byId, slot)
+	-- label -> item model
+	local byLabel = {}
+	for _, e in ipairs(data.ents or {}) do
+		local l = Config.LabelOf(e)
+		if l and e[8] and byId[e[8]] then byLabel[l:lower()] = byId[e[8]] end
+	end
+	local function item(label) return label and byLabel[label:lower()] end
+	local function alive() return root.Parent ~= nil end
+
+	local function act(a)
+		local t = item(a.target)
+		local kind = t and t:GetAttribute("Kind")
+		if a.op == "say" then
+			for _, pl in ipairs(slotPlayers(slot)) do toast(pl, a.text, "chip") end
+		elseif not t then
+			return
+		elseif a.op == "drop" and kind == "cubedropper" then
+			dropperIn(t):SetAttribute("Drop", true)
+		elseif a.op == "reverse" and kind == "tbeam" then
+			Config.SetAll(t, "Reversed", not (t:GetAttribute("Reversed") == true))
+		elseif Config.ChipTargetOk(a.op, kind) then
+			local now = t:GetAttribute("Enabled") == true
+			local want = (a.op == "open" or a.op == "enable") or ((a.op == "toggle") and not now)
+			Config.SetAll(t, "Enabled", want)
+		end
+	end
+
+	local function run(rule)
+		task.spawn(function()
+			for i, a in ipairs(rule.acts) do
+				if i > 200 or not alive() then return end
+				if a.op == "wait" then task.wait(a.n or 0) else pcall(act, a) end
+			end
+		end)
+	end
+
+	for _, chip in ipairs(data.chips) do
+		local rules = Config.ParseChip(chip.src)
+		for _, rule in ipairs(rules) do
+			if rule.ev == "start" then
+				run(rule)
+			elseif rule.ev == "every" then
+				task.spawn(function()
+					while alive() do
+						task.wait(math.max(rule.n or 1, 0.5))
+						if alive() then run(rule) end
+					end
+				end)
+			elseif rule.src then
+				local s = item(rule.src)
+				if s then
+					local was = isOn(s)
+					local function changed()
+						local on = isOn(s)
+						if on == was then return end
+						was = on
+						if (rule.ev == "pressed") == on then run(rule) end
+					end
+					s:GetAttributeChangedSignal("Pressed"):Connect(changed)
+					s:GetAttributeChangedSignal("PressesButton"):Connect(changed)
+				end
+			end
+		end
+	end
+end
+
+-- ==========================================
+-- TOOLBOX (Creator Store search for the editor's Textures / Meshes tabs)
+-- ==========================================
+-- Search uses InsertService:GetFreeDecals / GetFreeModels. Loading free models needs, in Studio:
+-- select InsertService in the Explorer and tick AllowInsertFreeModels (Game Settings > Security too, if offered).
+-- Loaded models are stripped of scripts and kept in ReplicatedStorage.PortalToolbox (Config.TOOLBOX_FOLDER).
+local InsertService = game:GetService("InsertService")
+local toolboxFolder = ReplicatedStorage:FindFirstChild(Config.TOOLBOX_FOLDER) or Instance.new("Folder")
+toolboxFolder.Name = Config.TOOLBOX_FOLDER
+toolboxFolder.Parent = ReplicatedStorage
+local TOOLBOX_MAX_PARTS = 400
+local toolboxSearchCache = {} -- [kind|query|page] = { t, list }
+local toolboxLoading, toolboxFailed = {}, {}
+
+local function loadToolboxAsset(id)
+	id = math.floor(tonumber(id) or 0)
+	if id <= 0 then return nil, "That isn't an asset id." end
+	local have = toolboxFolder:FindFirstChild(tostring(id))
+	if have then return have end
+	if toolboxFailed[id] then return nil, toolboxFailed[id] end
+	local t0 = os.clock()
+	while toolboxLoading[id] and os.clock() - t0 < 20 do task.wait(0.1) end
+	have = toolboxFolder:FindFirstChild(tostring(id))
+	if have then return have end
+	toolboxLoading[id] = true
+	local ok, model = pcall(function() return InsertService:LoadAsset(id) end)
+	toolboxLoading[id] = nil
+	if not ok or not model then
+		local err = "Couldn't load that asset. In Studio, select InsertService and turn on AllowInsertFreeModels."
+		toolboxFailed[id] = err
+		warn("[PortalServer] LoadAsset", id, model)
+		return nil, err
+	end
+	local parts = 0
+	for _, d in ipairs(model:GetDescendants()) do
+		if d:IsA("LuaSourceContainer") or d:IsA("Sound") or d:IsA("Tool") then
+			d:Destroy()
+		elseif d:IsA("BasePart") then
+			parts += 1
+			d.Anchored = true
+		end
+	end
+	if parts > TOOLBOX_MAX_PARTS then
+		model:Destroy()
+		toolboxFailed[id] = "That model is too big (more than " .. TOOLBOX_MAX_PARTS .. " parts)."
+		return nil, toolboxFailed[id]
+	end
+	model.Name = tostring(id)
+	model.Parent = toolboxFolder
+	return model
+end
+
+local function toolboxSearch(player, arg)
+	arg = type(arg) == "table" and arg or {}
+	local kind = arg.kind == "textures" and "textures" or "meshes"
+	local q = tostring(arg.q or ""):sub(1, 50)
+	local page = math.clamp(math.floor(tonumber(arg.page) or 0), 0, 20)
+	local key = kind .. "|" .. q:lower() .. "|" .. page
+	local c = toolboxSearchCache[key]
+	if c and os.clock() - c.t < 300 then return true, c.list end
+	local ok, res = pcall(function()
+		if kind == "textures" then return InsertService:GetFreeDecals(q, page) end
+		return InsertService:GetFreeModels(q, page)
+	end)
+	if not ok then
+		warn("[PortalServer] toolbox search", res)
+		return false, "The Toolbox search isn't available right now."
+	end
+	local list = {}
+	local set = type(res) == "table" and res[1]
+	for _, r in ipairs(type(set) == "table" and set.Results or {}) do
+		if #list >= 40 then break end
+		if tonumber(r.AssetId) then
+			table.insert(list, { id = tonumber(r.AssetId), name = tostring(r.Name or r.AssetId):sub(1, 60), creator = tostring(r.CreatorName or "") })
+		end
+	end
+	toolboxSearchCache[key] = { t = os.clock(), list = list }
+	return true, list
+end
+
+local function toolboxLoad(player, arg)
+	if type(arg) ~= "table" then return false end
+	local m, err = loadToolboxAsset(arg.id)
+	if not m then return false, err end
+	if arg.kind == "textures" then
+		-- a decal asset holds the image id we need for a Texture
+		local t = m:FindFirstChildWhichIsA("Decal", true) or m:FindFirstChildWhichIsA("Texture", true)
+		local img = t and t.Texture:match("%d+")
+		if not img then return false, "That asset isn't an image." end
+		return true, { value = "id:" .. img }
+	end
+	return true, { value = "asset:" .. math.floor(tonumber(arg.id)) }
+end
+
+-- Toolbox meshes a chamber uses have to be loaded before it's built
+local function preloadToolbox(data)
+	for _, e in ipairs(data and data.ents or {}) do
+		local aid = e[1] == "prop" and type(e[7]) == "string" and e[7]:match("^asset:(%d+)$")
+		if aid then loadToolboxAsset(aid) end
+	end
+end
+
+local function buildChamberMap(data, name, player)
+	preloadToolbox(data)
+	clearActive(player)
+	local slot = acquireSlot(player)
+	local origin = Config.ChamberOrigin(slot)
+	local folder = activeFolder(player)
+	local model = Config.BuildChamber(data, folder, origin, {})
+	folder:SetAttribute("Map", name)
+	wireLinks(model, data.links, data, origin, slot)
 	return model
 end
 
@@ -822,7 +1151,9 @@ local function startCoop(a, b)
 	Push:FireClient(a, "CoopStart", { partner = b.Name, color = "Blue" })
 	Push:FireClient(b, "CoopStart", { partner = a.Name, color = "Orange" })
 	task.delay(1, function()
-		local root = loadMap(Config.COOP_HUB_MAP, true)
+		-- the pair share one instance (a's), b's old one is cleaned up if nobody else is in it
+		joinSlot(b, acquireSlot(a))
+		local root = loadMap(Config.COOP_HUB_MAP, true, a)
 		for _, pl in ipairs({ a, b }) do
 			pl:SetAttribute("Chapter", nil)
 			local s = findSpawn(root, pl:GetAttribute("CoopColor"))
@@ -833,6 +1164,7 @@ end
 
 local function endCoop(player)
 	local partnerId = player:GetAttribute("CoopPartner")
+	if partnerId then leaveSlot(player) end -- the partner keeps the shared instance, this player gets a fresh one
 	player:SetAttribute("CoopPartner", nil)
 	player:SetAttribute("CoopColor", nil)
 	if partnerId then
@@ -991,7 +1323,7 @@ end
 -- ==========================================
 -- EDITOR HELPERS
 -- ==========================================
-local PARK = Config.EDITOR_ORIGIN + Vector3.new(0, -80, 0)
+local function parkPos(player) return Config.ChamberOrigin(acquireSlot(player)) + Vector3.new(0, -80, 0) end
 local testSpawn = {} -- [player] = CFrame of the entry door spawn for the current playtest
 
 local function findDraft(p, id)
@@ -1003,7 +1335,7 @@ end
 local function park(player)
 	local root = waitRoot(player, 5)
 	if root then
-		placeCharacter(player, CFrame.new(PARK))
+		placeCharacter(player, CFrame.new(parkPos(player)))
 		root = charRoot(player)
 		if root then root.Anchored = true end
 	end
@@ -1132,11 +1464,9 @@ function Actions.ExitToMainMenu(player)
 		testSpawn[player] = nil
 		if rigChange(player, "Restore", { source = "Editor" }) then waitForRig(player, player.Character, 4) end
 	end
-	if wasEditor or player:GetAttribute("WorkshopMap") or player:GetAttribute("ChallengeChamber") then
-		local root = charRoot(player)
-		if root then root.Anchored = false end
-		clearActive()
-	end
+	local root = charRoot(player)
+	if root then root.Anchored = false end
+	leaveSlot(player) -- the instance goes away once nobody is left in it
 	testSpawn[player] = nil
 	player:SetAttribute("Chapter", nil)
 	player:SetAttribute("Commentary", nil)
@@ -1156,7 +1486,7 @@ function Actions.ChallengeMode(player, chamberId)
 		if not ch then return false, "No challenge chambers set up." end
 	end
 	if course.coop and not player:GetAttribute("CoopPartner") then return false, "This course needs a co-op partner." end
-	local root = loadMap(ch.id, true)
+	local root = loadMap(ch.id, true, player)
 	player:SetAttribute("Chapter", nil)
 	player:SetAttribute("ChallengeChamber", ch.id)
 	player:SetAttribute("ChallengeStart", os.clock())
@@ -1254,7 +1584,7 @@ function Actions.CommunitySingle(player, id)
 	if type(id) ~= "string" then return false, "No chamber picked." end
 	local data = getMapData(id)
 	if not data then return false, "Couldn't download that chamber." end
-	local model = buildChamberMap(data, "workshop_" .. id)
+	local model = buildChamberMap(data, "workshop_" .. id, player)
 	player:SetAttribute("Chapter", nil)
 	player:SetAttribute("WorkshopMap", id)
 	player:SetAttribute("ChallengeStart", os.clock())
@@ -1345,7 +1675,7 @@ function Actions.CommunityCreate(player, id)
 	player:SetAttribute("Chapter", nil)
 	player:SetAttribute("InEditor", true)
 	player:SetAttribute("EditorPlaytest", false)
-	clearActive()
+	clearActive(player)
 	park(player)
 	unlock(player, "EDITOR")
 	task.delay(0.2, function()
@@ -1390,7 +1720,7 @@ function Actions.EditorTest(player, arg)
 	if not player:GetAttribute("InEditor") then return false, "You're not in the editor." end
 	local clean, err = cleanMap(arg.data)
 	if not clean then return false, err end
-	local okBuild, model = pcall(buildChamberMap, clean, "editor_test")
+	local okBuild, model = pcall(buildChamberMap, clean, "editor_test", player)
 	if not okBuild then
 		warn("[PortalServer] building chamber:", model)
 		return false, "Couldn't build the chamber."
@@ -1417,7 +1747,7 @@ function Actions.EditorTest(player, arg)
 end
 
 function Actions.EditorEdit(player)
-	clearActive()
+	clearActive(player)
 	testSpawn[player] = nil
 	player:SetAttribute("EditorPlaytest", false)
 	park(player)
@@ -1431,7 +1761,7 @@ function Actions.EditorExit(player)
 	if rigChange(player, "Restore", { source = "Editor" }) then waitForRig(player, player.Character, 4) end
 	local root = charRoot(player)
 	if root then root.Anchored = false end
-	clearActive()
+	leaveSlot(player)
 	sendToLobby(player)
 	return true
 end
@@ -1451,6 +1781,24 @@ function Actions.EditorPublish(player, arg)
 	if not d then return false, "Save the chamber first." end
 	local clean, err = cleanMap(arg.data)
 	if not clean then return false, err end
+	if not Config.ExitCanOpen(clean) then
+		return false, "Nothing opens the exit door. Connect a button to it, open it with a chip, or right-click it > Open without a button."
+	end
+	-- chip messages are shown to everyone who plays it: filter them
+	for _, chip in ipairs(clean.chips) do
+		local rules = Config.ParseChip(chip.src)
+		local changed = false
+		for _, r in ipairs(rules) do
+			for _, a in ipairs(r.acts) do
+				if a.op == "say" and a.text ~= "" then
+					a.text = filterText(a.text, player) or ""
+					changed = true
+				end
+			end
+		end
+		if changed then chip.src = Config.ChipText(rules) end
+		chip.name = filterText(chip.name, player) or "Chip"
+	end
 	local title = type(arg.title) == "string" and arg.title:sub(1, 40) or d.title
 	title = filterText(title, player) or "Untitled Chamber"
 	clean.title = title
@@ -1481,6 +1829,44 @@ function Actions.EditorPublish(player, arg)
 	markDirty(player)
 	unlock(player, "PUBLISH")
 	return true, id
+end
+
+Actions.ToolboxSearch = toolboxSearch
+Actions.ToolboxLoad = toolboxLoad
+
+-- My Chips library (chips you can drop into any of your chambers)
+function Actions.ChipList(player)
+	local p = getProfile(player, 5)
+	if not p then return false end
+	return true, p.chips
+end
+
+function Actions.ChipSave(player, arg)
+	local p = getProfile(player, 5)
+	if not p or type(arg) ~= "table" or type(arg.src) ~= "string" then return false end
+	local name = type(arg.name) == "string" and arg.name:sub(1, 30) or "Chip"
+	local src = arg.src:sub(1, Config.EDITOR_LIMITS.chipLen or 3000)
+	for _, c in ipairs(p.chips) do
+		if c.id == arg.id then
+			c.name, c.src = name, src
+			markDirty(player)
+			return true, p.chips
+		end
+	end
+	if #p.chips >= 50 then return false, "You have 50 chips saved. Delete one first." end
+	table.insert(p.chips, 1, { id = HttpService:GenerateGUID(false):gsub("-", ""):sub(1, 12), name = name, src = src })
+	markDirty(player)
+	return true, p.chips
+end
+
+function Actions.ChipDelete(player, id)
+	local p = getProfile(player, 5)
+	if not p then return false end
+	for i, c in ipairs(p.chips) do
+		if c.id == id then table.remove(p.chips, i) break end
+	end
+	markDirty(player)
+	return true, p.chips
 end
 
 function Actions.CommunityWorkshop(player)
@@ -1603,12 +1989,13 @@ local function rebuildTriggerList()
 	triggerDirty = false
 end
 
-local TRIGGERS = {} -- [tag] = { once = bool, fn = function(player, inst) }
+local TRIGGERS = {} -- [tag] = { once = bool, fn = function(player, inst), again = seconds (fires again while you stay in it) }
 local inside = {}   -- [player] = { [tag] = { [inst] = true } }
 local fired = {}    -- [player] = { [tag] = { [inst] = true } } for once-only triggers
 
-local function hookTrigger(tag, once, fn)
-	TRIGGERS[tag] = { once = once, fn = fn }
+local lastFire = {}  -- [player] = { [inst] = os.clock() } for triggers that fire again while you stand in them
+local function hookTrigger(tag, once, fn, again)
+	TRIGGERS[tag] = { once = once, fn = fn, again = again }
 	for _, inst in ipairs(CollectionService:GetTagged(tag)) do registerTrigger(inst, tag) end
 	CollectionService:GetInstanceAddedSignal(tag):Connect(function(inst) registerTrigger(inst, tag) end)
 	CollectionService:GetInstanceRemovedSignal(tag):Connect(function() triggerDirty = true end)
@@ -1644,6 +2031,15 @@ local function checkPlayerTriggers(player)
 		for inst in pairs(insts) do
 			local entered = not (was[tag] and was[tag][inst])
 			local done = def and def.once and fired[player][tag] and fired[player][tag][inst]
+			if def and def.again and not entered then
+				lastFire[player] = lastFire[player] or {}
+				local t = lastFire[player][inst]
+				entered = t ~= nil and os.clock() - t > def.again
+			end
+			if def and def.again and entered then
+				lastFire[player] = lastFire[player] or {}
+				lastFire[player][inst] = os.clock()
+			end
 			if def and entered and not done then
 				if def.once then
 					fired[player][tag] = fired[player][tag] or {}
@@ -1656,26 +2052,54 @@ local function checkPlayerTriggers(player)
 	inside[player] = now
 end
 
--- chamber doors: keep Open / PlayerNear up to date
+-- tagged instances, kept in sets instead of calling GetTagged every tick
+local function taggedSet(tag)
+	local set = {}
+	for _, inst in ipairs(CollectionService:GetTagged(tag)) do set[inst] = true end
+	CollectionService:GetInstanceAddedSignal(tag):Connect(function(inst) set[inst] = true end)
+	CollectionService:GetInstanceRemovedSignal(tag):Connect(function(inst) set[inst] = nil end)
+	return set
+end
+local doorSet = taggedSet("PortalChamberDoor")
+local floorButtonSet = taggedSet("PeTIFloorButton")
+
+-- is this exit door unlocked? Editor-built exits (they have a Kind) need something to open them: a connection, a chip
+-- or "Open without a button" all set Enabled. Hand-made doors in your maps keep the old rule.
+local function doorUnlocked(door)
+	if door:GetAttribute("Kind") == "exit" then return door:GetAttribute("Enabled") == true end
+	return not door:GetAttribute("Linked") or door:GetAttribute("Enabled") == true
+end
+
+-- chamber doors: keep Open / PlayerNear / Unlocked up to date
+local doorCenter = {}
 local function updateDoors()
 	local roots = {}
 	for _, pl in ipairs(Players:GetPlayers()) do
 		local r = charRoot(pl)
 		if r then table.insert(roots, r.Position) end
 	end
-	for _, door in ipairs(CollectionService:GetTagged("PortalChamberDoor")) do
-		if door:IsDescendantOf(workspace) then
-			local center = door:IsA("Model") and door:GetPivot().Position or door.Position
+	local R = Config.DOOR_OPEN_RADIUS
+	for door in pairs(doorSet) do
+		if door.Parent and door:IsDescendantOf(workspace) then
+			local center = doorCenter[door]
+			if not center then
+				center = door:IsA("Model") and door:GetPivot().Position or door.Position
+				if door:IsA("Model") or door.Anchored then doorCenter[door] = center end
+			end
 			local near = false
 			for _, p in ipairs(roots) do
-				if (p - center).Magnitude <= Config.DOOR_OPEN_RADIUS then near = true break end
+				local d = p - center
+				if math.abs(d.X) <= R and math.abs(d.Z) <= R and d.Magnitude <= R then near = true break end
 			end
 			local open = false
-			if door:GetAttribute("DoorType") == "exit" then
-				open = near and (not door:GetAttribute("Linked") or door:GetAttribute("Enabled") == true)
-			end
+			local isExit = door:GetAttribute("DoorType") == "exit"
+			local unlocked = isExit and doorUnlocked(door)
+			if isExit then open = near and unlocked end
 			if door:GetAttribute("PlayerNear") ~= near then door:SetAttribute("PlayerNear", near) end
+			if isExit and door:GetAttribute("Unlocked") ~= unlocked then door:SetAttribute("Unlocked", unlocked) end
 			if door:GetAttribute("Open") ~= open then door:SetAttribute("Open", open) end
+		elseif not door.Parent then
+			doorSet[door], doorCenter[door] = nil, nil
 		end
 	end
 end
@@ -1741,12 +2165,20 @@ local function setPressed(m, on)
 	playAt(on and buttonDownSound or buttonUpSound, m)
 end
 
+local buttonBox = setmetatable({}, { __mode = "k" })
 local buttonParams = OverlapParams.new()
 buttonParams.FilterType = Enum.RaycastFilterType.Exclude
 local function updateButtons()
-	for _, m in ipairs(CollectionService:GetTagged("PeTIFloorButton")) do
-		if m:IsDescendantOf(workspace) then
-			local cf, size = m:GetBoundingBox()
+	for m in pairs(floorButtonSet) do
+		if not m.Parent then
+			floorButtonSet[m] = nil
+		elseif m:IsDescendantOf(workspace) then
+			local box = buttonBox[m]
+			if not box then
+				box = { m:GetBoundingBox() } -- buttons are anchored: measure once
+				buttonBox[m] = box
+			end
+			local cf, size = box[1], box[2]
 			local top = cf.Position + Vector3.new(0, size.Y / 2 + 1.2, 0)
 			buttonParams.FilterDescendantsInstances = { m }
 			local on = false
@@ -1835,8 +2267,27 @@ hookTrigger("PortalChapterEnd", false, function(pl, inst)
 	end
 end)
 
-hookTrigger("PortalChamberExit", false, function(pl)
+-- the exit door model a finish trigger belongs to (nil = a trigger on its own in a hand-made map)
+local function exitDoorOf(inst)
+	local node = inst
+	while node and node ~= workspace do
+		if node:GetAttribute("DoorType") == "exit" then return node end
+		node = node.Parent
+	end
+	return nil
+end
+
+hookTrigger("PortalChamberExit", false, function(pl, inst)
 	if pl:GetAttribute("ChamberDone") then return end -- one finish per run
+	local door = exitDoorOf(inst)
+	if door and not doorUnlocked(door) then
+		-- locked: no instant win. Keeps checking while you stand here (see the 0.5 below)
+		if os.clock() - (lastLockedToast[pl] or 0) > 6 then
+			lastLockedToast[pl] = os.clock()
+			toast(pl, "The exit is locked. Find what opens it.", "locked")
+		end
+		return
+	end
 	local started = pl:GetAttribute("ChallengeStart") or os.clock()
 	local seconds = os.clock() - started
 	local chamber = pl:GetAttribute("ChallengeChamber")
@@ -1854,7 +2305,7 @@ hookTrigger("PortalChamberExit", false, function(pl)
 		pl:SetAttribute("ChamberDone", true)
 		Push:FireClient(pl, "ChamberComplete", { editor = true, time = seconds })
 	end
-end)
+end, 0.5)
 
 -- ==========================================
 -- PLAYER LIFECYCLE
@@ -1915,7 +2366,9 @@ Players.PlayerRemoving:Connect(function(player)
 	profiles[player] = nil
 	loadedEvent[player] = nil
 	dirty[player] = nil
-	lastPos[player], inside[player], fired[player] = nil, nil, nil
+	lastPos[player], inside[player], fired[player], lastFire[player] = nil, nil, nil, nil
+	lastLockedToast[player] = nil
+	leaveSlot(player)
 	testSpawn[player], lastRig[player] = nil, nil
 	for k in pairs(lastCall) do
 		if k:sub(1, #tostring(player.UserId)) == tostring(player.UserId) then lastCall[k] = nil end
@@ -1963,7 +2416,10 @@ shared.PortalData = {
 	FinishChapter = finishChapter,
 	StartChapter = startChapter,
 	Autosave = function(player) return makeSave(player, nil, true) end,
-	LoadMap = loadMap,
+	LoadMap = loadMap, -- LoadMap(name, force, player): loads into that player's own instance
+	InstanceSlot = function(player) return slotOf[player] end,
+	InstanceFolder = function(player) return activeFolder(player) end,
+	Toast = function(player, text) toast(player, text) end,
 	PlaceCharacter = placeCharacter,
 	RegisterSaveHook = function(name, saveFn, loadFn)
 		saveHooks[name] = { save = saveFn, load = loadFn }
