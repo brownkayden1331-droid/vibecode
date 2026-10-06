@@ -34,6 +34,9 @@ local ENTER_SMOOTH = 18
 local START_REACH = 10       -- studs behind the emitter mouth where the funnel already catches you
 local MAX_FUNNEL = 800       -- studs a funnel can reach in total (through portals too)
 local MAX_PORTAL_HOPS = 8
+-- Portal 2: a funnel catches you mid-air, even when you're flung through it fast
+local CATCH_SWEEP = true      -- also check the path you flew along since last frame (no tunnelling through at speed)
+local CATCH_STOP = true       -- entering kills your momentum at once (you hang in the funnel) instead of easing in
 
 -- ==========================================
 -- SETTINGS: funnel look
@@ -1126,6 +1129,31 @@ end)
 -- ==========================================
 local inFunnel = false
 local pullAmt = 0
+local lastRootPos = nil -- where your root was last frame (for the swept catch)
+
+-- is world point `pos` inside funnel piece p? (same test as the probes below)
+local function insidePiece(p, pos)
+	local r = p.Size.Y * 0.5
+	local reach = p:GetAttribute("First") and START_REACH or 2
+	local l = p.CFrame:PointToObjectSpace(pos)
+	return l.X >= -p.Size.X * 0.5 - reach and l.X <= p.Size.X * 0.5 + 2
+		and (l.Y * l.Y + l.Z * l.Z) <= (r + 1.5) * (r + 1.5)
+end
+
+-- flew THROUGH a funnel between two frames? walk the path in small steps, return the first point inside
+local function sweepCatch(from, to)
+	local d = to - from
+	local dist = d.Magnitude
+	if dist < 1 then return nil end
+	local steps = math.min(math.ceil(dist / 1), 64)
+	for i = 1, steps do
+		local pt = from + d * (i / steps)
+		for _, p in ipairs(segments) do
+			if p.Parent and insidePiece(p, pt) then return p, pt end
+		end
+	end
+	return nil
+end
 
 local function setInFunnel(on, hum)
 	if inFunnel == on then return end
@@ -1167,9 +1195,12 @@ RunService.PreSimulation:Connect(function(dt)
 	local camera = workspace.CurrentCamera
 	if not hrp or not hum or hum.Health <= 0 or not camera then
 		pullAmt = 0
+		lastRootPos = nil
 		setInFunnel(false)
 		return
 	end
+	local prevPos = lastRootPos
+	lastRootPos = hrp.Position
 
 	scanSegments(os.clock())
 
@@ -1184,12 +1215,8 @@ RunService.PreSimulation:Connect(function(dt)
 
 	for _, p in ipairs(segments) do
 		if p.Parent then
-			local r = p.Size.Y * 0.5
-			local reach = p:GetAttribute("First") and START_REACH or 2
 			for _, probe in ipairs(probeParts) do
-				local l = p.CFrame:PointToObjectSpace(probe.Position)
-				if l.X >= -p.Size.X * 0.5 - reach and l.X <= p.Size.X * 0.5 + 2
-					and (l.Y * l.Y + l.Z * l.Z) <= (r + 1.5) * (r + 1.5) then
+				if insidePiece(p, probe.Position) then
 					seg = p
 					lp = p.CFrame:PointToObjectSpace(hrp.Position)
 					break
@@ -1199,12 +1226,28 @@ RunService.PreSimulation:Connect(function(dt)
 		end
 	end
 
+	-- flung straight through it this frame? catch you where you crossed it
+	local caught = false
+	if not seg and not inFunnel and CATCH_SWEEP and prevPos
+		-- only a real flight path: a portal hop / respawn moves you further than your speed could
+		and (hrp.Position - prevPos).Magnitude <= hrp.AssemblyLinearVelocity.Magnitude * math.max(dt, 1 / 60) * 2.5 + 4 then
+		local p, pt = sweepCatch(prevPos, hrp.Position)
+		if p then
+			seg = p
+			hrp.CFrame = hrp.CFrame - hrp.Position + pt
+			lastRootPos = pt
+			lp = p.CFrame:PointToObjectSpace(pt)
+			caught = true
+		end
+	end
+
 	if not seg then
 		pullAmt = 0
 		setInFunnel(false, hum)
 		return
 	end
 
+	local entering = not inFunnel
 	setInFunnel(true, hum)
 
 	local cf = seg.CFrame
@@ -1252,6 +1295,9 @@ RunService.PreSimulation:Connect(function(dt)
 	local target = forwardVelocity + desiredPerpendicular + gravityPerpendicular * dt
 	local current = hrp.AssemblyLinearVelocity
 	local a = 1 - math.exp(-ENTER_SMOOTH * dt)
+	if (entering or caught) and CATCH_STOP then
+		a = 1 -- caught mid-air: your fall / fling stops dead, the funnel takes over
+	end
 
 	hrp.AssemblyLinearVelocity = current + (target - current) * a
 

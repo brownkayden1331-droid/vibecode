@@ -1502,9 +1502,9 @@ local function makeRow(panel, body, i, yPos, row, w, dark)
 		})
 		fill = new("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = rgb(10), BorderSizePixel = 0, ZIndex = 4, Parent = track })
 		local mn, mx = row.min or 0, row.max or 1
-		local dv = row.key and DEFAULTS[row.key] or mn
+		local v0 = tonumber(getValue()) or (row.key and DEFAULTS[row.key]) or mn
 		marker = triangle(track, "down", 12, rgb(135))
-		marker.Position = px(math.clamp((dv - mn) / (mx - mn), 0, 1) * CFG.SLIDER_W - 6, -11)
+		marker.Position = UDim2.new(math.clamp((v0 - mn) / math.max(mx - mn, 1e-9), 0, 1), -6, 0, -11)
 		valueLabel.Position = UDim2.new(1, -22 - CFG.SLIDER_W - 14, 0, 0)
 	end
 	if row.kind == "friend" then
@@ -1556,6 +1556,10 @@ local function makeRow(panel, body, i, yPos, row, w, dark)
 			local a = math.clamp((v - mn) / math.max(mx - mn, 1e-9), 0, 1)
 			fill.Size = UDim2.fromScale(a, 1)
 			fill.BackgroundColor3 = hi and rgb(255) or rgb(10)
+			-- the arrow rides the end of the bar (Portal 2)
+			marker.Position = UDim2.new(a, -6, 0, -11)
+			local tip = marker:FindFirstChildWhichIsA("Frame")
+			if tip then tip.BackgroundColor3 = hi and rgb(255) or rgb(135) end
 			track.BackgroundColor3 = hi and rgb(150) or rgb(170)
 			valueLabel.Text = row.format and row.format(v) or ""
 		end
