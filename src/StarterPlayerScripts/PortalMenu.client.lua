@@ -736,73 +736,125 @@ local menuAction = new("BindableEvent", { Name = "MenuAction", Parent = gui })
 local menuRequest = new("BindableEvent", { Name = "MenuRequest", Parent = gui })
 
 -- ==========================================
--- TOASTS (small notifications top right; Options > Editor / Advanced Video > Toast Notifications turns them off)
+-- TOASTS (Options > Gameplay / Editor / Advanced Video > Toast Notifications turns them off)
 -- ==========================================
--- Other scripts: MenuRequest:Fire("Toast", { title = "...", text = "...", kind = "info" | "good" | "bad" | ... })
+-- Same look as the "Achievement Unlocked!" popup (PortalAchievementToast), but they slide DOWN out of the top right
+-- corner. Up to TOAST.MAX stack under each other, the rest wait their turn.
+-- Other scripts: MenuRequest:Fire("Toast", { title = "...", text = "...", kind = "info" | "good" | "bad" | "locked" | "chip", icon = "rbxassetid://..." })
 -- The server: Push "Toast" { text, title, kind }
+local TOAST = {
+	SOUND = "rbxassetid://78959439349986", -- played when one pops (blank = silent)
+	HOLD = 4.5,                            -- seconds on screen
+	WIDTH = 460, HEIGHT = 120,             -- card size at 1080p
+	MARGIN = 28,                           -- gap to the screen corner
+	GAP = 10,                              -- gap between stacked toasts
+	MAX = 3,                               -- on screen at once
+	SCALE = 1,                             -- overall size multiplier
+}
 local toast
 do
 	local toastGui = new("ScreenGui", {
-		Name = "PortalToasts", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 430,
+		Name = "PortalToasts", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 590,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = playerGui,
 	})
-	local holder = new("Frame", {
-		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -20, 0, 70), Size = UDim2.fromOffset(360, 600),
-		BackgroundTransparency = 1, Parent = toastGui,
+	local W, H, PAD = TOAST.WIDTH, TOAST.HEIGHT, 16
+	local stack = new("Frame", {
+		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -TOAST.MARGIN, 0, TOAST.MARGIN),
+		Size = UDim2.fromOffset(W, (H + TOAST.GAP) * TOAST.MAX), BackgroundTransparency = 1, Parent = toastGui,
 	})
-	new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, HorizontalAlignment = Enum.HorizontalAlignment.Right, Parent = holder })
-	local toastScale = new("UIScale", { Parent = holder })
+	new("UIListLayout", { Padding = UDim.new(0, TOAST.GAP), SortOrder = Enum.SortOrder.LayoutOrder, Parent = stack })
+	local toastScale = new("UIScale", { Parent = stack })
 	local function rescaleToasts()
 		local c = workspace.CurrentCamera
-		toastScale.Scale = math.clamp((c and c.ViewportSize.Y or 1080) / 1080, 0.6, 1.4)
+		local s = c and math.clamp(c.ViewportSize.Y / 1080, 0.7, 2) or 1
+		toastScale.Scale = s * TOAST.SCALE
+		-- clear of Roblox's own top bar buttons
+		local top = math.max(TOAST.MARGIN, GuiService.TopbarInset.Max.Y + 10)
+		stack.Position = UDim2.new(1, -TOAST.MARGIN * s, 0, top)
 	end
-	rescaleToasts()
-	task.spawn(function()
-		while true do
-			task.wait(2)
-			rescaleToasts()
-		end
-	end)
-	local STRIPE = {
-		info = Color3.fromRGB(38, 178, 214), good = Color3.fromRGB(110, 210, 90), bad = Color3.fromRGB(230, 90, 70),
-		locked = Color3.fromRGB(240, 150, 50), achievement = Color3.fromRGB(240, 205, 70), chip = Color3.fromRGB(170, 110, 255),
+	local function hookToastCamera()
+		local c = workspace.CurrentCamera
+		if c then c:GetPropertyChangedSignal("ViewportSize"):Connect(rescaleToasts) end
+		rescaleToasts()
+	end
+	hookToastCamera()
+	workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(hookToastCamera)
+	pcall(function() GuiService:GetPropertyChangedSignal("TopbarInset"):Connect(rescaleToasts) end)
+
+	local GOTHAM = "rbxasset://fonts/families/GothamSSm.json"
+	local ACCENT = {
+		info = rgb(38, 178, 214), good = rgb(110, 210, 90), bad = rgb(230, 90, 70), locked = rgb(240, 150, 50),
+		achievement = rgb(240, 205, 70), chip = rgb(170, 110, 255),
 	}
-	local order, live = 0, {}
+	local GLYPH = { info = "i", good = "+", bad = "!", locked = "!", achievement = "A", chip = "C" }
+	local queue, live, order = {}, 0, 0
 	local recent = {}
-	toast = function(text, title, kind)
+
+	local function popSound()
+		if TOAST.SOUND == "" then return end
+		local s = new("Sound", { SoundId = TOAST.SOUND, Volume = 0.6, Parent = SoundService })
+		local ui = SoundService:FindFirstChild("PortalUI")
+		if ui then s.SoundGroup = ui end
+		s:Play()
+		s.Ended:Once(function() s:Destroy() end)
+	end
+
+	local showNext
+	local function showOne(t)
+		live += 1
+		order += 1
+		-- a clipping slot in the stack; the card slides down into it from above, and back up out of it
+		local slot = new("Frame", { Size = UDim2.fromOffset(W, H), BackgroundTransparency = 1, ClipsDescendants = true, LayoutOrder = order, Parent = stack })
+		local card = new("Frame", { Position = UDim2.fromScale(0, -1), Size = UDim2.fromScale(1, 1), BackgroundColor3 = rgb(255), BorderSizePixel = 0, Parent = slot })
+		new("UIGradient", { Rotation = 90, Color = ColorSequence.new(rgb(30, 32, 35), rgb(14, 42, 64)), Parent = card })
+		new("UIStroke", { Color = rgb(70, 90, 110), Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = card })
+		local accent = ACCENT[t.kind or "info"] or ACCENT.info
+		local ICON = H - PAD * 2
+		local iconBox = new("Frame", { Position = UDim2.fromOffset(PAD, PAD), Size = UDim2.fromOffset(ICON, ICON), BackgroundColor3 = rgb(30),
+			BorderSizePixel = 0, Parent = card })
+		new("UIStroke", { Color = accent, Thickness = 2, Parent = iconBox })
+		if type(t.icon) == "string" and t.icon ~= "" then
+			new("ImageLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Image = t.icon, ScaleType = Enum.ScaleType.Fit, Parent = iconBox })
+		else
+			new("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = GLYPH[t.kind or "info"] or "i",
+				FontFace = Font.new(GOTHAM, Enum.FontWeight.Bold), TextSize = 44, TextColor3 = accent, Parent = iconBox })
+		end
+		local textX = PAD * 2 + ICON
+		local textW = W - textX - PAD
+		new("TextLabel", {
+			Position = UDim2.fromOffset(textX, PAD - 4), Size = UDim2.fromOffset(textW, 30), BackgroundTransparency = 1,
+			Text = (t.title and t.title ~= "") and t.title or "Notice", FontFace = Font.new(GOTHAM, Enum.FontWeight.Medium), TextSize = 24,
+			TextColor3 = rgb(255), TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = card,
+		})
+		local desc = new("TextLabel", {
+			Position = UDim2.fromOffset(textX, PAD + 30), Size = UDim2.fromOffset(textW, H - PAD * 2 - 30), BackgroundTransparency = 1, Text = t.text,
+			FontFace = Font.new(GOTHAM, Enum.FontWeight.Regular), TextSize = 19, TextWrapped = true, TextScaled = true,
+			TextColor3 = rgb(205), TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Parent = card,
+		})
+		new("UITextSizeConstraint", { MaxTextSize = 19, MinTextSize = 12, Parent = desc })
+		popSound()
+		TweenService:Create(card, TweenInfo.new(0.45, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { Position = UDim2.fromScale(0, 0) }):Play()
+		task.delay(0.45 + TOAST.HOLD, function()
+			local out = TweenService:Create(card, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.In), { Position = UDim2.fromScale(0, -1) })
+			out:Play()
+			out.Completed:Wait()
+			slot:Destroy()
+			live -= 1
+			showNext()
+		end)
+	end
+	showNext = function()
+		while live < TOAST.MAX and #queue > 0 do showOne(table.remove(queue, 1)) end
+	end
+
+	toast = function(text, title, kind, iconImage)
 		if settings.toasts == "Disabled" or type(text) ~= "string" or text == "" then return end
 		local key = tostring(title) .. "|" .. text
 		if recent[key] and os.clock() - recent[key] < 1.5 then return end -- the same toast twice in a row
 		recent[key] = os.clock()
-		order += 1
-		local card = new("CanvasGroup", {
-			Size = UDim2.fromOffset(360, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = Color3.fromRGB(28, 32, 34),
-			BackgroundTransparency = 0.12, BorderSizePixel = 0, GroupTransparency = 1, LayoutOrder = order, Parent = holder,
-		})
-		new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = card })
-		new("Frame", { Size = UDim2.new(0, 5, 1, 0), BackgroundColor3 = STRIPE[kind or "info"] or STRIPE.info, BorderSizePixel = 0, Parent = card })
-		new("UIPadding", { PaddingLeft = UDim.new(0, 18), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 9), PaddingBottom = UDim.new(0, 10), Parent = card })
-		new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder, Parent = card })
-		if title and title ~= "" then
-			new("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = string.upper(title), FontFace = F_TITLE, TextSize = 19,
-				TextColor3 = STRIPE[kind or "info"] or STRIPE.info, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 1, Parent = card })
-		end
-		new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = text, FontFace = F_SET,
-			TextSize = 20, TextWrapped = true, TextColor3 = Color3.fromRGB(236, 242, 240), TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 2, Parent = card })
-		table.insert(live, card)
-		while #live > 4 do
-			local old = table.remove(live, 1)
-			if old.Parent then old:Destroy() end
-		end
-		tween(card, 0.25, { GroupTransparency = 0 })
-		uiSound(CFG.SOUND_HOVER, 0.5)
-		task.delay(4, function()
-			if not card.Parent then return end
-			tween(card, 0.4, { GroupTransparency = 1 }).Completed:Wait()
-			local i = table.find(live, card)
-			if i then table.remove(live, i) end
-			card:Destroy()
-		end)
+		if #queue >= 8 then table.remove(queue, 1) end
+		table.insert(queue, { text = text, title = title, kind = kind, icon = iconImage })
+		showNext()
 	end
 end
 
@@ -2453,7 +2505,7 @@ menuRequest.Event:Connect(function(kind, arg)
 		if type(arg) == "string" and T[arg] then showTutorial(arg, T[arg], true) end
 		return
 	elseif kind == "Toast" then
-		if type(arg) == "table" then toast(arg.text, arg.title, arg.kind) else toast(tostring(arg)) end
+		if type(arg) == "table" then toast(arg.text, arg.title, arg.kind, arg.icon) else toast(tostring(arg)) end
 		return
 	elseif kind == "SetSetting" then
 		-- other scripts changing a setting (the editor's File > Editor mode): saved like any other option
@@ -3670,8 +3722,6 @@ end)
 local Push = {}
 function Push.Achievement(d)
 	P.achievements[d.id] = os.time()
-	local a = Config.Achievement(d.id)
-	if a then toast(a.name .. " - " .. a.desc, "Achievement unlocked", "achievement") end
 end
 function Push.ChapterUnlocked(d)
 	local new = (d.maxChapter or 1) > (P.maxChapter or 1)
