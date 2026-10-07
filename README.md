@@ -10,6 +10,7 @@
 | `src/ServerScriptService/RigChangerServer.server.lua` | ServerScriptService › Script `RigChangerServer` |
 | `src/ServerScriptService/TestElementsServer.server.lua` | ServerScriptService › Script `TestElementsServer` |
 | `src/StarterPlayerScripts/TestElementsClient.client.lua` | StarterPlayerScripts › LocalScript `TestElementsClient` |
+| `src/StarterPlayerScripts/PingClient.client.lua` | StarterPlayerScripts › LocalScript `PingClient` |
 | `src/ServerStorage/ChamberStudioTools.lua` | ServerStorage › ModuleScript `ChamberStudioTools` (Studio only) |
 
 ## Editor modes and tabs
@@ -83,6 +84,12 @@ Intermediate / Advanced: **Tile color › Custom colour…** (and the Light's co
   T.New()      -- a fresh workbench
   ```
   Set Studio's move snap to 10 (one cell). Panel settings live on the cells as `Face_<side>`, `Color_<side>`, `Texture_<side>`; items have `Kind`, `Side`, `Rot`, `Options` (JSON), `LinksTo` (Ids, comma separated). Nothing from the game's assets is copied out.
+
+## Old chambers
+Chambers saved or published before exits needed a button carry no `fmt`. When one is loaded (editor, Workshop, Studio import) and nothing is wired to its exit, the exit gets **Open without a button**, so it plays like it used to. New chambers are saved with `fmt = 3`. Drafts are no longer dropped from your profile just because they're old.
+
+## Pings (PingClient)
+`src/StarterPlayerScripts/PingClient.client.lua`: pings only work while you're playing / testing a chamber together with your co-op partner (same `InstanceSlot`, not in a menu, not building in the editor). Pings from players outside your chamber are ignored, and leaving the chamber clears them. `PING_ONLY_EDITOR_TESTS = true` at the top limits them to co-op editor playtests.
 
 ## Exit door
 The exit is **locked** until something opens it: connect a button/pedestal/laser catcher/gate to it, open it with a chip, or right-click it › **Open without a button**. Standing at a locked exit does nothing. Publishing a chamber nobody can finish is refused.

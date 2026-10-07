@@ -195,7 +195,8 @@ end
 function T.Read(wb)
 	wb = wb or workspace:FindFirstChild(WORKBENCH)
 	assert(wb, "No workspace." .. WORKBENCH .. " - run T.Import() or T.New() first.")
-	local data = { air = {}, faces = {}, colors = {}, textures = {}, ents = {}, links = {}, chips = {}, coop = wb:GetAttribute("Coop") == true }
+	local data = { v = 2, fmt = Config.CHAMBER_FORMAT, air = {}, faces = {}, colors = {}, textures = {}, ents = {}, links = {}, chips = {},
+		coop = wb:GetAttribute("Coop") == true }
 	local air = {}
 	for _, p in ipairs(wb.Cells:GetChildren()) do
 		if p:IsA("BasePart") then

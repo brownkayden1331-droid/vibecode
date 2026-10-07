@@ -137,7 +137,8 @@ local function reconcile(p)
 	end
 	local drafts = {}
 	for _, d in ipairs(p.drafts or {}) do
-		if type(d) == "table" and d.id and type(d.data) == "table" and d.data.v == 2 then table.insert(drafts, d) end
+		-- (any chamber with a room: older drafts are upgraded when they're opened)
+		if type(d) == "table" and d.id and type(d.data) == "table" and type(d.data.air) == "table" then table.insert(drafts, d) end
 	end
 	p.drafts = drafts
 	p.equipped.blue = p.equipped.blue or {}
@@ -617,8 +618,10 @@ end
 -- validates a chamber coming from a client (and keeps the item ids so connections survive)
 local function cleanMap(data)
 	if type(data) ~= "table" then return nil, "Bad data." end
+	data = Config.UpgradeChamber(table.clone(data)) -- older chambers: exits nothing opens keep opening by themselves
 	local L = Config.EDITOR_LIMITS
-	local out = { v = 2, air = {}, faces = {}, colors = {}, textures = {}, ents = {}, links = {}, chips = {}, coop = data.coop == true }
+	local out = { v = 2, fmt = Config.CHAMBER_FORMAT, air = {}, faces = {}, colors = {}, textures = {}, ents = {}, links = {}, chips = {},
+		coop = data.coop == true }
 	if type(data.air) ~= "table" or #data.air > L.cells then return nil, "That chamber is too big." end
 	local air = {}
 	for _, c in ipairs(data.air) do

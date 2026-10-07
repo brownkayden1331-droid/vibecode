@@ -358,6 +358,35 @@ function C.ExitFree(e)
 	return e[1] == "exit" and C.Options(e).free == true
 end
 
+-- ==========================================
+-- OLD CHAMBERS
+-- ==========================================
+-- data.fmt: 3 = made after exits became locked until something opens them. Chambers saved / published before that
+-- (no fmt) opened their exit by themselves, so when nothing is wired to the exit they get "Open without a button"
+-- and play exactly like they used to. Runs on the server (cleanMap) and in the editor (loading a chamber).
+C.CHAMBER_FORMAT = 3
+function C.UpgradeChamber(data)
+	if type(data) ~= "table" then return data, false end
+	if (tonumber(data.fmt) or 0) >= C.CHAMBER_FORMAT then return data, false end
+	local changed = false
+	if type(data.ents) == "table" and not C.ExitCanOpen(data) then
+		data.ents = table.clone(data.ents) -- (don't change the caller's copy)
+		for i, e in ipairs(data.ents) do
+			if type(e) == "table" and e[1] == "exit" then
+				local o = type(e[10]) == "table" and table.clone(e[10]) or {}
+				o.free = true
+				local ne = table.clone(e)
+				for k = 7, 9 do if ne[k] == nil then ne[k] = false end end -- (no holes before the options)
+				ne[10] = o
+				data.ents[i] = ne
+				changed = true
+			end
+		end
+	end
+	data.fmt = C.CHAMBER_FORMAT
+	return data, changed
+end
+
 -- sets an attribute on an item and every model inside it (the scripts running the test elements look at the inner model)
 function C.SetAll(root, name, value)
 	root:SetAttribute(name, value)
@@ -2979,7 +3008,7 @@ function C.DefaultChamber()
 		end
 	end
 	-- a button wired to the exit: the exit stays locked until something opens it
-	return { v = 2, air = air, faces = {}, colors = {}, textures = {}, chips = {}, ents = {
+	return { v = 2, fmt = C.CHAMBER_FORMAT, air = air, faces = {}, colors = {}, textures = {}, chips = {}, ents = {
 		{ "entry", -3, 0, 0, 2, 0, false, "entry000", false, { label = "entry" } },
 		{ "exit", 3, 0, 0, 1, 0, false, "exit0000", false, { label = "exit" } },
 		{ "button", 0, 0, 0, 4, 0, false, "button01", false, { label = "button1" } },

@@ -876,7 +876,7 @@ end
 -- CHAMBER DATA
 -- ==========================================
 local function serialize()
-	local data = { v = 2, air = {}, faces = {}, colors = {}, textures = {}, ents = {}, links = {}, chips = {}, coop = E.coop }
+	local data = { v = 2, fmt = Config.CHAMBER_FORMAT, air = {}, faces = {}, colors = {}, textures = {}, ents = {}, links = {}, chips = {}, coop = E.coop }
 	for k in pairs(E.air) do
 		local x, y, z = parse(k)
 		table.insert(data.air, { x, y, z })
@@ -3471,6 +3471,14 @@ local function frameCamera()
 end
 
 loadData = function(data)
+	-- a chamber from before exits needed a button: if nothing opens its exit, it opens by itself like it used to
+	local upgraded
+	data, upgraded = Config.UpgradeChamber(table.clone(data))
+	if upgraded then
+		task.defer(function()
+			flash("Older chamber: its exit opens by itself like before. Right-click the exit to make it need a button.")
+		end)
+	end
 	E.air, E.faces, E.colors, E.ents, E.links = {}, {}, {}, {}, {}
 	E.textures, E.chips = {}, {}
 	for k, v in pairs(type(data.textures) == "table" and data.textures or {}) do

@@ -5,6 +5,8 @@
 -- Hold F = radial menu. Point at a slot = arrow snaps to it, between slots = arrow follows the mouse.
 --          Release F to send. Scroll = emote page, right click = cancel
 -- Each player can have several pings up at once (PingModule.MaxPingsPerPlayer)
+-- Pings only work while you're playing a co-op chamber with your partner (see canPing below): not in the menus,
+-- the lobby, single player or while building in the editor. Pings from anyone outside your chamber are ignored.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -43,6 +45,33 @@ local TWEEN_POP = TweenInfo.new(0.14, Enum.EasingStyle.Back, Enum.EasingDirectio
 local TWEEN_OPEN = TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local currentScale = 1 -- screen-height scale (720p = 1), updated every frame
+
+---------------------------------------------------------------------
+-- When pings work: only while testing / playing a chamber in co-op
+---------------------------------------------------------------------
+local PING_ONLY_EDITOR_TESTS = false -- true = only in co-op editor playtests (not Workshop / campaign co-op chambers)
+
+-- someone else in my chamber (PortalServer puts a co-op pair in the same InstanceSlot)
+local function sameChamber(other)
+	if other == LocalPlayer then return true end
+	local mine = LocalPlayer:GetAttribute("InstanceSlot")
+	return mine ~= nil and other:GetAttribute("InstanceSlot") == mine
+end
+
+local function hasPartner()
+	for _, pl in ipairs(Players:GetPlayers()) do
+		if pl ~= LocalPlayer and sameChamber(pl) then return true end
+	end
+	return false
+end
+
+local function canPing()
+	if LocalPlayer:GetAttribute("InMenu") then return false end
+	local inEditor = LocalPlayer:GetAttribute("InEditor")
+	if inEditor and not LocalPlayer:GetAttribute("EditorPlaytest") then return false end -- building, not testing
+	if PING_ONLY_EDITOR_TESTS and not inEditor then return false end
+	return hasPartner()
+end
 
 ---------------------------------------------------------------------
 -- Helpers
@@ -526,9 +555,9 @@ local function showHint()
 end
 
 local function checkMultiplayer()
-	if hintShown or #Players:GetPlayers() < 2 then return end
+	if hintShown or not canPing() then return end
 	task.delay(HintCfg.ShowDelay, function()
-		if #Players:GetPlayers() >= 2 then showHint() end
+		if canPing() then showHint() end
 	end)
 end
 
@@ -674,7 +703,7 @@ local function sendPing(key, ctx)
 		Target = ctx.Target,
 	}
 	spawnPing(LocalPlayer, data)
-	if #Players:GetPlayers() > 1 then
+	if hasPartner() then
 		PingEvent:FireServer(data)
 	end
 end
@@ -870,7 +899,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if input.KeyCode ~= PingModule.Key and input.KeyCode ~= PingModule.GamepadKey then return end
 	if isKeyDown then return end
 	if os.clock() - lastPingTime < PingModule.Cooldown then return end
-	if not PingModule.AllowSinglePlayerPings and #Players:GetPlayers() <= 1 then return end
+	if not canPing() then return end
 
 	isKeyDown = true
 	pressedKey = input.KeyCode
@@ -904,11 +933,26 @@ end)
 
 PingEvent.OnClientEvent:Connect(function(sender, data)
 	if typeof(sender) == "Instance" and sender:IsA("Player") then
+		-- only your co-op partner's pings (and death icons), and only while you're playing together
+		if sender ~= LocalPlayer and not (sameChamber(sender) and canPing()) then return end
 		spawnPing(sender, data)
 	end
 end)
 
 Players.PlayerAdded:Connect(checkMultiplayer)
+-- pinging turns on / off as you start / leave a co-op chamber: show the hint then, close the menu and clear pings when it ends
+local function pingStateChanged()
+	if canPing() then
+		checkMultiplayer()
+	else
+		isKeyDown = false
+		closeMenu()
+		for id in pairs(activePings) do removePing(id) end
+	end
+end
+for _, attr in ipairs({ "InMenu", "InEditor", "EditorPlaytest", "InstanceSlot" }) do
+	LocalPlayer:GetAttributeChangedSignal(attr):Connect(pingStateChanged)
+end
 Players.PlayerRemoving:Connect(function(player)
 	removeAllFrom(player.UserId)
 end)
