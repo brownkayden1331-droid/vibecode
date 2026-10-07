@@ -2892,6 +2892,14 @@ do
 				local KIND_COL = { keyword = "#8E44AD", action = "#1F6FD0", event = "#C26A00", item = "#2E8B3A", variable = "#0E8A92",
 					compare = "#5A5F66", value = "#B5522B" }
 				local showSuggest
+				-- Up / Down pick a suggestion (the highlighted one), Tab or a click takes it
+				local selIdx, sugButtons = 1, {}
+				local arrowing, lastCursor = false, -1
+				local function highlightSel()
+					for i, b in ipairs(sugButtons) do
+						if b.Parent then b.BackgroundColor3 = i == selIdx and C.CTX_HI or C.CTX_BG end
+					end
+				end
 				local function accept(i)
 					local sg = sugg[i]
 					if not sg then return false end
@@ -2914,12 +2922,15 @@ do
 						if c:IsA("GuiObject") then c:Destroy() end
 					end
 					table.clear(sugg)
+					table.clear(sugButtons)
+					selIdx = 1
 					local cur = box.CursorPosition
+					if not arrowing then lastCursor = cur end
 					if not box:IsFocused() or cur < 1 then pop.Visible = false return end
 					local before = box.Text:sub(1, cur - 1)
 					local lineText = before:match("([^\n]*)$") or ""
 					local _, nl = before:gsub("\n", "")
-					hintBar.Text = Config.ChipHintFor(lineText) or "Type a line. Tab or click takes a suggestion. Help > Wiki explains everything."
+					hintBar.Text = Config.ChipHintFor(lineText) or "Type a line. Up / Down pick a suggestion, Tab or a click takes it. Help > Wiki explains everything."
 					local list = Config.ChipSuggest(lineText, Config.LabelKinds(E.ents), Config.ChipVariables((Config.ParseChip(box.Text))))
 					for i = 1, math.min(#list, 7) do
 						local sg = list[i]
@@ -2930,6 +2941,7 @@ do
 								sg[1]:gsub("<", "&lt;"):gsub(">", "&gt;"), sg[2]),
 							TextXAlignment = Enum.TextXAlignment.Left, Parent = pop })
 						b.MouseButton1Down:Connect(function() accept(i) end)
+						sugButtons[i] = b
 					end
 					if #sugg == 0 then pop.Visible = false return end
 					local w = TS:GetTextSize(lineText, 19, Enum.Font.Code, Vector2.new(10000, 10000)).X
@@ -2937,10 +2949,39 @@ do
 					pop.Visible = true
 				end
 				local tabConn = UserInputService.InputBegan:Connect(function(input)
-					if input.KeyCode == Enum.KeyCode.Tab and box:IsFocused() and pop.Visible then accept(1) end
+					if not (box:IsFocused() and pop.Visible) then return end
+					if input.KeyCode == Enum.KeyCode.Tab then
+						accept(selIdx)
+					elseif input.KeyCode == Enum.KeyCode.Up or input.KeyCode == Enum.KeyCode.Down then
+						-- move the highlight instead of the text cursor (the box moves its cursor too: put it back)
+						local keep = lastCursor
+						arrowing = true
+						local n = #sugg
+						if n > 0 then
+							selIdx = ((selIdx - 1 + (input.KeyCode == Enum.KeyCode.Down and 1 or -1)) % n) + 1
+							highlightSel()
+						end
+						local function restore()
+							if keep > 0 and box.CursorPosition ~= keep then
+								busy = true
+								box.CursorPosition = keep
+								busy = false
+							end
+						end
+						task.defer(function()
+							restore()
+							RunService.Heartbeat:Wait()
+							restore()
+							arrowing = false
+						end)
+					end
 				end)
 				box.Destroying:Connect(function() tabConn:Disconnect() end)
-				box:GetPropertyChangedSignal("CursorPosition"):Connect(function() if not busy then showSuggest() end end)
+				box:GetPropertyChangedSignal("CursorPosition"):Connect(function()
+					if busy or arrowing then return end
+					lastCursor = box.CursorPosition
+					showSuggest()
+				end)
 				box.Focused:Connect(showSuggest)
 
 				box:GetPropertyChangedSignal("Text"):Connect(function()
@@ -2952,7 +2993,7 @@ do
 						box.Text = box.Text:gsub("\t", "")
 						box.CursorPosition = tabAt
 						busy = false
-						if accept(1) then return end
+						if accept(selIdx) then return end
 					end
 					local n = select(2, box.Text:gsub("\n", ""))
 					local cursor = box.CursorPosition

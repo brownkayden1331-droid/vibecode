@@ -2980,7 +2980,7 @@ Drag one onto any surface. Right-click it for <b>Size</b>; in Advanced mode also
 	{ "Chips", [[
 <i>Advanced mode.</i> Chips are little programs that run in your chamber. Open the <b>My Chips</b> tab and press + NEW CHIP.
 Build them from <b>BLOCKS</b> (pick everything from menus) or type them as <b>LINES</b>. Both are the same program; switch whenever you like.
-In LINES, words are coloured, typos are fixed when you press Enter, suggestions pop up as you type (<b>Tab</b> takes the top one) and the bar at the bottom shows what the line expects.
+In LINES, words are coloured, typos are fixed when you press Enter, suggestions pop up as you type (<b>Up / Down</b> pick one, <b>Tab</b> takes it) and the bar at the bottom shows what the line expects.
 Items are called by their <b>label</b> (right-click an item to see or change it). <b>TO MY CHIPS</b> saves a chip so you can use it in any chamber.]] },
 	{ "Chips: reference", [[
 <b>Events</b> (start a rule; the lines under it run when it happens)
