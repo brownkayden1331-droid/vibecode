@@ -13,6 +13,8 @@
 | `src/StarterPlayerScripts/PingClient.client.lua` | StarterPlayerScripts › LocalScript `PingClient` |
 | `src/ServerScriptService/PingServer.server.lua` | ServerScriptService › Script `PingServer` |
 | `src/ServerScriptService/ChamberBotServer.server.lua` | ServerScriptService › Script `ChamberBotServer` |
+| `src/ServerScriptService/ChamberPiecesServer.server.lua` | ServerScriptService › Script `ChamberPiecesServer` |
+| `src/StarterPlayerScripts/ChamberPiecesClient.client.lua` | StarterPlayerScripts › LocalScript `ChamberPiecesClient` |
 | `src/ServerStorage/ChamberStudioTools.lua` | ServerStorage › ModuleScript `ChamberStudioTools` (Studio only) |
 
 ## Editor modes and tabs
@@ -93,6 +95,12 @@ Chambers saved or published before exits needed a button carry no `fmt`. When on
 ## Co-op: invites, quick match, runs
 - **Workshop co-op chambers** (Co-op › Workshop co-op chambers, or Community): picking one asks how to play it: **with your partner** (if you have one), **Invite a friend** (they're invited straight into that chamber), **Quick match** (pairs you with someone who wants the same chamber, or anyone), or **Play alone**.
 - **Normal co-op mode**: after you pair up (invite or quick match) you both **vote**: *Built-in chambers* (the co-op courses in `Config.COURSES`) or *Custom chambers* (the top `Config.COOP_RUN_MAX` rated Workshop co-op chambers), and *Normal* or *Speedrun*. Same pick wins, different picks are a coin flip. Then you play the whole list: a chamber is done when **both** of you reach the exit. Speedrun runs one clock over the whole list (HUD at the top, splits per chamber, personal best per list kept in your profile). Co-op › *Pick what to play (vote)* or *Play again* on the results starts another run.
+
+## Moving pieces, crushers, sound blocks (ChamberPiecesServer + ChamberPiecesClient)
+- **Moving Panel**, **Arm Panel** (`PortalAssets…Panel_Interior`) and **Arm Panel 2** (`Panel_Interior2`): the tile becomes a socket; the panel (`PanelTile`, portalable unless you untick it) comes out when it's on. Right-click › *When it's on*: **Extend** (straight out 1–3 tiles), **Door** (swings open on its bottom edge), **Bounce** (flips up and flings players / cubes; unconnected bounce panels go every 3 s). The arm models are bent procedurally: the deepest bone (`arm_192_tip` / `5`) follows the panel, the bones above take a growing share of the move. If an arm sits the wrong way in the socket, set `PanelNormal` (Vector3, model space: the way the panel faces) and/or `PanelOffset` (studs) on the model in PortalAssets.
+- **Crusher** (`PortalAssets…Crusher`, or a built-in plate): *Sensor* crushes whoever walks in front of it, *Button* crushes when its inputs turn on (*Stay down while powered* holds it). Reach 1–4 tiles. Anyone caught dies, cubes get squashed. States `CRUSH` → `Holdcrush` → `Crushback` (attribute `CrushState`); Animation objects named **Holdcrush**, **CRUSH**, **Crushback** inside the Crusher model (or `PortalAssets.Animations.Crusher`) are played on clients, otherwise the model follows the plate.
+- **Note Block** (Intermediate): plays its sound at the block (heard up to 50 studs) each time it's switched on or `play`ed, pitch ±24 semitones. **Music Block**: the chamber's music while it's on.
+- **Custom audio**: File › *Chamber audio…* keeps audio ids with names (saved with the chamber, max 24). Use them in Note / Music Blocks (Sound › pick or *Type an audio id…*) and in chips (`music BossTheme`, `sound 1234567`). Chips can `play` note / music blocks, crushers and panels.
 
 ## NPCs that play your chamber (ChamberBotServer)
 `src/ServerScriptService/ChamberBotServer.server.lua`. Every editor playtest is recorded (where you walk, the portals you shoot, when you carry a cube). **File › NPC demo**:

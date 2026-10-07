@@ -140,6 +140,8 @@ local PALETTE_ORDER = {
 	"gel_blue", "gel_orange", "gel_white", "gel_water",
 	-- invisible blocks (Intermediate / Advanced editor modes only, see ENTITY_TYPES tier)
 	"trigger", "delay", "block", "light", "killzone", "pushzone",
+	-- moving pieces, crushers, sound blocks
+	"movingtile", "panelarm", "panelarm2", "crusher", "noteblock", "musicblock",
 }
 local GEL_KINDS = { gel_blue = true, gel_orange = true, gel_white = true, gel_water = true, propulsion = true, repulsion = true }
 
@@ -894,6 +896,7 @@ local function serialize()
 	end
 	for _, l in ipairs(E.links) do table.insert(data.links, { l[1], l[2] }) end
 	if E.demo then data.demo = E.demo end -- the NPC demo (File > NPC demo)
+	if E.audio and #E.audio > 0 then data.audio = E.audio end -- File > Chamber audio
 	return data
 end
 
@@ -2412,7 +2415,7 @@ do
 		return sc
 	end
 
-	Dlg.makeDialog, Dlg.dialogButton = makeDialog, dialogButton -- (Export / Import, further down)
+	Dlg.makeDialog, Dlg.dialogButton, Dlg.dialogBox = makeDialog, dialogButton, dialogBox -- (Export / Import, audio, further down)
 
 	Dlg.publish = function()
 		local d = makeDialog("Publish To Workshop", 160)
@@ -2937,6 +2940,11 @@ do
 					tinyButton(row, x + w - 40, y, 36, "▾", function()
 						local list = {}
 						if a.op == "music" then table.insert(list, { text = "stop", icon = "radio", checked = a.text == "stop", fn = function() a.text = "stop" render() end }) end
+						-- the chamber's own audio ids (File > Chamber audio)
+						for _, au in ipairs(E.audio or {}) do
+							table.insert(list, { text = au.n .. "  (" .. au.id .. ")", icon = "radio", checked = a.text == au.n, fn = function() a.text = au.n render() end })
+						end
+						if #list > 0 then list[#list].sep = true end
 						for _, n in ipairs(names) do
 							table.insert(list, { text = n, icon = "radio", checked = a.text == n, fn = function() a.text = n render() end })
 						end
@@ -3491,6 +3499,10 @@ loadData = function(data)
 	end
 	E.coop = data.coop == true
 	E.demo = (type(data.demo) == "table" and type(data.demo.tracks) == "table" and #data.demo.tracks > 0) and data.demo or nil
+	E.audio = {}
+	for _, au in ipairs(type(data.audio) == "table" and data.audio or {}) do
+		if type(au) == "table" and type(au.n) == "string" and tonumber(au.id) then table.insert(E.audio, { n = au.n, id = math.floor(tonumber(au.id)) }) end
+	end
 	for _, c in ipairs(data.air or {}) do E.air[key(c[1], c[2], c[3])] = true end
 	for k, v in pairs(data.faces or {}) do if v == 0 or v == 2 or v == 3 then E.faces[k] = v end end
 	for k, v in pairs(type(data.colors) == "table" and data.colors or {}) do
@@ -3902,6 +3914,93 @@ toggleGameView = function()
 	sfx("Click")
 end
 
+-- ----- audio: the chamber's own audio ids (File > Chamber audio), used by music / sound chips and sound blocks -----
+-- a menu to pick a sound: the chamber's audio, the game's sounds (PortalAssets.Sounds / OST), or type an id
+function X.audioMenu(kind, current, set)
+	local list = {}
+	for _, au in ipairs(E.audio or {}) do
+		local v = tostring(au.id)
+		table.insert(list, { text = au.n .. "  (" .. v .. ")", icon = "radio", checked = current == v, fn = function() set(v) end })
+	end
+	if #list > 0 then list[#list].sep = true end
+	local names = Config.ChipSoundNames(kind == "music" and "music" or "sound")
+	for i, n in ipairs(names) do
+		if i > 25 then break end
+		table.insert(list, { text = n, icon = "radio", checked = current == n, fn = function() set(n) end })
+	end
+	if #names > 0 then list[#list].sep = true end
+	table.insert(list, { text = "Type an audio id...", icon = "glyph", glyph = "✎", fn = function()
+		X.askAudio(function(name, id)
+			set(tostring(id))
+			if name ~= "" then X.addAudio(name, id) end
+		end)
+	end })
+	table.insert(list, { text = "Chamber audio...", fn = function() X.audioDialog() end })
+	return list
+end
+
+function X.addAudio(name, id)
+	E.audio = E.audio or {}
+	for _, au in ipairs(E.audio) do
+		if au.id == id then au.n = name return end
+	end
+	if #E.audio >= (Config.AUDIO_MAX or 24) then flash("That's the most audio ids a chamber can have.") return end
+	table.insert(E.audio, { n = name, id = id })
+	E.dirty, E.stale = true, true
+	E.rev += 1
+end
+
+-- name + id boxes; calls done(name, id)
+function X.askAudio(done)
+	local d = Dlg.makeDialog("Add Audio", 230)
+	local nameBox = Dlg.dialogBox(d, 44, "", "Name (what chips call it, e.g. BossTheme)")
+	local idBox = Dlg.dialogBox(d, 96, "", "Audio asset id (Creator Hub > your audio > Copy Asset ID)")
+	local note = new("TextLabel", { Position = px(20, 142), Size = px(520, 22), BackgroundTransparency = 1, Text = "Audio must be public or yours / your group's to play.",
+		FontFace = FONT.UI_REG, TextSize = 14, TextColor3 = rgb(90), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = d })
+	Dlg.dialogButton(d, 20, 176, "ADD", function()
+		local id = tonumber((idBox.Text:match("(%d+)")))
+		local name = (nameBox.Text:gsub("[^%w_ ]", "")):sub(1, 30)
+		if not id then note.Text = "That isn't an audio id (a number)." note.TextColor3 = rgb(200, 50, 50) sfx("Error") return end
+		closeDialog()
+		done(name ~= "" and name or ("Audio " .. id), id)
+		sfx("Click")
+	end, true)
+	Dlg.dialogButton(d, 196, 176, "CANCEL", closeDialog)
+end
+
+-- File > Chamber audio: the list, add / remove
+function X.audioDialog()
+	local d = Dlg.makeDialog("Chamber Audio", 420)
+	local sc = new("ScrollingFrame", { Position = px(20, 40), Size = px(520, 290), BackgroundColor3 = rgb(250), BorderSizePixel = 0, ScrollBarThickness = 8,
+		AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = px(0, 0), ZIndex = 32, Parent = d })
+	new("UIListLayout", { Parent = sc })
+	for i, au in ipairs(E.audio or {}) do
+		local row = new("Frame", { Size = px(500, 36), BackgroundTransparency = 1, ZIndex = 33, Parent = sc })
+		new("TextLabel", { Position = px(8, 0), Size = px(400, 36), BackgroundTransparency = 1, Text = au.n .. "   ·   " .. au.id, FontFace = FONT.UI_REG, TextSize = 18,
+			TextColor3 = rgb(30), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 33, Parent = row })
+		local del = new("TextButton", { Position = px(420, 4), Size = px(70, 28), BackgroundColor3 = rgb(200, 206, 203), BorderSizePixel = 0, Text = "REMOVE",
+			FontFace = FONT.P2, TextSize = 14, TextColor3 = rgb(20), ZIndex = 33, Parent = row })
+		onClick(del, function()
+			table.remove(E.audio, i)
+			E.dirty, E.stale = true, true
+			E.rev += 1
+			sfx("Click")
+			X.audioDialog()
+		end)
+	end
+	if #(E.audio or {}) == 0 then
+		new("TextLabel", { Size = px(500, 60), BackgroundTransparency = 1, Text = "No audio yet. Add an audio id, then use its name in music / sound chips, Note Blocks and Music Blocks.",
+			FontFace = FONT.UI_REG, TextSize = 16, TextWrapped = true, TextColor3 = rgb(110), ZIndex = 33, Parent = sc })
+	end
+	Dlg.dialogButton(d, 20, 344, "ADD AUDIO", function()
+		X.askAudio(function(name, id)
+			X.addAudio(name, id)
+			X.audioDialog()
+		end)
+	end, true)
+	Dlg.dialogButton(d, 196, 344, "CLOSE", closeDialog)
+end
+
 -- ----- NPC demo (ChamberBotServer): your recorded runs, played back by Chell / Atlas / P-body NPCs -----
 function X.demoMenu()
 	local tracks = E.demo and E.demo.tracks or {}
@@ -3988,6 +4087,7 @@ local MENUS = {
 			end },
 			{ text = "Rebuild...", shortcut = "F9", fn = function() task.spawn(buildAndPlay) end },
 			{ text = "NPC demo", sub = function() return X.demoMenu() end },
+			{ text = "Chamber audio...", fn = function() X.audioDialog() end },
 			{ text = "Publish...", disabled = g, fn = Dlg.publish, sep = true },
 		}
 		if g then
@@ -4650,6 +4750,46 @@ itemMenu = function(x, y)
 			e[10] = next(opt) and opt or nil
 			rebuildEnts()
 		end })
+	end
+	local ed = Config.ENTITY_TYPES[e[1]]
+	if ed and ed.piece then
+		table.insert(items, { text = "When it's on", sub = function()
+			return radios(index, "mode", Config.PIECE_MODES, table.find(Config.PIECE_MODES, o.mode) and o.mode or "Extend", Config.PIECE_LABELS)
+		end })
+		if (o.mode or "Extend") == "Extend" then
+			table.insert(items, { text = "How far out", sub = function()
+				return radios(index, "dist", { 1, 2, 3 }, tonumber(o.dist) or 1, { [1] = "1 tile", [2] = "2 tiles", [3] = "3 tiles" })
+			end })
+		end
+		table.insert(items, { text = "Portalable", icon = "check", checked = o.np ~= true, sep = true,
+			fn = function() setOption(index, "np", (o.np ~= true) or nil) end })
+	elseif e[1] == "crusher" then
+		table.insert(items, { text = "Crushes when", sub = function()
+			return radios(index, "mode", Config.CRUSHER_MODES, table.find(Config.CRUSHER_MODES, o.mode) and o.mode or "Sensor", Config.CRUSHER_LABELS)
+		end })
+		table.insert(items, { text = "Reach", sub = function()
+			return radios(index, "reach", { 1, 2, 3, 4 }, tonumber(o.reach) or 1, { [1] = "1 tile", [2] = "2 tiles", [3] = "3 tiles", [4] = "4 tiles" })
+		end })
+		table.insert(items, { text = "Stay down while powered", icon = "check", checked = o.hold == true, sep = true,
+			fn = function() setOption(index, "hold", (o.hold ~= true) or nil) end })
+	elseif ed and ed.sound then
+		local kindName = e[1] == "noteblock" and "sound" or "music"
+		table.insert(items, { text = (e[1] == "noteblock" and "Sound: " or "Song: ") .. (o.audio or (e[1] == "noteblock" and "(default ping)" or "(none)")),
+			sub = function()
+				return X.audioMenu(kindName, o.audio, function(v) setOption(index, "audio", v) end)
+			end })
+		if e[1] == "noteblock" then
+			table.insert(items, { text = "Pitch", sub = function()
+				local list, labels = {}, {}
+				for _, st in ipairs({ -12, -7, -5, -3, 0, 2, 4, 5, 7, 9, 11, 12 }) do
+					table.insert(list, st)
+					labels[st] = (st > 0 and "+" or "") .. st .. " semitones" .. (st == 0 and " (as recorded)" or "")
+				end
+				return radios(index, "pitch", list, tonumber(o.pitch) or 0, labels)
+			end })
+		end
+		table.insert(items, { text = "Hidden in game", icon = "check", checked = o.hide == true, sep = true,
+			fn = function() setOption(index, "hide", (o.hide ~= true) or nil) end })
 	end
 	if e[1] == "exit" then
 		-- the exit is locked until something opens it; this lets it open by itself (no button needed)

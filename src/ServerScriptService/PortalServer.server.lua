@@ -660,6 +660,16 @@ local function cleanMap(data)
 			end
 		end
 	end
+	-- the chamber's own audio ids (File > Chamber audio): { n = name, id = number }
+	if type(data.audio) == "table" then
+		out.audio = {}
+		for i, a in ipairs(data.audio) do
+			if i > (Config.AUDIO_MAX or 24) then break end
+			if type(a) == "table" and type(a.n) == "string" and #a.n >= 1 and #a.n <= 30 and tonumber(a.id) then
+				table.insert(out.audio, { n = a.n:gsub("[%c]", ""), id = math.floor(tonumber(a.id)) })
+			end
+		end
+	end
 	-- NPC demo (ChamberBotServer): recorded runs, numbers only
 	if type(data.demo) == "table" and type(data.demo.tracks) == "table" then
 		local tracks = {}
@@ -736,6 +746,14 @@ local function cleanMap(data)
 					if type(oo.free) == "boolean" and e[1] == "exit" then opt.free = oo.free end
 					if oo.link == "Power" or oo.link == "Reverse" then opt.link = oo.link end
 					if tonumber(oo.speed) then opt.speed = math.clamp(math.floor(tonumber(oo.speed)), 2, 40) end
+					-- moving panels / crushers / sound blocks
+					if tonumber(oo.dist) then opt.dist = math.clamp(math.floor(tonumber(oo.dist)), 1, 3) end
+					if tonumber(oo.reach) then opt.reach = math.clamp(math.floor(tonumber(oo.reach)), 1, 4) end
+					if type(oo.hold) == "boolean" then opt.hold = oo.hold end
+					if type(oo.np) == "boolean" then opt.np = oo.np end
+					if tonumber(oo.pitch) then opt.pitch = math.clamp(math.floor(tonumber(oo.pitch)), -24, 24) end
+					if tonumber(oo.volume) then opt.volume = math.clamp(tonumber(oo.volume), 0.1, 3) end
+					if type(oo.audio) == "string" and #oo.audio <= 80 and not oo.audio:find("[%c]") then opt.audio = oo.audio end
 					if tonumber(oo.linger) and table.find(Config.LINGER_TIMES, tonumber(oo.linger)) then opt.linger = tonumber(oo.linger) end
 					if tonumber(oo.power) and table.find(Config.PUSH_STRENGTHS, tonumber(oo.power)) then opt.power = tonumber(oo.power) end
 					if Config.ValidLabel(oo.label) then opt.label = oo.label end
@@ -1141,6 +1159,9 @@ runChips = function(root, data, byId, slot)
 			fxCount += 1
 			if fxCount > 20 then return end -- a chip spamming effects every frame gets cut off
 			local text = a.text and a.text:gsub("{([%a_][%w_]*)}", function(n) return tostring(value(n)) end) or nil
+			if (a.op == "music" or a.op == "sound") and text and text:lower() ~= "stop" then
+				text = Config.AudioValue(text, data.audio) or text -- a name from File > Chamber audio = its id
+			end
 			for _, pl in ipairs(slotPlayers(slot)) do
 				Push:FireClient(pl, "ChipFX", { op = a.op, text = text, n = a.n })
 			end
@@ -1163,6 +1184,8 @@ runChips = function(root, data, byId, slot)
 			Config.SetAll(t, "Speed", math.clamp(tonumber(a.n) or 13, 2, 40))
 		elseif a.op == "launch" and kind == "faithplate" then
 			launch(t)
+		elseif a.op == "play" and Config.PLAYABLE[kind] then
+			t:SetAttribute("Trigger", os.clock()) -- ChamberPiecesServer: note / music / crush / bounce
 		elseif a.op == "color" and kind == "light" then
 			local c = Config.LightColor(a.text)
 			local glow = t:FindFirstChild("Glow", true)

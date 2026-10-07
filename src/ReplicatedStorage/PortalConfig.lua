@@ -243,7 +243,33 @@ C.ENTITY_TYPES = {
 	light        = { name = "Light",                  mount = "any",     hidden = true, tier = 2 },
 	killzone     = { name = "Death Zone",             mount = "any",     hidden = true, zone = true, tier = 3 },
 	pushzone     = { name = "Push Zone",              mount = "any",     hidden = true, zone = true, tier = 3 },
+	-- moving chamber pieces (ChamberPiecesServer moves them, ChamberPiecesClient animates the arms)
+	--   socket: the tile becomes a hole with a little alcove behind it; the item brings its own panel ("PanelTile")
+	movingtile   = { name = "Moving Panel",           mount = "any",     piece = true, socket = true },
+	panelarm     = { name = "Arm Panel",              mount = "any",     piece = true, socket = true, asset = "Panel_Interior" },
+	panelarm2    = { name = "Arm Panel 2",            mount = "any",     piece = true, socket = true, asset = "Panel_Interior2" },
+	crusher      = { name = "Crusher",                mount = "any",     asset = "Crusher" },
+	-- sound blocks (Intermediate): a note at the block (heard up to 50 studs away) / music for the chamber's players
+	noteblock    = { name = "Note Block",             mount = "any",     tier = 2, sound = true },
+	musicblock   = { name = "Music Block",            mount = "any",     tier = 2, sound = true },
 }
+-- moving panels: what a button / chip / "Start enabled" does
+C.PIECE_MODES = { "Extend", "Door", "Bounce" }
+C.PIECE_LABELS = { Extend = "Extend (comes straight out)", Door = "Door (swings open)", Bounce = "Bounce (flings cubes / players)" }
+C.CRUSHER_MODES = { "Sensor", "Button" }
+C.CRUSHER_LABELS = { Sensor = "Sensor (crushes whoever walks under it)", Button = "Button / connection / chip" }
+C.AUDIO_MAX = 24 -- custom audio ids per chamber (File > Chamber audio)
+-- a sound / song value: an asset id ("123456", "rbxassetid://123456") or a name in PortalAssets.Sounds / OST /
+-- the chamber's own audio list. Returns "rbxassetid://<id>" or the name.
+function C.AudioValue(v, library)
+	if type(v) ~= "string" then return nil end
+	local id = v:match("^%s*(%d+)%s*$") or v:match("rbxassetid://(%d+)")
+	if id then return id end
+	for _, a in ipairs(type(library) == "table" and library or {}) do
+		if type(a) == "table" and type(a.n) == "string" and a.n:lower() == v:lower() and tonumber(a.id) then return tostring(a.id) end
+	end
+	return v
+end
 -- editor colours of the invisible blocks
 C.HIDDEN_COLORS = {
 	trigger = Color3.fromRGB(80, 200, 120), delay = Color3.fromRGB(150, 110, 230), block = Color3.fromRGB(120, 170, 230),
@@ -300,9 +326,13 @@ end
 -- Linked items: what they do while their inputs are off (the item menu's "Start enabled" overrides this).
 -- Inputs on flips it. Funnels flip direction instead, droppers drop a new cube.
 C.LINK_DEFAULT_ON = { fizzler = true, laserfield = true, laser = false, lightbridge = false, exit = false,
-	tbeam = false, block = true, light = false, killzone = true, pushzone = false, faithplate = false }
+	tbeam = false, block = true, light = false, killzone = true, pushzone = false, faithplate = false,
+	movingtile = false, panelarm = false, panelarm2 = false, crusher = false, noteblock = false, musicblock = false }
 C.SWITCHABLE = { fizzler = true, laserfield = true, laser = true, lightbridge = true, exit = true,
-	tbeam = true, block = true, light = true, killzone = true, pushzone = true, faithplate = true }
+	tbeam = true, block = true, light = true, killzone = true, pushzone = true, faithplate = true,
+	movingtile = true, panelarm = true, panelarm2 = true, crusher = true, noteblock = true, musicblock = true }
+-- things a chip can "play": a note, the music, a crush, a bounce / door / extend
+C.PLAYABLE = { noteblock = true, musicblock = true, crusher = true, movingtile = true, panelarm = true, panelarm2 = true }
 C.BUTTON_TYPES = { "Weighted", "Cube", "Sphere" } -- floor button: anything / cubes only / spheres only
 C.DROPPER_CUBES = { "Normal", "Companion", "Edgeless", "Reflection" } -- used when PortalAssets.Cubes is empty
 
@@ -450,6 +480,7 @@ function C.MakesHole(kind)
 	local def = C.ENTITY_TYPES[kind]
 	if not def then return false end
 	if (def.recess or 0) > 0 then return true end
+	if def.socket then return true end
 	return def.flush == true and C.FindAsset ~= nil and C.FindAsset(def.asset) ~= nil
 end
 -- tiles that are replaced by a door alcove / faith plate pit
@@ -1235,6 +1266,28 @@ local function debugBuild(kind, template, v)
 		kind, template:GetFullName(), cCount, tCount, bones, table.concat(hidden, ", "), table.concat(notArch, ", ")))
 end
 
+-- an arm's bone chain, top bone first: the deepest bone and every bone above it (ChamberPiecesClient bends it)
+function C.BoneChain(model)
+	local best, bestDepth
+	for _, b in ipairs(model:GetDescendants()) do
+		if b:IsA("Bone") and not b:FindFirstChildWhichIsA("Bone") then
+			local d, p = 0, b
+			while p.Parent and p.Parent:IsA("Bone") do
+				d += 1
+				p = p.Parent
+			end
+			if not bestDepth or d > bestDepth then best, bestDepth = b, d end
+		end
+	end
+	if not best then return nil end
+	local chain, p = { best }, best
+	while p.Parent and p.Parent:IsA("Bone") do
+		p = p.Parent
+		table.insert(chain, 1, p)
+	end
+	return chain
+end
+
 function C.BuildEntity(e, origin, opts)
 	opts = opts or {}
 	local kind = e[1]
@@ -1262,7 +1315,31 @@ function C.BuildEntity(e, origin, opts)
 
 	local front = -1 -- local Z of the item's front face
 	local height
-	if template then
+	if template and def.socket then
+		-- arm panels (Panel_Interior / Panel_Interior2): the arm sits in the socket behind the tile, its panel end (the
+		-- deepest bone) in the tile, pointing out of the surface. Tune with attributes on the model in PortalAssets:
+		--   PanelNormal (Vector3, model space) = the way the panel faces, PanelOffset (studs) = push it in / out
+		local v = cloneTemplate(template)
+		local chain = C.BoneChain(v)
+		local piv = v:GetPivot()
+		local outDir = piv.LookVector
+		local pn = template:GetAttribute("PanelNormal")
+		if typeof(pn) == "Vector3" and pn.Magnitude > 0 then
+			outDir = piv:VectorToWorldSpace(pn.Unit)
+		elseif chain and #chain >= 2 and (chain[#chain].WorldPosition - chain[1].WorldPosition).Magnitude > 0.05 then
+			outDir = (chain[#chain].WorldPosition - chain[1].WorldPosition).Unit
+		end
+		local want = cf.LookVector
+		local spin = CFrame.fromAxisAngle(want, math.rad(effRot(e) * 90))
+		v:PivotTo(CFrame.new(piv.Position) * spin * shortestArc(outDir, want) * piv.Rotation)
+		local anchorPos = chain and chain[#chain].WorldPosition or v:GetPivot().Position
+		local off = tonumber(template:GetAttribute("PanelOffset")) or 0
+		v:PivotTo(v:GetPivot() + (cf.Position + want * off - anchorPos))
+		eachPart(v, function(p) p.CanCollide = false end) -- the tile collides, the arm is only looks
+		v.Parent = m
+		if v:IsA("Model") then element = v end
+		front = -0.5
+	elseif template then
 		local v, fz, spanEnd, h = placeTemplate(template, def, cf, e, opts)
 		front, height = fz, h
 		v.Parent = m
@@ -1280,7 +1357,24 @@ function C.BuildEntity(e, origin, opts)
 			p.Parent = m
 			return p
 		end
-		if def.hidden then
+		if def.socket then
+			-- (the moving panel itself is added below)
+			front = -0.5
+		elseif kind == "crusher" then
+			part({ Name = "Plate", Size = Vector3.new(C.CELL - 0.4, C.CELL - 0.4, 1.5), CFrame = cf * CFrame.new(0, 0, -0.75),
+				Color = Color3.fromRGB(58, 62, 66), Material = Enum.Material.DiamondPlate })
+			for i = -1, 1 do
+				part({ Name = "Tooth", Size = Vector3.new(C.CELL - 1.4, 0.5, 0.5), CFrame = cf * CFrame.new(0, i * 3, -1.7),
+					Color = Color3.fromRGB(150, 40, 35), Material = Enum.Material.Metal })
+			end
+			front = -2
+		elseif def.sound then
+			part({ Name = "Body", Size = Vector3.new(3, 3, 1), CFrame = cf * CFrame.new(0, 0, -0.5), Color = Color3.fromRGB(46, 50, 52) })
+			part({ Name = "Cone", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.3, 2.2, 2.2),
+				CFrame = cf * CFrame.new(0, 0, -1.1) * CFrame.Angles(0, math.rad(90), 0),
+				Color = kind == "noteblock" and Color3.fromRGB(90, 210, 130) or Color3.fromRGB(170, 110, 240), Material = Enum.Material.Neon })
+			front = -1.2
+		elseif def.hidden then
 			-- invisible blocks: see-through in the editor (the plate on the surface is what you click), gone in game
 			local col = C.HIDDEN_COLORS[kind] or Color3.fromRGB(200, 200, 200)
 			local center = origin + Vector3.new(e[2], e[3], e[4]) * C.CELL
@@ -1508,6 +1602,59 @@ function C.BuildEntity(e, origin, opts)
 	elseif kind == "gate" then
 		m:SetAttribute("GateMode", C.GateMode(e))
 		m:SetAttribute("Pressed", false)
+	end
+	-- moving panels: the panel tile that moves (and collides / takes portals), plus the alcove behind it
+	if def.socket then
+		local D = 6
+		local function shell(name, offset, size)
+			local p = panelPart(false, 1)
+			p.Name, p.Anchored, p.Size, p.CFrame = name, true, size, cf * CFrame.new(offset)
+			p:SetAttribute("Portalable", false)
+			p.Parent = m
+		end
+		shell("SocketBack", Vector3.new(0, 0, D + 0.5), Vector3.new(C.CELL, C.CELL, 1))
+		shell("SocketLeft", Vector3.new(-(C.CELL / 2 + 0.5), 0, D / 2), Vector3.new(1, C.CELL, D))
+		shell("SocketRight", Vector3.new(C.CELL / 2 + 0.5, 0, D / 2), Vector3.new(1, C.CELL, D))
+		shell("SocketTop", Vector3.new(0, C.CELL / 2 + 0.5, D / 2), Vector3.new(C.CELL + 2, 1, D))
+		shell("SocketBottom", Vector3.new(0, -(C.CELL / 2 + 0.5), D / 2), Vector3.new(C.CELL + 2, 1, D))
+		local s = o.np and C.SURFACES.black or C.SURFACES.white
+		local tile = Instance.new("Part")
+		tile.Name = "PanelTile"
+		tile.Anchored = true
+		tile.Size = Vector3.new(C.CELL, C.CELL, 1)
+		tile.CFrame = cf * CFrame.new(0, 0, 0.5) -- front face flush with the wall
+		tile.Color, tile.Material = s.color, s.material
+		tile.TopSurface, tile.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+		tile:SetAttribute("Portalable", not o.np)
+		tile.Parent = m
+		m:SetAttribute("PieceMode", table.find(C.PIECE_MODES, o.mode) and o.mode or "Extend")
+		m:SetAttribute("Dist", math.clamp(tonumber(o.dist) or 1, 1, 3))
+		m:AddTag("PeTIPiece")
+	elseif kind == "crusher" then
+		local plate = m:FindFirstChild("Plate")
+		if not plate then
+			-- a Crusher model from PortalAssets: an invisible plate does the crushing, the model follows it / animates
+			plate = Instance.new("Part")
+			plate.Transparency = 1
+			plate.Size = Vector3.new(C.CELL - 0.4, C.CELL - 0.4, 1.5)
+			plate.CFrame = cf * CFrame.new(0, 0, -0.75)
+			plate.Anchored = true
+			plate.Parent = m
+		end
+		plate.Name = "CrushPlate"
+		plate:SetAttribute("Portalable", false)
+		m:SetAttribute("CrusherMode", table.find(C.CRUSHER_MODES, o.mode) and o.mode or "Sensor")
+		m:SetAttribute("Reach", math.clamp(tonumber(o.reach) or 1, 1, 4))
+		m:SetAttribute("Hold", o.hold == true)
+		m:AddTag("PeTIPiece")
+	elseif def.sound then
+		m:SetAttribute("AudioId", type(o.audio) == "string" and o.audio or (kind == "noteblock" and "rbxasset://sounds/electronicpingshort.wav" or nil))
+		m:SetAttribute("Pitch", math.clamp(tonumber(o.pitch) or 0, -24, 24))
+		m:SetAttribute("Volume", math.clamp(tonumber(o.volume) or 1, 0.1, 3))
+		m:AddTag("PeTIPiece")
+		if o.hide == true and not opts.editor then
+			eachPart(m, function(p) p.Transparency, p.CanCollide, p.CanQuery = 1, false, false end)
+		end
 	end
 	-- "stay on for N s after the button lets go" (any switchable item / funnel)
 	if tonumber(o.linger) and tonumber(o.linger) > 0 then m:SetAttribute("Linger", tonumber(o.linger)) end
@@ -1979,7 +2126,8 @@ end
 C.LABEL_PREFIX = { entry = "entry", exit = "exit", button = "button", pedestal = "pedestal", gate = "gate",
 	cubedropper = "dropper", laser = "laser", lasercatcher = "catcher", laserfield = "field", fizzler = "fizzler",
 	lightbridge = "bridge", tbeam = "funnel", faithplate = "plate", turret = "turret", prop = "mesh",
-	trigger = "trigger", delay = "delay", block = "wall", light = "light", killzone = "death", pushzone = "push" }
+	trigger = "trigger", delay = "delay", block = "wall", light = "light", killzone = "death", pushzone = "push",
+	movingtile = "panel", panelarm = "arm", panelarm2 = "arm", crusher = "crusher", noteblock = "note", musicblock = "music" }
 function C.ValidLabel(l)
 	return type(l) == "string" and #l >= 1 and #l <= 20 and l:match("^%a[%w_]*$") ~= nil
 end
@@ -2041,7 +2189,7 @@ C.CHIP_EVENT_LABELS = { pressed = "is pressed", released = "is released", start 
 	cond = "becomes true", call = "is called (function)" }
 C.CHIP_ACTIONS = { "open", "close", "toggle", "enable", "disable", "drop", "reverse", "wait", "say", "set", "add", "if",
 	"music", "sound", "shake", "title", "tint", "countdown", "random", "repeat", "stop",
-	"launch", "speed", "forward", "backward", "color", "calc", "call", "until" }
+	"launch", "speed", "forward", "backward", "color", "calc", "call", "until", "play" }
 -- values chips can read but not set
 C.CHIP_BUILTINS = { time = "seconds since the chamber started", players = "players in the chamber (1, or 2 in co-op)" }
 C.CHIP_CALC_OPS = { "+", "-", "*", "/", "%", "min", "max" }
@@ -2061,7 +2209,7 @@ C.CHIP_ACTION_LABELS = {
 	music = "play music", sound = "play a sound", shake = "shake the screen", title = "show a title", tint = "tint the screen",
 	countdown = "show a countdown", random = "random number", ["repeat"] = "repeat ... times", stop = "stop this rule",
 	launch = "launch a faith plate", speed = "set funnel speed", forward = "funnel forward (blue)", backward = "funnel backward (orange)",
-	color = "light colour", calc = "calculate", call = "call a function", ["until"] = "wait until",
+	color = "light colour", calc = "calculate", call = "call a function", ["until"] = "wait until", play = "play / crush / bounce",
 }
 C.CHIP_COMPARE = { "==", "!=", "<", ">", "<=", ">=" }
 -- what each line expects (the editor shows it while you type, like a code editor's parameter hints)
@@ -2096,9 +2244,10 @@ C.CHIP_HINTS = {
 	calc = "calc <variable> <a> <+ - * / % min max> <b>   e.g. calc total score * 2",
 	call = "call <name>   runs every 'when call <name>' rule, then carries on",
 	["until"] = "wait until <variable | item> <compare> <value>   pauses this rule until it's true",
+	play = "play <note block | music block | crusher | panel>   plays the note / music, crushes once, bounces / pops out once",
 }
 local CHIP_TARGET = { open = true, close = true, toggle = true, enable = true, disable = true, drop = true, reverse = true,
-	launch = true, speed = true, forward = true, backward = true, color = true }
+	launch = true, speed = true, forward = true, backward = true, color = true, play = true }
 C.CHIP_TARGET = CHIP_TARGET
 local CHIP_KEYWORDS = { ["when"] = true, ["then"] = true, ["true"] = true, ["false"] = true, start = true, every = true, pressed = true, released = true, stop = true, ["repeat"] = true, random = true,
 	["else"] = true, ["until"] = true, call = true, time = true, players = true }
@@ -2113,6 +2262,7 @@ function C.ChipTargetOk(op, kind)
 	if op == "reverse" or op == "speed" or op == "forward" or op == "backward" then return kind == "tbeam" end
 	if op == "launch" then return kind == "faithplate" end
 	if op == "color" then return kind == "light" end
+	if op == "play" then return C.PLAYABLE[kind] == true end
 	if CHIP_TARGET[op] then return C.SWITCHABLE[kind] == true end
 	return false
 end
@@ -2881,6 +3031,8 @@ Chips can also <font color="#1F6FD0">enable</font> / <font color="#1F6FD0">disab
 <b>Excursion funnels</b>: <font color="#1F6FD0">reverse</font> funnel1, <font color="#1F6FD0">forward</font> / <font color="#1F6FD0">backward</font> funnel1, <font color="#1F6FD0">speed</font> funnel1 25   (2 - 40 studs/s)
 <b>Cube droppers</b>: <font color="#1F6FD0">drop</font> dropper1
 <b>Lights</b>: <font color="#1F6FD0">color</font> light1 red   (white warm blue orange red green, or #ff8800)
+<b>Note / music blocks, crushers, moving panels</b>: <font color="#1F6FD0">play</font> note1 (plays the note), <font color="#1F6FD0">play</font> crusher1 (crushes once), <font color="#1F6FD0">play</font> panel1 (bounces / pops out once)
+<b>Your own audio</b>: File > Chamber audio adds audio ids with a name: <font color="#1F6FD0">music</font> BossTheme, <font color="#1F6FD0">sound</font> Beep (or just the id: <font color="#1F6FD0">sound</font> 1234567)
 <b>In an if / when / wait until</b> an item counts as 1 when it's pressed / on / open.]] },
 	{ "Chips: effects", [[
 Effects are seen and heard <b>only by the players in this chamber</b>: you, or you and your co-op partner. They never change the puzzle.
