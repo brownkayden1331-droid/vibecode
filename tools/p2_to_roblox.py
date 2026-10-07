@@ -101,7 +101,10 @@ def kv_get(block, key, default=None):
 PLANE_RE = re.compile(r"\(\s*([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s*\)")
 
 def vmf_plane(s):
-    pts = [tuple(float(c) for c in m) for m in PLANE_RE.findall(s)]
+    try:
+        pts = [tuple(float(c) for c in m) for m in PLANE_RE.findall(s)]
+    except ValueError:
+        return None
     if len(pts) != 3:
         return None
     p1, p2, p3 = pts
@@ -357,6 +360,11 @@ class Writer:
                        % (cls, self._r(), escape(name), props))
     def close(self):
         self.out.write("</Item>\n")
+    def mark(self):
+        return self.out.tell()
+    def rollback(self, pos):
+        self.out.seek(pos)
+        self.out.truncate()
 
 def cf_xml(pos, right, up, back):
     return ('<CoordinateFrame name="CFrame"><X>%.4f</X><Y>%.4f</Y><Z>%.4f</Z>'
@@ -630,6 +638,16 @@ def convert_entities(w, entities, xf, mats, opts, stats):
                 if t:
                     templated.add(t.lower())
     for idx, ent in enumerate(entities):
+        mark = w.mark()
+        try:
+            _convert_entity(w, idx, ent, entities, xf, mats, opts, stats, io_records, templated, names, launch_targets)
+        except Exception as err:
+            w.rollback(mark)
+            stats["errors"].append("entity %s (%s): %s" % (ent.get("classname", "?"), ent.get("targetname", ""), err))
+    return io_records
+
+def _convert_entity(w, idx, ent, entities, xf, mats, opts, stats, io_records, templated, names, launch_targets):
+    if True:
         cls = ent.get("classname", "")
         rule = mats.entities.get(cls)
         name = ent.get("targetname", "")
@@ -642,9 +660,9 @@ def convert_entities(w, entities, xf, mats, opts, stats):
                 rec["cube"] = CUBE_TYPES.get(ent.get("cubetype", "0"), "Normal")
             io_records[eid] = rec
         if rule and rule.get("skip"):
-            continue
+            return
         if name.lower() in templated and cls in ("prop_weighted_cube", "prop_monster_box"):
-            continue  # (spawned by its env_entity_maker / point_template when the map asks for it)
+            return  # (spawned by its env_entity_maker / point_template when the map asks for it)
         if cls in TRIGGER_CLASSES:
             bb = entity_bounds(ent, xf)
             if bb:
@@ -653,11 +671,11 @@ def convert_entities(w, entities, xf, mats, opts, stats):
                     tags.append("PortalChamberExit")  # the end of the map: PortalServer finishes the chamber
                 part_xml(w, "Part", cls, bb[0], IDENT, tuple(max(c, 0.5) for c in bb[1]), {"base": "SmoothPlastic"}, tags, False, 1.0)
                 stats["triggers"] += 1
-            continue
+            return
         if cls == "env_entity_maker" or (cls == "info_target" and name.lower() in launch_targets):
             part_xml(w, "Part", cls, origin_of(ent, xf), angles_axes(ent, xf), (1.0, 1.0, 1.0), {"base": "SmoothPlastic"},
                      ["P2Point", "P2Ent:" + eid], False, 1.0)
-            continue
+            return
         if rule and "spawn" in rule:
             spawn = rule["spawn"]
             if spawn == "coop":
@@ -684,7 +702,7 @@ def convert_entities(w, entities, xf, mats, opts, stats):
             if rule.get("brush"):
                 bb = entity_bounds(ent, xf)
                 if not bb:
-                    continue
+                    return
                 pos, size = bb
                 axes = IDENT
                 size = tuple(max(s, 0.2) for s in size)
@@ -718,7 +736,6 @@ def convert_entities(w, entities, xf, mats, opts, stats):
             stats["lights"] += 1
         elif cls.startswith("prop_") or cls.startswith("npc_"):
             stats["props_skipped"][cls] = stats["props_skipped"].get(cls, 0) + 1
-    return io_records
 
 SETUP_SCRIPT = r'''-- P2MapSetup (made by p2_to_roblox.py)
 -- Runs when this map is in Workspace (a server Script).
@@ -1127,25 +1144,68 @@ end)
 '''
 
 # ---------------------------------------------------------------------------------------------------------------
-def main():
+def find_materials():
+    # next to the .exe / .py first (so you can edit it), then the copy packed inside the .exe
+    places = [os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) else HERE,
+              os.getcwd(), getattr(sys, "_MEIPASS", HERE), HERE]
+    for d in places:
+        p = os.path.join(d, "p2_materials.json")
+        if os.path.isfile(p):
+            return p
+    return os.path.join(HERE, "p2_materials.json")
+
+def ask_for_input():
+    """double-clicked with no map: pick one in a file window (or type / drag it in)"""
+    print("Portal 2 map -> Roblox converter")
+    print("Pick the .vmf or .bsp in the window (you can also drag a map onto the .exe).")
+    path = ""
+    try:
+        import tkinter
+        from tkinter import filedialog
+        root = tkinter.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        path = filedialog.askopenfilename(title="Portal 2 map (.vmf / .bsp)",
+                                          filetypes=[("Portal 2 maps", "*.vmf *.bsp"), ("All files", "*.*")])
+        root.destroy()
+    except Exception:
+        path = ""
+    if not path:
+        path = input("Map file (drag it into this window, then press Enter): ").strip().strip('"').strip("'")
+    if not path:
+        raise SystemExit("no map picked")
+    name = input("Model name (Enter = the map's name, CoopHub for the co-op hub): ").strip()
+    args = [path]
+    if name:
+        args += ["--name", name]
+    return args
+
+def main(argv=None):
     ap = argparse.ArgumentParser(description="Portal 2 map (.vmf / .bsp) -> Roblox model (.rbxmx)")
     ap.add_argument("input", help="the .vmf (best) or .bsp")
     ap.add_argument("-o", "--output", help="the .rbxmx to write (default: next to the input)")
     ap.add_argument("--name", help="the model's name (CoopHub for the co-op hub)")
     ap.add_argument("--scale", type=float, default=1 / 14.7, help="studs per Hammer unit (default 1/14.7)")
-    ap.add_argument("--materials", default=os.path.join(HERE, "p2_materials.json"), help="texture -> MaterialVariant rules")
+    ap.add_argument("--materials", default=find_materials(), help="texture -> MaterialVariant rules")
     ap.add_argument("--thickness", type=float, default=0.2, help="studs: thickness of odd shapes' faces")
     ap.add_argument("--no-face-plates", dest="face_plates", action="store_false", help="one material per box, no side plates")
     ap.add_argument("--no-lights", dest="lights", action="store_false", help="leave the lights out")
     ap.add_argument("--no-center", dest="center", action="store_false", help="keep Hammer's coordinates (else the map is centred, floor at Y = 0)")
-    opts = ap.parse_args()
+    opts = ap.parse_args(argv)
+    if not os.path.isfile(opts.input):
+        raise SystemExit("can't find the map: %s" % opts.input)
+    if not os.path.isfile(opts.materials):
+        raise SystemExit("can't find %s (keep p2_materials.json next to the converter)" % opts.materials)
 
     ext = os.path.splitext(opts.input)[1].lower()
     print("Reading", opts.input)
     if ext == ".vmf":
         brushes, entities = read_vmf(opts.input)
     elif ext == ".bsp":
-        brushes, entities = read_bsp(opts.input)
+        try:
+            brushes, entities = read_bsp(opts.input)
+        except (struct.error, IndexError, ValueError, lzma.LZMAError) as err:
+            raise SystemExit("the .bsp looks cut off or damaged (%s). Decompile it to a .vmf with BSPSource and convert that." % err)
     else:
         raise SystemExit("give it a .vmf or a .bsp")
 
@@ -1158,7 +1218,12 @@ def main():
     xf = Xform(opts.scale)
 
     if opts.center and keep:
-        pts = [xf.p(v) for b in keep[:4000] for f in brush_faces(b) for v in f[2]]
+        pts = []
+        for b in keep[:4000]:
+            try:
+                pts.extend(xf.p(v) for f in brush_faces(b) for v in f[2])
+            except Exception:
+                pass
         if pts:
             lo = tuple(min(p[i] for p in pts) for i in range(3))
             hi = tuple(max(p[i] for p in pts) for i in range(3))
@@ -1167,7 +1232,7 @@ def main():
     name = opts.name or os.path.splitext(os.path.basename(opts.input))[0]
     out_path = opts.output or os.path.splitext(opts.input)[0] + ".rbxmx"
     stats = {"boxes": 0, "wedges": 0, "shapes": 0, "triangles": 0, "plates": 0, "skipped": 0, "degenerate": 0,
-             "spawns": 0, "placeholders": 0, "lights": 0, "triggers": 0, "props_skipped": {}}
+             "spawns": 0, "placeholders": 0, "lights": 0, "triggers": 0, "props_skipped": {}, "errors": []}
 
     w = Writer()
     w.out.write('<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
@@ -1175,7 +1240,14 @@ def main():
     w.open("Model", name)
     w.open("Folder", "Geometry")
     for i, b in enumerate(keep):
-        convert_brush(w, b, xf, mats, opts, stats)
+        mark = w.mark()
+        try:
+            convert_brush(w, b, xf, mats, opts, stats)
+        except Exception as err:
+            w.rollback(mark)
+            stats["degenerate"] += 1
+            if len(stats["errors"]) < 200:
+                stats["errors"].append("brush %d (%s): %s" % (i, b.entity, err))
         if i and i % 2000 == 0:
             print("  %d / %d brushes" % (i, len(keep)))
     w.close()
@@ -1206,6 +1278,38 @@ def main():
         print("  textures with no rule in %s (grey for now - add rules for them):" % os.path.basename(opts.materials))
         for tex, n in sorted(mats.unmatched.items(), key=lambda kv: -kv[1])[:25]:
             print("    %-50s %d brush sides" % (tex, n))
+    if stats["errors"]:
+        print("  %d things couldn't be converted and were left out:" % len(stats["errors"]))
+        for e in stats["errors"][:15]:
+            print("    " + e)
+
+def run():
+    interactive = len(sys.argv) <= 1 or getattr(sys, "frozen", False)
+    code = 0
+    try:
+        main(ask_for_input() if len(sys.argv) <= 1 else None)
+    except SystemExit as e:
+        if e.code not in (None, 0):
+            print("\nStopped:", e.code)
+            code = 1
+    except BaseException:
+        import traceback
+        code = 1
+        text = traceback.format_exc()
+        print("\nThe converter crashed:\n" + text)
+        try:
+            log = os.path.join(os.getcwd(), "p2_to_roblox_crash.txt")
+            with open(log, "w", encoding="utf-8") as f:
+                f.write(text)
+            print("Saved this to", log, "- send it to whoever fixes the tool.")
+        except OSError:
+            pass
+    if interactive:
+        try:
+            input("\nPress Enter to close...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+    sys.exit(code)
 
 if __name__ == "__main__":
-    main()
+    run()

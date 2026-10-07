@@ -1,0 +1,46 @@
+# Builds tools/p2_to_roblox.exe (the Portal 2 map converter for Windows) whenever the converter changes,
+# and commits the .exe back to the branch so it can be downloaded straight from the repo.
+name: Build P2 converter EXE
+
+on:
+  push:
+    paths:
+      - "tools/p2_to_roblox.py"
+      - "tools/p2_materials.json"
+      - ".github/workflows/build-p2-converter.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller==6.11.1
+          pyinstaller --onefile --console --name p2_to_roblox --add-data "tools/p2_materials.json;." tools/p2_to_roblox.py
+      - name: Smoke test
+        shell: cmd
+        run: |
+          dist\p2_to_roblox.exe tools\sample\sample_room.vmf -o sample_out.rbxmx < NUL
+          if not exist sample_out.rbxmx exit /b 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p2_to_roblox
+          path: dist/p2_to_roblox.exe
+      - name: Commit the EXE
+        shell: bash
+        run: |
+          cp dist/p2_to_roblox.exe tools/p2_to_roblox.exe
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add tools/p2_to_roblox.exe
+          git commit -m "Build tools/p2_to_roblox.exe" || exit 0
+          for i in 1 2 3; do git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && break; sleep 5; done

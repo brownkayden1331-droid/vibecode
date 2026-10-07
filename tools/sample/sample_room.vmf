@@ -1,0 +1,146 @@
+versioninfo
+{
+	"editorversion" "400"
+}
+world
+{
+	"id" "1"
+	"classname" "worldspawn"
+	solid
+	{
+		"id" "2"
+		side { "id" "1" "plane" "(-256 256 0) (256 256 0) (256 -256 0)" "material" "TILE/WHITE_FLOOR_TILE002A" }
+		side { "id" "2" "plane" "(-256 -256 -16) (256 -256 -16) (256 256 -16)" "material" "TOOLS/TOOLSNODRAW" }
+		side { "id" "3" "plane" "(-256 256 0) (-256 -256 0) (-256 -256 -16)" "material" "METAL/BLACK_WALL_METAL_002C" }
+		side { "id" "4" "plane" "(256 256 -16) (256 -256 -16) (256 -256 0)" "material" "METAL/BLACK_WALL_METAL_002C" }
+		side { "id" "5" "plane" "(256 256 0) (-256 256 0) (-256 256 -16)" "material" "METAL/BLACK_WALL_METAL_002C" }
+		side { "id" "6" "plane" "(256 -256 -16) (-256 -256 -16) (-256 -256 0)" "material" "METAL/BLACK_WALL_METAL_002C" }
+	}
+	solid
+	{
+		"id" "3"
+		side { "id" "7" "plane" "(0 0 0) (128 0 0) (128 128 0)" "material" "TOOLS/TOOLSNODRAW" }
+		side { "id" "8" "plane" "(0 128 128) (0 0 128) (0 0 0)" "material" "CONCRETE/CONCRETE_MODULAR_WALL001A" }
+		side { "id" "9" "plane" "(0 0 0) (0 0 128) (128 0 0)" "material" "CONCRETE/CONCRETE_MODULAR_WALL001A" }
+		side { "id" "10" "plane" "(128 128 0) (0 128 128) (0 128 0)" "material" "CONCRETE/CONCRETE_MODULAR_WALL001A" }
+		side { "id" "11" "plane" "(0 0 128) (0 128 128) (128 128 0)" "material" "WEIRD/UNKNOWN_TEX" }
+	}
+	solid
+	{
+		"id" "4"
+		side { "id" "12" "plane" "(-100 -100 50) (-100 -50 50) (-50 -50 50)" "material" "TILE/WHITE_WALL_TILE003A" }
+		side { "id" "13" "plane" "(-100 -100 0) (-50 -100 0) (-75 -50 0)" "material" "TILE/WHITE_WALL_TILE003A" }
+		side { "id" "14" "plane" "(-100 -100 0) (-100 -100 50) (-50 -100 50)" "material" "TILE/WHITE_WALL_TILE003A" }
+		side { "id" "15" "plane" "(-50 -100 0) (-50 -100 50) (-75 -50 50)" "material" "TILE/WHITE_WALL_TILE003A" }
+		side { "id" "16" "plane" "(-75 -50 0) (-75 -50 50) (-100 -100 50)" "material" "TILE/WHITE_WALL_TILE003A" }
+	}
+}
+entity
+{
+	"classname" "info_coop_spawn"
+	"origin" "10 20 0"
+	"angles" "0 90 0"
+	"StartingTeam" "3"
+}
+entity
+{
+	"classname" "info_coop_spawn"
+	"origin" "-10 20 0"
+	"angles" "0 90 0"
+	"StartingTeam" "2"
+}
+entity
+{
+	"classname" "prop_weighted_cube"
+	"origin" "50 50 20"
+	"angles" "0 45 0"
+	"CubeType" "1"
+}
+entity
+{
+	"classname" "light"
+	"origin" "0 0 100"
+	"_light" "255 240 200 300"
+}
+entity
+{
+	"classname" "prop_static"
+	"origin" "0 0 0"
+}
+entity
+{
+	"classname" "trigger_portal_cleanser"
+	solid
+	{
+		"id" "20"
+		side { "plane" "(0 0 128) (0 32 128) (8 32 128)" "material" "TOOLS/TOOLSTRIGGER" }
+		side { "plane" "(0 32 0) (0 0 0) (8 0 0)" "material" "TOOLS/TOOLSTRIGGER" }
+		side { "plane" "(0 0 0) (0 32 0) (0 32 128)" "material" "TOOLS/TOOLSTRIGGER" }
+		side { "plane" "(8 32 0) (8 0 0) (8 0 128)" "material" "TOOLS/TOOLSTRIGGER" }
+		side { "plane" "(0 32 0) (8 32 0) (8 32 128)" "material" "TOOLS/TOOLSTRIGGER" }
+		side { "plane" "(8 0 0) (0 0 0) (0 0 128)" "material" "TOOLS/TOOLSTRIGGER" }
+	}
+}
+entity
+{
+	"classname" "prop_floor_button"
+	"targetname" "button_1"
+	"origin" "0 64 0"
+	connections
+	{
+		"OnPressed" "door_exit,Open,,0,-1"
+		"OnUnPressed" "door_exit,Close,,0,-1"
+		"OnPressed" "relay_music,Trigger,,0.5,1"
+	}
+}
+entity
+{
+	"classname" "prop_testchamber_door"
+	"targetname" "door_exit"
+	"origin" "0 200 0"
+	"angles" "0 270 0"
+}
+entity
+{
+	"classname" "logic_relay"
+	"targetname" "relay_music"
+	"spawnflags" "1"
+}
+entity
+{
+	"classname" "trigger_once"
+	"targetname" "end_trigger"
+	connections
+	{
+		"OnStartTouch" "@transition_script,RunScriptCode,TransitionFromMap(),0,1"
+	}
+	solid
+	{
+		side { "plane" "(0 0 128) (0 32 128) (32 32 128)" "material" "TOOLS/TOOLSTRIGGER" }
+		side { "plane" "(0 32 0) (0 0 0) (32 0 0)" "material" "TOOLS/TOOLSTRIGGER" }
+		side { "plane" "(0 0 0) (0 32 0) (0 32 128)" "material" "TOOLS/TOOLSTRIGGER" }
+		side { "plane" "(32 32 0) (32 0 0) (32 0 128)" "material" "TOOLS/TOOLSTRIGGER" }
+		side { "plane" "(0 32 0) (32 32 0) (32 32 128)" "material" "TOOLS/TOOLSTRIGGER" }
+		side { "plane" "(32 0 0) (0 0 0) (0 0 128)" "material" "TOOLS/TOOLSTRIGGER" }
+	}
+}
+entity
+{
+	"classname" "env_entity_maker"
+	"targetname" "cube_maker"
+	"EntityTemplate" "cube_template"
+	"origin" "0 0 300"
+}
+entity
+{
+	"classname" "point_template"
+	"targetname" "cube_template"
+	"Template01" "cube_dropper_box"
+}
+entity
+{
+	"classname" "prop_weighted_cube"
+	"targetname" "cube_dropper_box"
+	"CubeType" "1"
+	"origin" "0 0 300"
+}
