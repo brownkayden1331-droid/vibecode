@@ -98,6 +98,18 @@ Chambers saved or published before exits needed a button carry no `fmt`. When on
 - **Workshop co-op chambers** (Co-op › Workshop co-op chambers, or Community): picking one asks how to play it: **with your partner** (if you have one), **Invite a friend** (they're invited straight into that chamber), **Quick match** (pairs you with someone who wants the same chamber, or anyone), or **Play alone**.
 - **Normal co-op mode**: after you pair up (invite or quick match) you both **vote**: *Built-in chambers* (the co-op courses in `Config.COURSES`) or *Custom chambers* (the top `Config.COOP_RUN_MAX` rated Workshop co-op chambers), and *Normal* or *Speedrun*. Same pick wins, different picks are a coin flip. Then you play the whole list: a chamber is done when **both** of you reach the exit. Speedrun runs one clock over the whole list (HUD at the top, splits per chamber, personal best per list kept in your profile). Co-op › *Pick what to play (vote)* or *Play again* on the results starts another run.
 
+## Portal 2 maps -> Roblox (tools/p2_to_roblox.py)
+A Python 3 script for your PC (standard library only) that turns a Portal 2 map into a `.rbxmx` model, e.g. the co-op hub:
+```
+python tools/p2_to_roblox.py mp_coop_lobby_3.vmf -o CoopHub.rbxmx --name CoopHub
+```
+- **Input**: `.vmf` (best; get it from a `.bsp` with BSPSource) or a `.bsp` directly (experimental).
+- **Geometry**: boxes (also rotated) become Parts, right-angle ramps WedgeParts, every other shape thin wedge-pair triangles. Sides with a different texture than the rest of the box get a thin plate. Tool textures: nodraw sides aren't drawn, clips / invisible become invisible walls, triggers / skybox / hints are left out.
+- **Materials**: `tools/p2_materials.json` maps Portal 2 texture paths (regular expressions) to your MaterialService variants (White 4.5, Metal 9, DevG, bts1concrete...) and says which are portalable. The script prints every texture it had no rule for - add rules and run it again.
+- **Entities**: `info_player_start` -> PlayerSpawn, `info_coop_spawn` -> PlayerSpawnBlue (Atlas) / PlayerSpawnOrange (P-body), test elements (buttons, cubes with their type, doors, turrets, lasers, catchers, funnels, bridges, fizzlers, faith plates) -> placeholders, lights -> PointLights. Props (`prop_static` / `prop_dynamic` models) aren't converted; the script lists them.
+- **In Studio**: Insert from File, then put it in ServerStorage.PortalMaps (named CoopHub for the hub). Its `P2MapSetup` script, when the map is loaded, gives every part its MaterialVariant's BaseMaterial, adds `NoPortal` to non-portal surfaces and swaps the placeholders for your PortalAssets models. Portal surfaces need a variant whose BaseMaterial isn't one the gun blocks (use SmoothPlastic or Concrete for the White ones) - it warns you if not.
+- Options: `--scale` (default 1/14.7 studs per unit, the gun's U), `--no-center`, `--no-face-plates`, `--no-lights`, `--thickness`, `--materials`.
+
 ## Editor: connections, multi-select, doors
 - **L** (or File / Edit › *Show connections*) draws every connection as a line from the source to what it drives (arrow at the driven end, labels at both ends), through walls. Selecting an item doesn't draw them by default; turn on Options › Editor › *Show Connections Of Selected* to see the selected item(s)' connections in yellow.
 - **Several items at once**: Ctrl / Shift + click items to add or remove them; *Select all like this* (Edit menu or right-click) selects every item of that kind (all funnels...). Delete, R, item options (e.g. funnel speed) and **C** work on all of them: C then click an item connects every selected one to it. **Shift + click** while connecting keeps going, so one button can be connected to several things in a row.
