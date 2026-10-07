@@ -893,6 +893,7 @@ local function serialize()
 		table.insert(data.ents, c)
 	end
 	for _, l in ipairs(E.links) do table.insert(data.links, { l[1], l[2] }) end
+	if E.demo then data.demo = E.demo end -- the NPC demo (File > NPC demo)
 	return data
 end
 
@@ -3380,8 +3381,9 @@ local function exitPlaytest()
 	setDrone(true)
 end
 
-local function buildAndPlay()
+local function buildAndPlay(demoMode)
 	if not E.active or E.building then return end
+	E.demoMode = (demoMode == "watch" or demoMode == "with") and demoMode or nil
 	E.building = true
 	E.cancel = false
 	closeMenus()
@@ -3398,7 +3400,7 @@ local function buildAndPlay()
 	task.spawn(saveDraft, true)
 	local done, ok, err = false, nil, nil
 	task.spawn(function()
-		ok, err = netCall("EditorTest", { id = E.id, data = data })
+		ok, err = netCall("EditorTest", { id = E.id, data = data, demo = E.demoMode })
 		done = true
 	end)
 	local t0 = os.clock()
@@ -3427,7 +3429,7 @@ end
 
 local function restartLevel()
 	if not E.playtest then return end
-	local ok, err = netCall("EditorTest", { id = E.id, data = serialize() })
+	local ok, err = netCall("EditorTest", { id = E.id, data = serialize(), demo = E.demoMode })
 	if not ok then flash(err) end
 end
 
@@ -3488,6 +3490,7 @@ loadData = function(data)
 		if type(c) == "table" and type(c.src) == "string" then table.insert(E.chips, { name = tostring(c.name or "Chip"), src = c.src }) end
 	end
 	E.coop = data.coop == true
+	E.demo = (type(data.demo) == "table" and type(data.demo.tracks) == "table" and #data.demo.tracks > 0) and data.demo or nil
 	for _, c in ipairs(data.air or {}) do E.air[key(c[1], c[2], c[3])] = true end
 	for k, v in pairs(data.faces or {}) do if v == 0 or v == 2 or v == 3 then E.faces[k] = v end end
 	for k, v in pairs(type(data.colors) == "table" and data.colors or {}) do
@@ -3899,6 +3902,56 @@ toggleGameView = function()
 	sfx("Click")
 end
 
+-- ----- NPC demo (ChamberBotServer): your recorded runs, played back by Chell / Atlas / P-body NPCs -----
+function X.demoMenu()
+	local tracks = E.demo and E.demo.tracks or {}
+	local n = #tracks
+	local function partner()
+		if n == 0 then return "Chell" end
+		return n == 1 and "a partner" or "both NPCs"
+	end
+	local function keep(add)
+		task.spawn(function()
+			local ok, run = netCall("DemoTake")
+			if not ok then flash(run) sfx("Error") return end
+			-- only your own run (the first one recorded is the player who asked; co-op teams get both)
+			local new = {}
+			for _, t in ipairs(run) do table.insert(new, t) end
+			local list = add and table.clone(tracks) or {}
+			for _, t in ipairs(new) do
+				if #list < 2 then table.insert(list, t) end
+			end
+			-- colours: co-op chambers / two runs = Atlas (blue) + P-body (orange), one single player run = Chell
+			for i, t in ipairs(list) do
+				t.color = (E.coop or #list > 1) and (i == 1 and "Blue" or "Orange") or nil
+			end
+			E.demo = { tracks = list }
+			E.dirty, E.stale = true, true
+			E.rev += 1
+			local done = new[1] and new[1].done
+			flash(("Saved %d NPC run%s with the chamber.%s"):format(#list, #list == 1 and "" or "s",
+				done and "" or " (That run didn't reach the exit - the NPC will stop where you stopped.)"))
+			sfx("Click")
+		end)
+	end
+	return {
+		{ text = "Watch the NPC" .. (n > 1 and "s" or "") .. " play it", disabled = n == 0, fn = function() task.spawn(buildAndPlay, "watch") end },
+		{ text = "Play alongside the NPC (record your part)", disabled = n ~= 1, sep = true, fn = function()
+			flash("The NPC plays its part while yours is recorded. Then: NPC demo > Add my last run as the partner.")
+			task.spawn(buildAndPlay, "with")
+		end },
+		{ text = "Keep my last run as the demo", fn = function() keep(false) end },
+		{ text = "Add my last run as the partner", disabled = n ~= 1, sep = true, fn = function() keep(true) end },
+		{ text = ("Delete the demo (%d run%s)"):format(n, n == 1 and "" or "s"), disabled = n == 0, fn = function()
+			E.demo = nil
+			E.dirty, E.stale = true, true
+			E.rev += 1
+			flash("NPC demo deleted.")
+		end },
+		{ text = "How it works: you play, the NPC repeats it", disabled = true, fn = function() end },
+	}
+end
+
 local MENUS = {
 	File = function()
 		local g = E.guest
@@ -3934,6 +3987,7 @@ local MENUS = {
 				return list
 			end },
 			{ text = "Rebuild...", shortcut = "F9", fn = function() task.spawn(buildAndPlay) end },
+			{ text = "NPC demo", sub = function() return X.demoMenu() end },
 			{ text = "Publish...", disabled = g, fn = Dlg.publish, sep = true },
 		}
 		if g then
@@ -4542,6 +4596,9 @@ itemMenu = function(x, y)
 			{ Forward = "Blue (forward)", Reversed = "Orange (reversed)" })
 		end })
 		-- what a connected button does: flip it (Portal 2) or switch it on / off ("auto off" while the button is up)
+		table.insert(items, { text = "Speed", sub = function()
+			return radios(index, "speed", Config.FUNNEL_SPEEDS, tonumber(o.speed) or 13, Config.FUNNEL_SPEED_LABELS)
+		end })
 		table.insert(items, { text = "Button action", sep = true, sub = function()
 			return radios(index, "link", Config.FUNNEL_LINK_MODES, Config.FunnelLinkMode(e), Config.FUNNEL_LINK_LABELS)
 		end })

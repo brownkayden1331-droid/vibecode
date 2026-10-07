@@ -11,6 +11,8 @@
 | `src/ServerScriptService/TestElementsServer.server.lua` | ServerScriptService › Script `TestElementsServer` |
 | `src/StarterPlayerScripts/TestElementsClient.client.lua` | StarterPlayerScripts › LocalScript `TestElementsClient` |
 | `src/StarterPlayerScripts/PingClient.client.lua` | StarterPlayerScripts › LocalScript `PingClient` |
+| `src/ServerScriptService/PingServer.server.lua` | ServerScriptService › Script `PingServer` |
+| `src/ServerScriptService/ChamberBotServer.server.lua` | ServerScriptService › Script `ChamberBotServer` |
 | `src/ServerStorage/ChamberStudioTools.lua` | ServerStorage › ModuleScript `ChamberStudioTools` (Studio only) |
 
 ## Editor modes and tabs
@@ -88,8 +90,18 @@ Intermediate / Advanced: **Tile color › Custom colour…** (and the Light's co
 ## Old chambers
 Chambers saved or published before exits needed a button carry no `fmt`. When one is loaded (editor, Workshop, Studio import) and nothing is wired to its exit, the exit gets **Open without a button**, so it plays like it used to. New chambers are saved with `fmt = 3`. Drafts are no longer dropped from your profile just because they're old.
 
+## NPCs that play your chamber (ChamberBotServer)
+`src/ServerScriptService/ChamberBotServer.server.lua`. Every editor playtest is recorded (where you walk, the portals you shoot, when you carry a cube). **File › NPC demo**:
+- **Keep my last run as the demo** – saved with the chamber (`data.demo`).
+- **Watch the NPC play it** – Chell (or Atlas + P-body) replays it: walks, jumps, shoots the same portals, carries cubes onto buttons. Buttons see NPCs like players.
+- **Play alongside the NPC (record your part)** then **Add my last run as the partner** – make a co-op demo on your own: the Atlas NPC plays its half while you play P-body's; then two NPCs play it together.
+NPCs repeat a recorded run – they don't solve puzzles on their own. Rigs come from `PortalAssets.Rigs` (Chell / Atlas / PBody); without rigs a plain R15 dummy is used. Their portals go into `workspace.Portals` with the same attributes the portal gun uses (`OwnerUserId` negative, `PortalName`, `Opened`).
+
+## Funnels: speed + cubes
+Right-click a funnel › **Speed** (6–35 studs/s, saved as `speed`). Funnels now pick up loose cubes that just touch their beam – a cube resting under a funnel, dropped into it, or already there when it switches on.
+
 ## Pings (PingClient)
-`src/StarterPlayerScripts/PingClient.client.lua`: pings only work while you're playing / testing a chamber together with your co-op partner (same `InstanceSlot`, not in a menu, not building in the editor). Pings from players outside your chamber are ignored, and leaving the chamber clears them. `PING_ONLY_EDITOR_TESTS = true` at the top limits them to co-op editor playtests.
+`src/StarterPlayerScripts/PingClient.client.lua`: pings only work while you're playing / testing a chamber together with your co-op partner (same `InstanceSlot`, not in a menu, not building in the editor). Pings from players outside your chamber are ignored, and leaving the chamber clears them. PingServer only sends a ping (and the death icon) to the other player in your chamber. `PING_ONLY_EDITOR_TESTS = true` at the top limits them to co-op editor playtests.
 
 ## Exit door
 The exit is **locked** until something opens it: connect a button/pedestal/laser catcher/gate to it, open it with a chip, or right-click it › **Open without a button**. Standing at a locked exit does nothing. Publishing a chamber nobody can finish is refused.

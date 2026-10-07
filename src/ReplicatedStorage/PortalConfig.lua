@@ -276,6 +276,9 @@ C.PUSH_STRENGTHS = { 20, 40, 60, 90 } -- studs/s a push zone shoves you out of i
 C.FUNNEL_LINK_MODES = { "Reverse", "Power" }
 C.FUNNEL_LINK_LABELS = { Reverse = "Reverse it (blue <-> orange)", Power = "Turn it on / off" }
 C.LINGER_TIMES = { 0, 1, 2, 3, 5, 10 } -- "stay on after the button lets go" seconds
+-- funnel speed (studs/s, right-click > Speed). 13 is TestElementsServer's normal speed
+C.FUNNEL_SPEEDS = { 6, 9, 13, 18, 25, 35 }
+C.FUNNEL_SPEED_LABELS = { [6] = "Crawl (6)", [9] = "Slow (9)", [13] = "Normal (13)", [18] = "Fast (18)", [25] = "Very fast (25)", [35] = "Rocket (35)" }
 function C.FunnelLinkMode(e)
 	return C.Options(e).link == "Power" and "Power" or "Reverse"
 end
@@ -1469,6 +1472,7 @@ function C.BuildEntity(e, origin, opts)
 		m:SetAttribute("BaseReversed", o.mode == "Reversed")
 		C.SetAll(m, "Reversed", o.mode == "Reversed")
 		m:SetAttribute("FunnelLink", C.FunnelLinkMode(e)) -- what a connected button does: Reverse / Power
+		if tonumber(o.speed) then C.SetAll(m, "Speed", math.clamp(tonumber(o.speed), 2, 40)) end
 	elseif kind == "trigger" then
 		m:SetAttribute("TriggerMode", table.find(C.TRIGGER_MODES, o.mode) and o.mode or "Players")
 		m:SetAttribute("Pressed", false)

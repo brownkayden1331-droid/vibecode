@@ -1,6 +1,6 @@
 -- PingServer (Script, ServerScriptService)
--- Relays pings to everyone except the sender, and drops a death ping
--- for teammates when a player dies.
+-- Relays pings to your co-op partner (the other player in your chamber), and drops a death ping
+-- for them when you die. Pings only work while playing / testing a chamber together.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -12,11 +12,21 @@ local PingEvent = ReplicatedStorage:WaitForChild("PingEvent")
 local lastPing = {}
 local lastGround = {} -- [player] = last position they were standing on something
 
-local function sendToOthers(sender, data)
+-- only your co-op partner gets your pings / death icon: the players in the same chamber instance
+-- (PortalServer puts a co-op pair in the same InstanceSlot). Nobody else on the server sees them.
+local function partners(sender)
+	local slot = sender:GetAttribute("InstanceSlot")
+	local list = {}
+	if slot == nil then return list end
 	for _, other in ipairs(Players:GetPlayers()) do
-		if other ~= sender then
-			PingEvent:FireClient(other, sender, data)
-		end
+		if other ~= sender and other:GetAttribute("InstanceSlot") == slot then table.insert(list, other) end
+	end
+	return list
+end
+
+local function sendToOthers(sender, data)
+	for _, other in ipairs(partners(sender)) do
+		PingEvent:FireClient(other, sender, data)
 	end
 end
 
@@ -25,6 +35,10 @@ end
 ---------------------------------------------------------------------
 PingEvent.OnServerEvent:Connect(function(player, data)
 	if typeof(data) ~= "table" then return end
+	-- pings only while playing / testing a chamber together (not while building in the editor; PingClient also
+	-- stops them in the menus)
+	if player:GetAttribute("InEditor") and not player:GetAttribute("EditorPlaytest") then return end
+	if #partners(player) == 0 then return end
 	if typeof(data.Position) ~= "Vector3" or typeof(data.Normal) ~= "Vector3" then return end
 	if typeof(data.Type) ~= "string" or not PingModule.Decals[data.Type] then return end
 	if data.Type == "Death" then return end -- only the server sends death pings

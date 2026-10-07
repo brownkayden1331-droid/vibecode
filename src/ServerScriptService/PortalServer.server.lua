@@ -660,6 +660,38 @@ local function cleanMap(data)
 			end
 		end
 	end
+	-- NPC demo (ChamberBotServer): recorded runs, numbers only
+	if type(data.demo) == "table" and type(data.demo.tracks) == "table" then
+		local tracks = {}
+		for i, t in ipairs(data.demo.tracks) do
+			if i > 2 then break end
+			if type(t) == "table" and type(t.frames) == "table" then
+				local frames, portals = {}, {}
+				for j, f in ipairs(t.frames) do
+					if j > 2400 then break end
+					if type(f) == "table" and tonumber(f[1]) and tonumber(f[2]) and tonumber(f[3]) then
+						table.insert(frames, { tonumber(f[1]), tonumber(f[2]), tonumber(f[3]), tonumber(f[4]) or 0, math.floor(tonumber(f[5]) or 0) % 2 })
+					end
+				end
+				for j, ev in ipairs(type(t.portals) == "table" and t.portals or {}) do
+					if j > 300 then break end
+					if type(ev) == "table" and tonumber(ev[1]) and (ev[2] == "Blue" or ev[2] == "Orange") then
+						local clean = { tonumber(ev[1]), ev[2] }
+						if tonumber(ev[3]) then
+							for k = 3, 13 do clean[k] = tonumber(ev[k]) or 0 end
+						end
+						table.insert(portals, clean)
+					end
+				end
+				if #frames > 1 then
+					table.insert(tracks, { color = (t.color == "Blue" or t.color == "Orange") and t.color or nil,
+						t0 = math.clamp(tonumber(t.t0) or 0, 0, 30), dt = math.clamp(tonumber(t.dt) or 0.1, 0.05, 1),
+						done = t.done == true, frames = frames, portals = portals })
+				end
+			end
+		end
+		if #tracks > 0 then out.demo = { tracks = tracks } end
+	end
 	-- chips (My Chips tab): kept as their source text, run by wireLinks
 	if type(data.chips) == "table" then
 		for i, c in ipairs(data.chips) do
@@ -703,6 +735,7 @@ local function cleanMap(data)
 					if oo.vis == "Antline" or oo.vis == "Signage" or oo.vis == "None" then opt.vis = oo.vis end
 					if type(oo.free) == "boolean" and e[1] == "exit" then opt.free = oo.free end
 					if oo.link == "Power" or oo.link == "Reverse" then opt.link = oo.link end
+					if tonumber(oo.speed) then opt.speed = math.clamp(math.floor(tonumber(oo.speed)), 2, 40) end
 					if tonumber(oo.linger) and table.find(Config.LINGER_TIMES, tonumber(oo.linger)) then opt.linger = tonumber(oo.linger) end
 					if tonumber(oo.power) and table.find(Config.PUSH_STRENGTHS, tonumber(oo.power)) then opt.power = tonumber(oo.power) end
 					if Config.ValidLabel(oo.label) then opt.label = oo.label end
@@ -2167,7 +2200,26 @@ function Actions.EditorTest(player, arg)
 	root = charRoot(player)
 	if root then root.Anchored = false end
 	placeCharacter(player, cf)
+	-- NPCs (ChamberBotServer): "watch" = the demo plays, "with" = it plays while you record your part; every other
+	-- playtest is recorded so you can keep it as the demo
+	local bots = shared.ChamberBots
+	if bots then
+		local slot = slotOf[player]
+		if (arg.demo == "watch" or arg.demo == "with") and clean.demo then
+			bots.Play(clean.demo, Config.ChamberOrigin(slot), activeFolder(player))
+		end
+		if arg.demo ~= "watch" then bots.StartRecording(player, slot, Config.ChamberOrigin(slot)) end
+	end
 	return true
+end
+
+-- File > NPC demo > Keep my last run: the recorded run(s) of your last playtest
+function Actions.DemoTake(player)
+	local bots = shared.ChamberBots
+	if not bots then return false, "ChamberBotServer isn't in ServerScriptService." end
+	local tracks = bots.Take(player)
+	if not tracks then return false, "Play the chamber first (Build & Play) - your run is recorded while you play." end
+	return true, tracks
 end
 
 function Actions.EditorEdit(player)
@@ -2781,6 +2833,7 @@ hookTrigger("PortalChamberExit", false, function(pl, inst)
 		unlock(pl, "WORKSHOP_PLAY")
 		Push:FireClient(pl, "ChamberComplete", { mapId = mapId, time = seconds })
 	elseif pl:GetAttribute("InEditor") and pl:GetAttribute("EditorPlaytest") then
+		if shared.ChamberBots then shared.ChamberBots.Finish(pl) end -- the recorded run reached the exit
 		pl:SetAttribute("ChamberDone", true)
 		Push:FireClient(pl, "ChamberComplete", { editor = true, time = seconds })
 	end

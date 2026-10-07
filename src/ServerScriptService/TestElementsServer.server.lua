@@ -1002,6 +1002,7 @@ local function drawFunnel(el, segs)
 end
 
 -- loose objects in the funnel ride along it (players: TestElementsClient)
+local FUNNEL_CATCH_MARGIN = 3 -- studs: objects whose edge is this far into the funnel get carried too
 local function funnelPush(el, segs)
 	local m = el.model
 	local reversed = m:GetAttribute("Reversed") == true
@@ -1012,20 +1013,26 @@ local function funnelPush(el, segs)
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = { cloneFolder, el.model, portalsFolder }
 	local seen = {}
+	-- loose things get picked up as soon as any part of them is in the funnel (a cube resting on the floor under a
+	-- funnel, one a dropper drops into it, one already there when it switches on) - you don't have to throw them in
+	local REACH = FUNNEL_CATCH_MARGIN
 	for i, seg in ipairs(segs) do
 		local a, b = seg[1], seg[2]
 		local len = (b - a).Magnitude
 		if len > 0.05 then
 			local dir = (b - a) / len
 			local cf = CFrame.lookAt((a + b) / 2, b)
-			for _, part in ipairs(workspace:GetPartBoundsInBox(cf, Vector3.new(radius * 2, radius * 2, len), params)) do
+			local box = Vector3.new((radius + REACH) * 2, (radius + REACH) * 2, len)
+			for _, part in ipairs(workspace:GetPartBoundsInBox(cf, box, params)) do
 				local root = part.AssemblyRootPart
 				if root and not seen[root] and not root.Anchored and not root:GetAttribute("HeldBy")
 					and not root:GetAttribute("Fizzling") and not characterOf(root) then
 					seen[root] = true
 					local lp = cf:PointToObjectSpace(root.Position)
 					local radial = Vector3.new(lp.X, lp.Y, 0)
-					if radial.Magnitude <= radius then
+					-- how far the object reaches from its centre (a cube's half size), so touching the funnel counts
+					local ext = math.min(root.Size.Magnitude * 0.5, REACH)
+					if radial.Magnitude <= radius + ext then
 						local along = -lp.Z + len / 2 -- distance from this piece's start
 						local v = speed * flow
 						if flow > 0 and i == #segs and len - along < 2 then v = 0 end
