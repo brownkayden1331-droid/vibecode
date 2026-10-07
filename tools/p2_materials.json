@@ -7,6 +7,10 @@
     { "match": "^tools/toolshint|^tools/toolsskip|^tools/toolsblocklight|^tools/toolsoccluder|^tools/toolsareaportal|^tools/toolsfog|^tools/toolsblockbullets|^tools/toolsblock_los", "special": "skip" },
     { "match": "^tools/toolsclip|^tools/toolsplayerclip|^tools/toolsinvisible|^tools/toolsnpcclip", "special": "invisible" },
     { "match": "^tools/toolsblack",          "variant": "",                  "base": "SmoothPlastic", "portalable": false, "color": [0, 0, 0] },
+    { "match": "^effects/",                  "special": "skip" },
+    { "match": "anim_wp/framework/backpanels", "variant": "Metal Panel",     "base": "Metal", "portalable": false },
+    { "match": "anim_wp/framework/squarebeams|anim_wp/framework/", "variant": "Metal 4.5", "base": "Metal", "portalable": false },
+    { "match": "plasticwall",                "variant": "Observe Wall",      "base": "SmoothPlastic", "portalable": false },
 
     { "match": "white_floor",                "variant": "White F 2.25",      "base": "SmoothPlastic", "portalable": true },
     { "match": "white_ceiling",              "variant": "White 4.5 Ceiling", "base": "SmoothPlastic", "portalable": true },

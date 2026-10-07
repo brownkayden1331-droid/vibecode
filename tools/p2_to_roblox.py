@@ -175,15 +175,17 @@ def read_bsp(path):
     if not lumps:
         raise SystemExit("couldn't read the BSP's lump table")
 
-    def lump(i):
-        ofs, ln = lumps[i]
-        blob = data[ofs:ofs + ln]
+    def unlzma(blob):
         if blob[:4] == b"LZMA":  # compressed lump: rebuild an .lzma header for Python's lzma
             actual, lz_size = struct.unpack_from("<II", blob, 4)
             props = blob[12:17]
             header = props + struct.pack("<Q", actual)
             blob = lzma.decompress(header + blob[17:17 + lz_size], format=lzma.FORMAT_ALONE)
         return blob
+
+    def lump(i):
+        ofs, ln = lumps[i]
+        return unlzma(data[ofs:ofs + ln])
 
     ent_text = lump(0).rstrip(b"\0").decode("utf-8", "replace")
     entities = []
@@ -253,8 +255,49 @@ def read_bsp(path):
                 ent["_bounds"] = (add(mins, tuple(origin)), add(maxs, tuple(origin)))
             except (ValueError, IndexError):
                 pass
-    print(f"  BSP version {version}: {len(brushes)} solid brushes, {len(entities)} entities")
+    # static props (game lump "sprp"): they aren't entities in a compiled map
+    statics = 0
+    try:
+        gl = lump(35)
+        for gi in range(struct.unpack_from("<i", gl, 0)[0]):
+            gid, gflags, gver, gofs, glen = struct.unpack_from("<4sHHii", gl, 4 + gi * 16)
+            if gid != b"prps":
+                continue
+            sp = unlzma(data[gofs:gofs + glen]) if gflags & 1 else data[gofs:gofs + glen]
+            pos = 0
+            ndict = struct.unpack_from("<i", sp, pos)[0]
+            pos += 4
+            names = [sp[pos + i * 128:pos + (i + 1) * 128].split(b"\0")[0].decode("latin-1") for i in range(ndict)]
+            pos += ndict * 128
+            nleaf = struct.unpack_from("<i", sp, pos)[0]
+            pos += 4 + nleaf * (4 if gver >= 12 else 2)
+            nprops = struct.unpack_from("<i", sp, pos)[0]
+            pos += 4
+            if nprops <= 0:
+                break
+            size = (len(sp) - pos) // nprops
+            for i in range(nprops):
+                b = pos + i * size
+                o = struct.unpack_from("<3f", sp, b)
+                a = struct.unpack_from("<3f", sp, b + 12)
+                mi = struct.unpack_from("<H", sp, b + 24)[0]
+                skin = struct.unpack_from("<i", sp, b + 32)[0]
+                scale = struct.unpack_from("<f", sp, b + size - 4)[0] if gver >= 11 and size in (80, 88) else 1.0
+                if mi >= len(names):
+                    continue
+                entities.append({"classname": "prop_static", "model": names[mi], "_kv": [],
+                                 "origin": "%g %g %g" % o, "angles": "%g %g %g" % a, "skin": str(skin),
+                                 "modelscale": "%g" % (scale if 0.01 < scale < 100 else 1.0)})
+                statics += 1
+    except (struct.error, ValueError, IndexError, lzma.LZMAError) as err:
+        print("  (static props couldn't be read: %s)" % err)
+    try:
+        read_bsp.pak = lump(40)
+    except (struct.error, ValueError, IndexError, lzma.LZMAError):
+        read_bsp.pak = None
+    print(f"  BSP version {version}: {len(brushes)} solid brushes, {len(entities) - statics} entities, {statics} static props")
     return brushes, entities
+read_bsp.pak = None
 
 # ---------------------------------------------------------------------------------------------------------------
 # geometry
@@ -324,7 +367,13 @@ class Materials:
         self.entities = {k: v for k, v in cfg.get("entities", {}).items() if not k.startswith("_")}
         self.cache = {}
         self.unmatched = {}
+    # the map's cubemap copies of a material: maps/<map>/<material>_x_y_z -> <material>
+    CUBEMAP_COPY = re.compile(r"^maps/[^/]+/(.+?)(?:_-?\d+){3}$")
+
     def get(self, tex):
+        m = self.CUBEMAP_COPY.match(tex)
+        if m:
+            tex = m.group(1)
         if tex in self.cache:
             r = self.cache[tex]
             if r.get("_fallback"):
@@ -734,8 +783,67 @@ def _convert_entity(w, idx, ent, entities, xf, mats, opts, stats, io_records, te
             w.close()
             w.close()
             stats["lights"] += 1
+        elif ent.get("model", "").lower().endswith(".mdl") and opts.props:
+            stats["props"].append((eid, ent))
         elif cls.startswith("prop_") or cls.startswith("npc_"):
             stats["props_skipped"][cls] = stats["props_skipped"].get(cls, 0) + 1
+
+def model_axes(ent, xf):
+    """the prop's rotation for a mesh ripped with Source +X -> Roblox +X (see p2_models.rb)"""
+    right, up, back = angles_axes(ent, xf)
+    return mul(back, -1), up, right
+
+def convert_props(w, props, xf, opts, stats, models_dir):
+    """every prop with a .mdl: rip the model (once per model) and leave a placeholder box the setup script swaps"""
+    import p2_models
+    ripper = None
+    if opts.rip:
+        game = opts.game or p2_models.find_game_dir(opts.input)
+        pak = getattr(read_bsp, "pak", None) if opts.input.lower().endswith(".bsp") else None
+        if game or pak:
+            print("Ripping models from", game or "the map's pakfile")
+            fs = p2_models.GameFS(game, pak)
+            ripper = p2_models.Ripper(fs, models_dir, max_tex=opts.max_texture, scale=xf.s)
+        else:
+            print("  (no game folder: props get placeholders only - set the Portal 2 folder to rip their models)")
+    infos = {}
+    paths = sorted({p2_models.norm(ent["model"]) for _, ent in props})
+    for n, path in enumerate(paths):
+        info = None
+        if ripper:
+            try:
+                info = ripper.rip(path)
+                stats["ripped"] += 1
+            except Exception as err:
+                stats["rip_failed"] += 1
+                stats["errors"].append("model %s: %s" % (path, err))
+            if n % 10 == 9:
+                print("  %d / %d models" % (n + 1, len(paths)))
+        infos[path] = info
+    for eid, ent in props:
+        path = p2_models.norm(ent["model"])
+        info = infos.get(path)
+        try:
+            scale = float(ent.get("modelscale", "1") or 1)
+        except ValueError:
+            scale = 1.0
+        if not 0.01 < scale < 100:
+            scale = 1.0
+        axes = model_axes(ent, xf)
+        origin = origin_of(ent, xf)
+        tags = ["P2Model", "P2Mdl:" + p2_models.model_name(path), "P2Ent:" + eid]
+        if info:
+            lo, hi = info["min"], info["max"]
+            c = tuple((lo[i] + hi[i]) / 2 * scale for i in range(3))
+            pos = add(origin, add(add(mul(axes[0], c[0]), mul(axes[1], c[1])), mul(axes[2], c[2])))
+            size = tuple(max((hi[i] - lo[i]) * scale, 0.05) for i in range(3))
+        else:
+            tags.append("P2NoBox")
+            pos, size = origin, (1.0, 1.0, 1.0)
+        if ent.get("skin", "0") not in ("0", ""):
+            tags.append("P2Attr:Skin=" + ent["skin"])
+        name = path.rsplit("/", 1)[-1][:-4] if path.endswith(".mdl") else path
+        part_xml(w, "Part", name, pos, axes, size, {"base": "SmoothPlastic", "color": [150, 90, 220]}, tags, False, 0.7)
 
 SETUP_SCRIPT = r'''-- P2MapSetup (made by p2_to_roblox.py)
 -- Runs when this map is in Workspace (a server Script).
@@ -802,11 +910,69 @@ local function setAll(inst, k, v)
 		if d:IsA("Model") then d:SetAttribute(k, v) end
 	end
 end
+-- ripped props (p2_models / the converter's Props folder): ReplicatedStorage.P2Models (or ServerStorage.P2Models)
+-- holds the imported .glb models, named like the file (props_underground_crusher)
+local MODEL_TURN = 0 -- degrees: if every imported prop faces the wrong way, try 180 (or 90 / -90)
+local modelFolders = {}
+for _, parent in ipairs({ ReplicatedStorage, game:GetService("ServerStorage"), map }) do
+	local f = parent:FindFirstChild("P2Models")
+	if f then table.insert(modelFolders, f) end
+end
+local missingModels, missingCount = {}, 0
+local function placeModel(p)
+	local name
+	for _, t in ipairs(p:GetTags()) do name = t:match("^P2Mdl:(.+)$") or name end
+	local template
+	for _, f in ipairs(modelFolders) do
+		local m = f:FindFirstChild(name, true)
+		if m and (m:IsA("Model") or m:IsA("BasePart")) then template = m break end
+	end
+	if not template then
+		if not missingModels[name] then
+			missingModels[name] = true
+			missingCount += 1
+		end
+		return nil
+	end
+	local c = template:Clone()
+	local target = p.CFrame * CFrame.Angles(0, math.rad(MODEL_TURN), 0)
+	local want = math.max(p.Size.X, p.Size.Y, p.Size.Z)
+	local fit = not p:HasTag("P2NoBox")
+	if c:IsA("Model") then
+		local cf, size = c:GetBoundingBox()
+		local have = math.max(size.X, size.Y, size.Z)
+		if fit and have > 1e-3 and math.abs(want / have - 1) > 0.01 then
+			c:ScaleTo(c:GetScale() * want / have)
+			cf = c:GetBoundingBox()
+		end
+		c:PivotTo(target * (cf:Inverse() * c:GetPivot()))
+		for _, d in ipairs(c:GetDescendants()) do
+			if d:IsA("BasePart") then d.Anchored = true end
+		end
+	else
+		local have = math.max(c.Size.X, c.Size.Y, c.Size.Z)
+		if fit and have > 1e-3 then c.Size = c.Size * (want / have) end
+		c.CFrame = target
+		c.Anchored = true
+	end
+	for _, t in ipairs(p:GetTags()) do
+		local k, v = t:match("^P2Attr:([^=]+)=(.*)$")
+		if k then c:SetAttribute(k, v) end
+	end
+	c.Name = p.Name
+	c.Parent = p.Parent
+	p:Destroy()
+	return c
+end
+
 for _, p in ipairs(map:GetDescendants()) do
 	if p:IsA("BasePart") then
 		local id
 		for _, t in ipairs(p:GetTags()) do id = t:match("^P2Ent:(.+)$") or id end
-		if p:HasTag("P2Placeholder") then
+		if p:HasTag("P2Model") then
+			local c = placeModel(p)
+			if id then entInst[id] = c or p end
+		elseif p:HasTag("P2Placeholder") then
 			local assetName, attrs = nil, {}
 			for _, t in ipairs(p:GetTags()) do
 				assetName = t:match("^P2Asset:(.+)$") or assetName
@@ -835,6 +1001,11 @@ for _, p in ipairs(map:GetDescendants()) do
 			entInst[id] = p -- triggers / points
 		end
 	end
+end
+
+if missingCount > 0 then
+	warn("[P2MapSetup] " .. missingCount .. " ripped models aren't in ReplicatedStorage.P2Models yet (their purple boxes stay)."
+		.. " Import the .glb files the converter wrote (<map>_models) with Import 3D and put them in that folder.")
 end
 
 -- ==========================================
@@ -1165,6 +1336,12 @@ def main(argv=None):
     ap.add_argument("--no-face-plates", dest="face_plates", action="store_false", help="one material per box, no side plates")
     ap.add_argument("--no-lights", dest="lights", action="store_false", help="leave the lights out")
     ap.add_argument("--no-center", dest="center", action="store_false", help="keep Hammer's coordinates (else the map is centred, floor at Y = 0)")
+    ap.add_argument("--game", help="the game's folder (…/steamapps/common/Portal 2) to rip the map's models from "
+                                   "(found from the map's path when it's inside the game)")
+    ap.add_argument("--no-models", dest="rip", action="store_false", help="don't rip the props' models (placeholders only)")
+    ap.add_argument("--no-props", dest="props", action="store_false", help="leave props out completely")
+    ap.add_argument("--models-dir", help="folder for the ripped .glb files (default: <output>_models)")
+    ap.add_argument("--max-texture", type=int, default=1024, help="largest ripped texture size (default 1024)")
     opts = ap.parse_args(argv)
     if not os.path.isfile(opts.input):
         raise SystemExit("can't find the map: %s" % opts.input)
@@ -1206,7 +1383,8 @@ def main(argv=None):
     name = opts.name or os.path.splitext(os.path.basename(opts.input))[0]
     out_path = opts.output or os.path.splitext(opts.input)[0] + ".rbxmx"
     stats = {"boxes": 0, "wedges": 0, "shapes": 0, "triangles": 0, "plates": 0, "skipped": 0, "degenerate": 0,
-             "spawns": 0, "placeholders": 0, "lights": 0, "triggers": 0, "props_skipped": {}, "errors": []}
+             "spawns": 0, "placeholders": 0, "lights": 0, "triggers": 0, "props_skipped": {}, "errors": [],
+             "props": [], "ripped": 0, "rip_failed": 0}
 
     w = Writer()
     w.out.write('<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
@@ -1228,6 +1406,12 @@ def main(argv=None):
     w.open("Folder", "Entities")
     io_records = convert_entities(w, entities, xf, mats, opts, stats)
     w.close()
+    models_dir = None
+    if stats["props"]:
+        models_dir = opts.models_dir or os.path.splitext(out_path)[0] + "_models"
+        w.open("Folder", "Props")
+        convert_props(w, stats["props"], xf, opts, stats, models_dir)
+        w.close()
     # Portal 2's connections, for the I/O part of P2MapSetup
     w.open("ModuleScript", "P2IO", '<ProtectedString name="Source"><![CDATA[return %s\n]]></ProtectedString>'
            % lua_value(io_records).replace("]]>", "] ]>"))
@@ -1245,6 +1429,13 @@ def main(argv=None):
     print("  %d spawns, %d test element placeholders, %d triggers, %d lights; %d tool / trigger brushes skipped, %d broken brushes" %
           (stats["spawns"], stats["placeholders"], stats["triggers"], stats["lights"], stats["skipped"], stats["degenerate"]))
     print("  %d entities with names / connections kept for the map's I/O" % len(io_records))
+    if stats["props"]:
+        print("  %d props (%d models ripped%s)" % (len(stats["props"]), stats["ripped"],
+              ", %d couldn't be ripped" % stats["rip_failed"] if stats["rip_failed"] else ""))
+        if stats["ripped"]:
+            print("  -> the models are in %s" % models_dir)
+            print("     In Studio: Import 3D, pick all the .glb files (scale unit: Stud), and put the imported models in")
+            print("     ReplicatedStorage > P2Models (make that folder). P2MapSetup swaps each prop placeholder for its model.")
     if stats["props_skipped"]:
         print("  models not converted (no .mdl support - add them by hand):",
               ", ".join("%s x%d" % kv for kv in sorted(stats["props_skipped"].items(), key=lambda kv: -kv[1])[:12]))
@@ -1280,17 +1471,18 @@ def save_crash(text):
     return None
 
 def gui(initial=None):
-    """the converter's window: pick a map, options, Convert, and the log underneath"""
+    """the converter's window: a "Convert a map" tab, a "Rip models" tab, and the log underneath"""
     import queue
     import subprocess
     import threading
     import tkinter as tk
     from tkinter import filedialog, ttk
+    import p2_models
 
     root = tk.Tk()
     root.title("Portal 2 Map Converter")
-    root.geometry("760x620")
-    root.minsize(620, 480)
+    root.geometry("820x700")
+    root.minsize(660, 560)
     try:
         ttk.Style(root).theme_use("vista" if sys.platform == "win32" else "clam")
     except tk.TclError:
@@ -1305,6 +1497,10 @@ def gui(initial=None):
     v_lights = tk.BooleanVar(value=True)
     v_center = tk.BooleanVar(value=True)
     v_hub = tk.BooleanVar(value=False)
+    v_game = tk.StringVar(value=p2_models.find_game_dir(initial) or "")
+    v_rip = tk.BooleanVar(value=True)
+    v_search = tk.StringVar(value="crusher")
+    v_ripdir = tk.StringVar(value=os.path.join(os.path.expanduser("~"), "Desktop", "Portal 2 models"))
     out_auto = {"path": ""}
 
     def default_out(*_):
@@ -1313,6 +1509,8 @@ def gui(initial=None):
             out_auto["path"] = (os.path.join(os.path.dirname(path), "CoopHub.rbxmx") if v_hub.get()
                                 else os.path.splitext(path)[0] + ".rbxmx")
             v_out.set(out_auto["path"])
+        if path and not v_game.get():
+            v_game.set(p2_models.find_game_dir(path) or "")
     v_in.trace_add("write", default_out)
 
     def on_hub():
@@ -1335,28 +1533,48 @@ def gui(initial=None):
         p = filedialog.askopenfilename(title="Material rules", filetypes=[("JSON", "*.json"), ("All files", "*.*")])
         if p:
             v_mats.set(p)
+    def pick_game():
+        p = filedialog.askdirectory(title="The Portal 2 folder (steamapps/common/Portal 2)")
+        if p:
+            v_game.set(p2_models.find_game_dir(p) or p)
+    def pick_ripdir():
+        p = filedialog.askdirectory(title="Save the ripped models in")
+        if p:
+            v_ripdir.set(p)
 
-    frm = ttk.Frame(root, padding=12)
-    frm.pack(fill="both", expand=True)
+    nb = ttk.Notebook(root)
+    nb.pack(fill="x", padx=10, pady=(10, 0))
+
+    # ---------------- tab 1: convert a map
+    frm = ttk.Frame(nb, padding=12)
+    nb.add(frm, text="  Convert a map  ")
     frm.columnconfigure(1, weight=1)
-    ttk.Label(frm, text="Portal 2 map  ->  Roblox model (.rbxmx)", font=("Segoe UI", 13, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
 
-    def file_row(r, label, var, cmd):
-        ttk.Label(frm, text=label).grid(row=r, column=0, sticky="w", pady=3)
-        ttk.Entry(frm, textvariable=var).grid(row=r, column=1, sticky="ew", padx=6, pady=3)
-        ttk.Button(frm, text="Browse...", command=cmd).grid(row=r, column=2, pady=3)
-    file_row(1, "Map (.vmf / .bsp)", v_in, pick_in)
-    file_row(2, "Save as", v_out, pick_out)
-    ttk.Label(frm, text="Model name").grid(row=3, column=0, sticky="w", pady=3)
+    def file_row(parent, r, label, var, cmd):
+        ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=var).grid(row=r, column=1, sticky="ew", padx=6, pady=3)
+        ttk.Button(parent, text="Browse...", command=cmd).grid(row=r, column=2, pady=3)
+    file_row(frm, 0, "Map (.vmf / .bsp)", v_in, pick_in)
+    file_row(frm, 1, "Save as", v_out, pick_out)
+    ttk.Label(frm, text="Model name").grid(row=2, column=0, sticky="w", pady=3)
     name_row = ttk.Frame(frm)
-    name_row.grid(row=3, column=1, columnspan=2, sticky="ew", padx=6)
+    name_row.grid(row=2, column=1, columnspan=2, sticky="ew", padx=6)
     name_row.columnconfigure(0, weight=1)
     ttk.Entry(name_row, textvariable=v_name).grid(row=0, column=0, sticky="ew")
     ttk.Checkbutton(name_row, text="This is the co-op hub", variable=v_hub, command=on_hub).grid(row=0, column=1, padx=(10, 0))
-    ttk.Label(frm, text="(empty = the map's file name)", foreground="#777").grid(row=4, column=1, sticky="w", padx=6)
+    ttk.Label(frm, text="(empty = the map's file name)", foreground="#777").grid(row=3, column=1, sticky="w", padx=6)
+
+    props_box = ttk.LabelFrame(frm, text="Props (models)", padding=8)
+    props_box.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 4))
+    props_box.columnconfigure(1, weight=1)
+    ttk.Label(props_box, text="Portal 2 folder").grid(row=0, column=0, sticky="w")
+    ttk.Entry(props_box, textvariable=v_game).grid(row=0, column=1, sticky="ew", padx=6)
+    ttk.Button(props_box, text="Browse...", command=pick_game).grid(row=0, column=2)
+    ttk.Checkbutton(props_box, text="Rip the props' models with their textures and rigs (.glb files next to the map)",
+                    variable=v_rip).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
     opts_box = ttk.LabelFrame(frm, text="Options", padding=8)
-    opts_box.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(10, 6))
+    opts_box.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(4, 6))
     ttk.Label(opts_box, text="Hammer units per stud").grid(row=0, column=0, sticky="w")
     ttk.Entry(opts_box, textvariable=v_units, width=8).grid(row=0, column=1, sticky="w", padx=(6, 18))
     ttk.Checkbutton(opts_box, text="Side plates (one texture per side)", variable=v_plates).grid(row=0, column=2, sticky="w", padx=(0, 12))
@@ -1368,22 +1586,52 @@ def gui(initial=None):
     ttk.Label(mats_row, text="Material rules").grid(row=0, column=0, sticky="w")
     ttk.Entry(mats_row, textvariable=v_mats).grid(row=0, column=1, sticky="ew", padx=6)
     ttk.Button(mats_row, text="Browse...", command=pick_mats).grid(row=0, column=2)
+    convert_btn = ttk.Button(frm, text="Convert")
+    convert_btn.grid(row=6, column=0, sticky="w", pady=(4, 0))
 
-    btns = ttk.Frame(frm)
-    btns.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(4, 6))
-    convert_btn = ttk.Button(btns, text="Convert")
-    convert_btn.pack(side="left")
+    # ---------------- tab 2: rip models
+    rip = ttk.Frame(nb, padding=12)
+    nb.add(rip, text="  Rip models  ")
+    rip.columnconfigure(1, weight=1)
+    file_row(rip, 0, "Portal 2 folder", v_game, pick_game)
+    ttk.Label(rip, text="Search").grid(row=1, column=0, sticky="w", pady=3)
+    search_entry = ttk.Entry(rip, textvariable=v_search)
+    search_entry.grid(row=1, column=1, sticky="ew", padx=6, pady=3)
+    find_btn = ttk.Button(rip, text="Find")
+    find_btn.grid(row=1, column=2, pady=3)
+    ttk.Label(rip, text="a word (crusher, turret, cube) or a pattern (models/props_underground/*.mdl)",
+              foreground="#777").grid(row=2, column=1, sticky="w", padx=6)
+    list_frame = ttk.Frame(rip)
+    list_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=4)
+    found = tk.Listbox(list_frame, selectmode="extended", height=8, activestyle="none")
+    lsb = ttk.Scrollbar(list_frame, command=found.yview)
+    found.configure(yscrollcommand=lsb.set)
+    lsb.pack(side="right", fill="y")
+    found.pack(side="left", fill="both", expand=True)
+    file_row(rip, 4, "Save to", v_ripdir, pick_ripdir)
+    rip_btns = ttk.Frame(rip)
+    rip_btns.grid(row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
+    rip_sel_btn = ttk.Button(rip_btns, text="Rip selected")
+    rip_sel_btn.pack(side="left")
+    rip_all_btn = ttk.Button(rip_btns, text="Rip all found")
+    rip_all_btn.pack(side="left", padx=6)
+    found_label = ttk.Label(rip_btns, text="")
+    found_label.pack(side="left", padx=8)
+
+    # ---------------- shared: status + log
+    bottom = ttk.Frame(root, padding=(10, 6, 10, 10))
+    bottom.pack(fill="both", expand=True)
+    btns = ttk.Frame(bottom)
+    btns.pack(fill="x", pady=(0, 6))
     open_btn = ttk.Button(btns, text="Open folder", state="disabled")
-    open_btn.pack(side="left", padx=6)
+    open_btn.pack(side="left")
     bar = ttk.Progressbar(btns, mode="indeterminate", length=180)
     bar.pack(side="right")
     status = ttk.Label(btns, text="")
     status.pack(side="right", padx=8)
-
-    log_frame = ttk.Frame(frm)
-    log_frame.grid(row=7, column=0, columnspan=3, sticky="nsew")
-    frm.rowconfigure(7, weight=1)
-    log = tk.Text(log_frame, wrap="word", height=12, font=("Consolas", 9), state="disabled", background="#1e1e1e",
+    log_frame = ttk.Frame(bottom)
+    log_frame.pack(fill="both", expand=True)
+    log = tk.Text(log_frame, wrap="word", height=10, font=("Consolas", 9), state="disabled", background="#1e1e1e",
                   foreground="#dcdcdc", insertbackground="#dcdcdc", relief="flat", padx=6, pady=6)
     sb = ttk.Scrollbar(log_frame, command=log.yview)
     log.configure(yscrollcommand=sb.set)
@@ -1397,23 +1645,27 @@ def gui(initial=None):
         log.insert("end", text, tag)
         log.see("end")
         log.configure(state="disabled")
+    def clear_log():
+        log.configure(state="normal")
+        log.delete("1.0", "end")
+        log.configure(state="disabled")
 
     q = queue.Queue()
-    state = {"busy": False, "out": None}
+    state = {"busy": False, "open": None, "done_text": ""}
+    busy_buttons = (convert_btn, find_btn, rip_sel_btn, rip_all_btn)
 
-    def worker(argv):
+    def worker(fn):
         old_out, old_err = sys.stdout, sys.stderr
         sys.stdout = sys.stderr = _QueueWriter(q)
         result = ("ok", None)
         try:
-            main(argv)
+            fn()
         except SystemExit as e:
             if e.code not in (None, 0):
                 result = ("stop", str(e.code))
         except BaseException:
             import traceback
-            text = traceback.format_exc()
-            result = ("crash", text)
+            result = ("crash", traceback.format_exc())
         finally:
             sys.stdout, sys.stderr = old_out, old_err
         q.put(result)
@@ -1422,7 +1674,12 @@ def gui(initial=None):
         try:
             while True:
                 item = q.get_nowait()
-                if isinstance(item, tuple):
+                if isinstance(item, tuple) and item[0] == "list":
+                    found.delete(0, "end")
+                    for p in item[1]:
+                        found.insert("end", p)
+                    found_label.configure(text="%d models" % len(item[1]))
+                elif isinstance(item, tuple):
                     finish(*item)
                 else:
                     write_log(item)
@@ -1431,14 +1688,31 @@ def gui(initial=None):
         if state["busy"]:
             root.after(80, poll)
 
+    def start(fn, text, open_path=None, done_text=""):
+        if state["busy"]:
+            return False
+        state["busy"], state["open"], state["done_text"] = True, open_path, done_text
+        clear_log()
+        for b in busy_buttons:
+            b.configure(state="disabled")
+        open_btn.configure(state="disabled")
+        status.configure(text=text)
+        bar.start(12)
+        threading.Thread(target=worker, args=(fn,), daemon=True).start()
+        root.after(80, poll)
+        return True
+
     def finish(kind, detail):
         state["busy"] = False
         bar.stop()
-        convert_btn.configure(state="normal")
+        for b in busy_buttons:
+            b.configure(state="normal")
         if kind == "ok":
             status.configure(text="Done")
-            write_log("\nDone - drag the .rbxmx into Studio (or right-click > Insert from File).\n", "ok")
-            open_btn.configure(state="normal")
+            if state["done_text"]:
+                write_log("\n" + state["done_text"] + "\n", "ok")
+            if state["open"]:
+                open_btn.configure(state="normal")
         elif kind == "stop":
             status.configure(text="Stopped")
             write_log("\nStopped: %s\n" % detail, "err")
@@ -1450,8 +1724,6 @@ def gui(initial=None):
                 write_log("Saved this to %s - send it to whoever fixes the tool.\n" % where, "err")
 
     def convert():
-        if state["busy"]:
-            return
         path = v_in.get().strip().strip('"')
         if not path:
             write_log("Pick a map first.\n", "err")
@@ -1475,22 +1747,63 @@ def gui(initial=None):
             argv.append("--no-lights")
         if not v_center.get():
             argv.append("--no-center")
-        state["busy"], state["out"] = True, out or os.path.splitext(path)[0] + ".rbxmx"
-        log.configure(state="normal")
-        log.delete("1.0", "end")
-        log.configure(state="disabled")
-        convert_btn.configure(state="disabled")
-        open_btn.configure(state="disabled")
-        status.configure(text="Converting...")
-        bar.start(12)
-        threading.Thread(target=worker, args=(argv,), daemon=True).start()
-        root.after(80, poll)
+        if v_game.get().strip():
+            argv += ["--game", v_game.get().strip()]
+        if not v_rip.get():
+            argv.append("--no-models")
+        start(lambda: main(argv), "Converting...", out or os.path.splitext(path)[0] + ".rbxmx",
+              "Done - drag the .rbxmx into Studio (or right-click > Insert from File).")
+
+    fs_cache = {}
+    def game_fs():
+        game = v_game.get().strip()
+        if not game or not os.path.isdir(game):
+            raise SystemExit("set the Portal 2 folder first (…/steamapps/common/Portal 2)")
+        game = p2_models.find_game_dir(game) or game
+        if fs_cache.get("dir") != game:
+            print("Reading the game's files...")
+            fs_cache["dir"], fs_cache["fs"] = game, p2_models.GameFS(game)
+        return fs_cache["fs"]
+
+    def find_models():
+        pattern = v_search.get().strip() or "*"
+        def run_find():
+            items = game_fs().find(pattern)
+            q.put(("list", items))
+            print("%d models match \"%s\"" % (len(items), pattern))
+            if not items:
+                print("(try a shorter word, or * for every model)")
+        start(run_find, "Searching...")
+
+    def rip_paths(paths):
+        if not paths:
+            write_log("Find some models first (and select the ones you want).\n", "err")
+            return
+        out_dir = v_ripdir.get().strip() or "ripped_models"
+        def run_rip():
+            r = p2_models.Ripper(game_fs(), out_dir)
+            ok = 0
+            for p in paths:
+                try:
+                    info = r.rip(p)
+                    ok += 1
+                    print("%s -> %s.glb (%d triangles%s)" % (p, info["name"], info["tris"],
+                          ", rig with %d bones" % info["bones"] if info["bones"] > 1 else ""))
+                except Exception as err:
+                    print("couldn't rip %s: %s" % (p, err))
+            print("\n%d of %d models ripped into %s" % (ok, len(paths), out_dir))
+        start(run_rip, "Ripping...", os.path.join(out_dir, "."),
+              "In Studio: Import 3D, pick the .glb files (scale unit: Stud). Rigged models come in with their Bones.")
 
     def open_folder():
-        folder = os.path.dirname(os.path.abspath(state["out"] or ""))
+        target = state["open"] or ""
+        folder = target if os.path.isdir(target) else os.path.dirname(os.path.abspath(target))
         try:
             if sys.platform == "win32":
-                subprocess.Popen(["explorer", "/select,", os.path.abspath(state["out"])])
+                if os.path.isfile(target):
+                    subprocess.Popen(["explorer", "/select,", os.path.abspath(target)])
+                else:
+                    os.startfile(folder)  # noqa - Windows only
             elif sys.platform == "darwin":
                 subprocess.Popen(["open", folder])
             else:
@@ -1499,10 +1812,14 @@ def gui(initial=None):
             write_log("Couldn't open the folder: %s\n" % err, "err")
 
     convert_btn.configure(command=convert)
+    find_btn.configure(command=find_models)
+    search_entry.bind("<Return>", lambda _e: find_models())
+    rip_sel_btn.configure(command=lambda: rip_paths([found.get(i) for i in found.curselection()]))
+    rip_all_btn.configure(command=lambda: rip_paths(list(found.get(0, "end"))))
     open_btn.configure(command=open_folder)
-    root.bind("<Return>", lambda _e: convert())
-    write_log("Pick a Portal 2 map (.vmf is best - decompile a .bsp with BSPSource) and press Convert.\n"
-              "For the co-op hub tick \"This is the co-op hub\", then put the model in ServerStorage.PortalMaps.\n")
+    write_log("Convert a map: pick a Portal 2 map (.vmf is best - decompile a .bsp with BSPSource) and press Convert.\n"
+              "With the Portal 2 folder set, the map's props are ripped too (.glb with textures and rigs).\n"
+              "Rip models: search the game's models and rip any of them.\n")
     if initial:
         default_out()
     root.mainloop()
