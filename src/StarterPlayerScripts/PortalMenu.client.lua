@@ -39,6 +39,7 @@ local getRobloxSettings = settings -- the local `settings` table below shadows t
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local Config = require(ReplicatedStorage:WaitForChild("PortalConfig"))
+print("[PortalMenu] running (build: co-op runs + Workshop co-op invites)") -- if you don't see this in Output, Studio has an older copy
 if Config.VERSION ~= 3 then
 	warn("[PortalMenu] ReplicatedStorage.PortalConfig is out of date (version " .. tostring(Config.VERSION) .. ", need 3). Replace it with the new PortalConfig - things will break until you do.")
 end
@@ -2999,6 +3000,16 @@ function Panels.Coop()
 				if not ok then toast(tostring(err), "Co-op", "info") end
 			end)
 		end })
+	else
+		table.insert(rows, { kind = "button", text = "CO-OP RUN: VOTE + SPEEDRUN", action = function()
+			openPanel(function()
+				return Panels.dialog("Co-op Run", "Pair up first: invite a friend or quick match. Then you both vote - Built-in or Custom (Workshop) chambers, Normal or Speedrun - and play them all together.", {
+					{ "INVITE A FRIEND", function() S.inviteChamber = nil replaceTop(Panels.SearchFriends) end },
+					{ "QUICK MATCH", function() replaceTop(Panels.PlayOnline) end },
+					{ "BACK", function() goBack() end, true },
+				}, 3)
+			end)
+		end })
 	end
 	for _, r in ipairs({
 			{ kind = "button", text = "ONLINE: INVITE A FRIEND", action = function() S.inviteChamber = nil openPanel(Panels.SearchFriends) end },
@@ -3324,6 +3335,7 @@ function Panels.Community()
 		dark = true, backdrop = "aperture", decor = "turret", card = true,
 		rows = {
 			{ kind = "button", text = "Play Community Test Chambers", size = 34, action = function() openPanel(function() return Panels.Chambers(false, 1) end) end },
+			{ kind = "button", text = "Play Co-op Test Chambers", size = 34, action = function() openPanel(function() return Panels.Chambers(true, 1) end) end },
 			{ kind = "button", text = "Create Test Chambers", size = 34, action = function() openPanel(function() return Panels.MyChambers(1) end) end },
 			{ kind = "button", text = "View My Workshop", size = 34, action = function() openPanel(Panels.MyWorkshop) end },
 		},
