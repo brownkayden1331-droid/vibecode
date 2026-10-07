@@ -5213,19 +5213,62 @@ do
 end
 
 -- ==========================================
--- TOUCH: MOVE STICK (bottom left) + UP / DOWN buttons
+-- TOUCH: TWO STICKS (move bottom left, look bottom right) + UP / DOWN buttons
 -- ==========================================
--- Phones have no WASD: drag the stick to fly the camera around the chamber (where you look = forward),
--- hold the arrows to go up / down. One finger on the room still orbits, two fingers pan and pinch to zoom.
+-- Phones have no WASD or mouse: the left stick flies the camera around the chamber (up on it = where you look), the
+-- right stick turns it, the arrows go up / down. One finger on the room still orbits, two fingers pan / pinch zoom.
 do
 	local SIZE = 190
-	local stickGui = new("Frame", { Name = "TouchStick", AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 70, 1, -110), Size = px(SIZE, SIZE),
-		BackgroundColor3 = rgb(20), BackgroundTransparency = 0.6, Active = true, Visible = false, ZIndex = 20, Parent = canvas })
-	new("UICorner", { CornerRadius = UDim.new(1, 0), Parent = stickGui })
-	new("UIStroke", { Color = rgb(235), Transparency = 0.4, Thickness = 2, Parent = stickGui })
-	local knob = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = px(78, 78),
-		BackgroundColor3 = rgb(240), BackgroundTransparency = 0.25, ZIndex = 21, Parent = stickGui })
-	new("UICorner", { CornerRadius = UDim.new(1, 0), Parent = knob })
+	local function makeStick(position)
+		local gui = new("Frame", { AnchorPoint = Vector2.new(0, 1), Position = position, Size = px(SIZE, SIZE),
+			BackgroundColor3 = rgb(20), BackgroundTransparency = 0.6, Active = true, Visible = false, ZIndex = 20, Parent = canvas })
+		new("UICorner", { CornerRadius = UDim.new(1, 0), Parent = gui })
+		new("UIStroke", { Color = rgb(235), Transparency = 0.4, Thickness = 2, Parent = gui })
+		local knob = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = px(78, 78),
+			BackgroundColor3 = rgb(240), BackgroundTransparency = 0.25, ZIndex = 21, Parent = gui })
+		new("UICorner", { CornerRadius = UDim.new(1, 0), Parent = knob })
+		local st = { gui = gui, vec = Vector2.zero, input = nil }
+		local function setKnob()
+			knob.Position = UDim2.new(0.5, st.vec.X * SIZE * 0.36, 0.5, st.vec.Y * SIZE * 0.36)
+		end
+		local function fromInput(input)
+			local c = gui.AbsolutePosition + gui.AbsoluteSize / 2
+			local pp = Vector2.new(input.Position.X, input.Position.Y) + GuiService:GetGuiInset() -- (the editor GUI ignores the inset)
+			local d = (pp - c) / (gui.AbsoluteSize.X * 0.36)
+			if d.Magnitude > 1 then d = d.Unit end
+			-- a small dead zone in the middle, then smooth up to full speed
+			local m = d.Magnitude
+			if m < 0.12 then return Vector2.zero end
+			return d.Unit * ((m - 0.12) / 0.88) ^ 1.4
+		end
+		local function isMouse(i) return i.UserInputType == Enum.UserInputType.MouseButton1 end
+		gui.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.Touch or isMouse(input) then
+				st.input = input
+				st.vec = fromInput(input)
+				setKnob()
+			end
+		end)
+		UserInputService.InputChanged:Connect(function(input)
+			if st.input and (input == st.input or (input.UserInputType == Enum.UserInputType.MouseMovement and isMouse(st.input))) then
+				st.vec = fromInput(input)
+				setKnob()
+			end
+		end)
+		UserInputService.InputEnded:Connect(function(input)
+			if input == st.input or (st.input and isMouse(input) and isMouse(st.input)) then
+				st.input, st.vec = nil, Vector2.zero
+				setKnob()
+			end
+		end)
+		function st.reset()
+			st.input, st.vec = nil, Vector2.zero
+			setKnob()
+		end
+		return st
+	end
+	local moveStick = makeStick(UDim2.new(0, 70, 1, -110))
+	local lookStick = makeStick(UDim2.new(1, -70 - SIZE, 1, -110))
 	local function arrowButton(y, text)
 		local b = new("TextButton", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 70 + SIZE + 24, 1, y), Size = px(84, 84),
 			BackgroundColor3 = rgb(20), BackgroundTransparency = 0.6, Text = text, TextSize = 40, FontFace = FONT.UI, TextColor3 = rgb(240),
@@ -5235,40 +5278,7 @@ do
 		return b
 	end
 	local upBtn, downBtn = arrowButton(-110 - 96, "▲"), arrowButton(-110, "▼")
-	local stickInput, vec, vert = nil, Vector2.zero, 0
 	local holdUp, holdDown = false, false
-	local function setKnob(v)
-		knob.Position = UDim2.new(0.5, v.X * SIZE * 0.36, 0.5, v.Y * SIZE * 0.36)
-	end
-	local function fromInput(input)
-		local c = stickGui.AbsolutePosition + stickGui.AbsoluteSize / 2
-		local p = Vector2.new(input.Position.X, input.Position.Y) + GuiService:GetGuiInset() -- (the editor GUI ignores the inset)
-		local d = (p - c) / (stickGui.AbsoluteSize.X * 0.36)
-		if d.Magnitude > 1 then d = d.Unit end
-		-- a small dead zone in the middle, then smooth up to full speed
-		local m = d.Magnitude
-		if m < 0.12 then return Vector2.zero end
-		return d.Unit * ((m - 0.12) / 0.88) ^ 1.4
-	end
-	stickGui.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-			stickInput = input
-			vec = fromInput(input)
-			setKnob(vec)
-		end
-	end)
-	UserInputService.InputChanged:Connect(function(input)
-		if stickInput and (input == stickInput or (input.UserInputType == Enum.UserInputType.MouseMovement and stickInput.UserInputType == Enum.UserInputType.MouseButton1)) then
-			vec = fromInput(input)
-			setKnob(vec)
-		end
-	end)
-	UserInputService.InputEnded:Connect(function(input)
-		if input == stickInput or (stickInput and input.UserInputType == Enum.UserInputType.MouseButton1 and stickInput.UserInputType == Enum.UserInputType.MouseButton1) then
-			stickInput, vec = nil, Vector2.zero
-			setKnob(vec)
-		end
-	end)
 	for _, pair in ipairs({ { upBtn, 1 }, { downBtn, -1 } }) do
 		local b, dir = pair[1], pair[2]
 		b.InputBegan:Connect(function(input)
@@ -5284,17 +5294,22 @@ do
 			end
 		end)
 	end
-	-- forward = up on the stick
+	-- forward = up on the move stick
 	function X.touchMove()
-		vert = (holdUp and 1 or 0) - (holdDown and 1 or 0)
-		return Vector2.new(vec.X, -vec.Y), vert
+		local vert = (holdUp and 1 or 0) - (holdDown and 1 or 0)
+		return Vector2.new(moveStick.vec.X, -moveStick.vec.Y), vert
+	end
+	-- the look stick, as a "mouse drag" per second (orbit() takes pixels)
+	function X.touchLook()
+		return lookStick.vec
 	end
 	function X.setStickVisible(on)
-		if stickGui.Visible == on then return end
-		stickGui.Visible, upBtn.Visible, downBtn.Visible = on, on, on
+		if moveStick.gui.Visible == on then return end
+		moveStick.gui.Visible, lookStick.gui.Visible, upBtn.Visible, downBtn.Visible = on, on, on, on
 		if not on then
-			stickInput, vec, holdUp, holdDown = nil, Vector2.zero, false, false
-			setKnob(vec)
+			moveStick.reset()
+			lookStick.reset()
+			holdUp, holdDown = false, false
 		end
 	end
 end
@@ -5789,6 +5804,20 @@ local function touchEnded(input)
 			else
 				primaryUp()
 			end
+			-- double tap on a surface or an item = right-click (its menu)
+			if t.moved < 12 then
+				local now, pos = os.clock(), touchPos(input)
+				local last = E.lastTap
+				if last and now - last.t < 0.35 and (pos - last.p).Magnitude < 45 then
+					E.lastTap = nil
+					E.pointer = pos
+					contextAt()
+				else
+					E.lastTap = { t = now, p = pos }
+				end
+			else
+				E.lastTap = nil
+			end
 		end
 	elseif E.carry then
 		E.pointer = touchPos(input)
@@ -5938,6 +5967,13 @@ editLoop = function(dt)
 			end
 		end
 		E.target += move * dt * moveSpeed
+		-- touch: the look stick turns the camera (like dragging the mouse, faster the further you push it)
+		if X.touchLook then
+			local lv = X.touchLook()
+			if lv.Magnitude > 0.02 then
+				orbit(lv * dt * 520 * (0.4 + 1.2 * (tonumber(ES("edTouchSens", 0.5)) or 0.5)))
+			end
+		end
 
 		-- controller: sticks, shoulder zoom
 		if E.pointerMode == "pad" then

@@ -117,7 +117,8 @@ python tools/p2_to_roblox.py mp_coop_lobby_3.vmf -o CoopHub.rbxmx --name CoopHub
 - **Swap entrance and exit**: File / Edit menu, or right-click a door.
 
 ## Phones / tablets in the editor
-- **Move stick** (bottom left) flies the camera around (up on the stick = where you look), **▲ / ▼** go up and down. One finger on the room orbits (scaled to the screen, Options › Editor › *Touch Orbit Speed*), two fingers pan and pinch zooms. *Touch Move Stick* turns the stick off.
+- **Move stick** (bottom left) flies the camera around (up on the stick = where you look), **▲ / ▼** go up and down. **Look stick** (bottom right) turns the camera, its speed follows Options › Editor › *Touch Orbit Speed*. One finger on the room still orbits too, two fingers pan and pinch zooms. *Touch Move Stick* turns both sticks off.
+- **Double-tap** a surface or an item = right-click: opens its menu (options, connect, delete, Move…).
 - A tap that wobbles a few pixels no longer drags the item or the selection to the next tile (14 px dead zone).
 - Right-click / long-press an item › **Move** › Up / Down / Left / Right moves it one tile – no dragging needed.
 
