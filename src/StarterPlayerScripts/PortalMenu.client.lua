@@ -308,6 +308,8 @@ settings = {
 	edAutoHide = "Enabled", edOrbitSens = 0.5, edInvertY = "Disabled", edZoomSpeed = 0.5, edCamSmooth = 0.5,
 	edOrbitInPlace = "Enabled", -- the camera turns where it stands instead of swinging round a point in the middle
 	edLinkOnSelect = "Disabled", -- selecting an item draws lines to what it's connected to (L shows all of them anyway)
+	edTouchSens = 0.5, -- phones / tablets: how fast one finger orbits the camera
+	edTouchStick = "Enabled", -- phones / tablets: the on-screen move stick + up / down buttons
 	edFlyCam = "Disabled", -- W / S fly where you look (up and down too), like Studio / Unity
 	edSfx = 1, edDrone = 1, edHover = "Enabled", edPadCursor = 0.5, edTouchBar = "Auto", edTeamNames = "Enabled",
 	edMode = "Simple", -- Simple (Items) | Intermediate (+ Textures, Meshes) | Advanced (+ My Chips, labels, nudging)
@@ -2671,6 +2673,8 @@ function Panels.EditorSettings()
 			{ kind = "choice", text = "Invert Orbit", key = "edInvertY", options = { "Disabled", "Enabled" } },
 			{ kind = "choice", text = "Orbit In Place", key = "edOrbitInPlace", options = { "Enabled", "Disabled" } },
 			{ kind = "choice", text = "Show Connections Of Selected", key = "edLinkOnSelect", options = { "Disabled", "Enabled" } },
+			{ kind = "slider", text = "Touch Orbit Speed", key = "edTouchSens", min = 0, max = 1, step = 0.05 },
+			{ kind = "choice", text = "Touch Move Stick", key = "edTouchStick", options = { "Enabled", "Disabled" } },
 			{ kind = "choice", text = "Fly Camera (W Moves Where You Look)", key = "edFlyCam", options = { "Disabled", "Enabled" } },
 			{ kind = "slider", text = "Zoom Speed", key = "edZoomSpeed", min = 0, max = 1, step = 0.05 },
 			{ kind = "slider", text = "Camera Smoothing", key = "edCamSmooth", min = 0, max = 1, step = 0.05 },

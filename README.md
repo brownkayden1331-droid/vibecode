@@ -103,6 +103,14 @@ Chambers saved or published before exits needed a button carry no `fmt`. When on
 - **Several items at once**: Ctrl / Shift + click items to add or remove them; *Select all like this* (Edit menu or right-click) selects every item of that kind (all funnels...). Delete, R, item options (e.g. funnel speed) and **C** work on all of them: C then click an item connects every selected one to it. **Shift + click** while connecting keeps going, so one button can be connected to several things in a row.
 - **Swap entrance and exit**: File / Edit menu, or right-click a door.
 
+## Phones / tablets in the editor
+- **Move stick** (bottom left) flies the camera around (up on the stick = where you look), **▲ / ▼** go up and down. One finger on the room orbits (scaled to the screen, Options › Editor › *Touch Orbit Speed*), two fingers pan and pinch zooms. *Touch Move Stick* turns the stick off.
+- A tap that wobbles a few pixels no longer drags the item or the selection to the next tile (14 px dead zone).
+- Right-click / long-press an item › **Move** › Up / Down / Left / Right moves it one tile – no dragging needed.
+
+## Doors at any height
+`Config.DOORS_ANY_HEIGHT = true`: entry / exit doors can go on any row of a wall (their alcove has its own floor). Drag them, or Move › Up / Down. A raised exit is a puzzle goal; a raised entry drops you into the room. Set it to false for floor-only doors like Portal 2.
+
 ## Faith plates + funnels
 `FaithPlateServer` / `FaithPlateClient` are in the repo. A faith plate launch used to hold your sideways speed for the whole flight, so funnels couldn't catch you; now the flight ends the moment a funnel grabs you (`InFunnel`), so funnels stop you mid-air like in Portal 2.
 

@@ -1511,7 +1511,7 @@ slotValid = function(kind, hit, ignore)
 	local def = Config.ENTITY_TYPES[kind]
 	if not def then return false end
 	if not Config.MountOk(def, hit.f) then return false end
-	if def.needsFloor and E.air[key(hit.x, hit.y - 1, hit.z)] then return false end -- doors stand on the floor
+	if def.needsFloor and not Config.DOORS_ANY_HEIGHT and E.air[key(hit.x, hit.y - 1, hit.z)] then return false end -- doors stand on the floor
 	return not slotTaken(hit.x, hit.y, hit.z, hit.f, ignore)
 end
 
@@ -1611,7 +1611,7 @@ moveSurfaces = function(sign)
 		local o = OFFS[ne[5]]
 		local def = Config.ENTITY_TYPES[ne[1]]
 		local ok = newAir[key(ne[2], ne[3], ne[4])] and not newAir[key(ne[2] + o[1], ne[3] + o[2], ne[4] + o[3])]
-		if ok and def.needsFloor and newAir[key(ne[2], ne[3] - 1, ne[4])] then ok = false end
+		if ok and def.needsFloor and not Config.DOORS_ANY_HEIGHT and newAir[key(ne[2], ne[3] - 1, ne[4])] then ok = false end
 		if ok then
 			table.insert(newEnts, ne)
 		elseif def.mandatory then
@@ -1742,6 +1742,46 @@ rotateItem = function()
 	pushUndo()
 	for _, e in ipairs(list) do e[6] = ((e[6] or 0) + 1) % 4 end
 	rebuildEnts()
+	sfx("Click")
+end
+
+-- Move > Up / Down / Left / Right: the item goes one tile along its surface. On walls up is up and left / right is
+-- along the wall as you look at it; on floors / ceilings it's the way the camera faces.
+local function gridAxis(v)
+	local ax = { Vector3.xAxis, -Vector3.xAxis, Vector3.yAxis, -Vector3.yAxis, Vector3.zAxis, -Vector3.zAxis }
+	local best, bd
+	for _, a in ipairs(ax) do
+		local d = a:Dot(v)
+		if not bd or d > bd then best, bd = a, d end
+	end
+	return best
+end
+function X.moveItem(index, dir)
+	local e = E.ents[index]
+	if not e then return end
+	local n = DIRS[e[5]] -- out of the room, into the wall / floor
+	local camLook = cam.CFrame.LookVector
+	local up, right
+	if math.abs(n.Y) < 0.5 then
+		up = Vector3.yAxis
+		right = gridAxis(n:Cross(Vector3.yAxis)) -- facing the wall: this is your right
+	else
+		local flat = Vector3.new(camLook.X, 0, camLook.Z)
+		up = gridAxis(flat.Magnitude > 0.01 and flat or Vector3.zAxis)
+		right = gridAxis(up:Cross(Vector3.yAxis))
+	end
+	local step = (dir == "up" and up) or (dir == "down" and -up) or (dir == "right" and right) or -right
+	local hit = { kind = "face", x = e[2] + step.X, y = e[3] + step.Y, z = e[4] + step.Z, f = e[5] }
+	if not (isFace(hit.x, hit.y, hit.z, hit.f) and slotValid(e[1], hit, index)) then
+		flash("It can't go there (no wall there, or something's in the way).")
+		sfx("Error")
+		return
+	end
+	pushUndo()
+	e[2], e[3], e[4] = hit.x, hit.y, hit.z
+	E.sel = { [faceKey(e[2], e[3], e[4], e[5])] = true }
+	refreshItems(e[1])
+	refreshSelection()
 	sfx("Click")
 end
 
@@ -5109,6 +5149,15 @@ itemMenu = function(x, y)
 	if e[1] == "entry" or e[1] == "exit" then
 		table.insert(items, { text = "Swap entrance and exit", fn = function() X.swapDoors() end })
 	end
+	-- Move one tile at a time (handy on phones, and the way to raise / lower a door)
+	table.insert(items, { text = "Move", sub = function()
+		return {
+			{ text = "Up", icon = "glyph", glyph = "▲", fn = function() X.moveItem(index, "up") end },
+			{ text = "Down", icon = "glyph", glyph = "▼", fn = function() X.moveItem(index, "down") end },
+			{ text = "Left", icon = "glyph", glyph = "◀", fn = function() X.moveItem(index, "left") end },
+			{ text = "Right", icon = "glyph", glyph = "▶", fn = function() X.moveItem(index, "right") end },
+		}
+	end })
 	table.insert(items, { text = "Select all like this", fn = function() X.selectSameKind() end })
 	table.insert(items, { text = "Duplicate", shortcut = "Ctrl+D", disabled = def.mandatory == true, fn = duplicateItem })
 	table.insert(items, { text = "Delete item", shortcut = "Delete", disabled = def.mandatory == true, fn = deleteItem })
@@ -5157,6 +5206,93 @@ do
 			sfx("Click")
 			t[2]()
 		end)
+	end
+end
+
+-- ==========================================
+-- TOUCH: MOVE STICK (bottom left) + UP / DOWN buttons
+-- ==========================================
+-- Phones have no WASD: drag the stick to fly the camera around the chamber (where you look = forward),
+-- hold the arrows to go up / down. One finger on the room still orbits, two fingers pan and pinch to zoom.
+do
+	local SIZE = 190
+	local stickGui = new("Frame", { Name = "TouchStick", AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 70, 1, -110), Size = px(SIZE, SIZE),
+		BackgroundColor3 = rgb(20), BackgroundTransparency = 0.6, Active = true, Visible = false, ZIndex = 20, Parent = canvas })
+	new("UICorner", { CornerRadius = UDim.new(1, 0), Parent = stickGui })
+	new("UIStroke", { Color = rgb(235), Transparency = 0.4, Thickness = 2, Parent = stickGui })
+	local knob = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = px(78, 78),
+		BackgroundColor3 = rgb(240), BackgroundTransparency = 0.25, ZIndex = 21, Parent = stickGui })
+	new("UICorner", { CornerRadius = UDim.new(1, 0), Parent = knob })
+	local function arrowButton(y, text)
+		local b = new("TextButton", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 70 + SIZE + 24, 1, y), Size = px(84, 84),
+			BackgroundColor3 = rgb(20), BackgroundTransparency = 0.6, Text = text, TextSize = 40, FontFace = FONT.UI, TextColor3 = rgb(240),
+			AutoButtonColor = false, Active = true, Visible = false, ZIndex = 20, Parent = canvas })
+		new("UICorner", { CornerRadius = UDim.new(0, 14), Parent = b })
+		new("UIStroke", { Color = rgb(235), Transparency = 0.4, Thickness = 2, Parent = b })
+		return b
+	end
+	local upBtn, downBtn = arrowButton(-110 - 96, "▲"), arrowButton(-110, "▼")
+	local stickInput, vec, vert = nil, Vector2.zero, 0
+	local holdUp, holdDown = false, false
+	local function setKnob(v)
+		knob.Position = UDim2.new(0.5, v.X * SIZE * 0.36, 0.5, v.Y * SIZE * 0.36)
+	end
+	local function fromInput(input)
+		local c = stickGui.AbsolutePosition + stickGui.AbsoluteSize / 2
+		local p = Vector2.new(input.Position.X, input.Position.Y) + GuiService:GetGuiInset() -- (the editor GUI ignores the inset)
+		local d = (p - c) / (stickGui.AbsoluteSize.X * 0.36)
+		if d.Magnitude > 1 then d = d.Unit end
+		-- a small dead zone in the middle, then smooth up to full speed
+		local m = d.Magnitude
+		if m < 0.12 then return Vector2.zero end
+		return d.Unit * ((m - 0.12) / 0.88) ^ 1.4
+	end
+	stickGui.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			stickInput = input
+			vec = fromInput(input)
+			setKnob(vec)
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if stickInput and (input == stickInput or (input.UserInputType == Enum.UserInputType.MouseMovement and stickInput.UserInputType == Enum.UserInputType.MouseButton1)) then
+			vec = fromInput(input)
+			setKnob(vec)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input == stickInput or (stickInput and input.UserInputType == Enum.UserInputType.MouseButton1 and stickInput.UserInputType == Enum.UserInputType.MouseButton1) then
+			stickInput, vec = nil, Vector2.zero
+			setKnob(vec)
+		end
+	end)
+	for _, pair in ipairs({ { upBtn, 1 }, { downBtn, -1 } }) do
+		local b, dir = pair[1], pair[2]
+		b.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+				if dir > 0 then holdUp = true else holdDown = true end
+				b.BackgroundTransparency = 0.3
+			end
+		end)
+		b.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+				if dir > 0 then holdUp = false else holdDown = false end
+				b.BackgroundTransparency = 0.6
+			end
+		end)
+	end
+	-- forward = up on the stick
+	function X.touchMove()
+		vert = (holdUp and 1 or 0) - (holdDown and 1 or 0)
+		return Vector2.new(vec.X, -vec.Y), vert
+	end
+	function X.setStickVisible(on)
+		if stickGui.Visible == on then return end
+		stickGui.Visible, upBtn.Visible, downBtn.Visible = on, on, on
+		if not on then
+			stickInput, vec, holdUp, holdDown = nil, Vector2.zero, false, false
+			setKnob(vec)
+		end
 	end
 end
 
@@ -5571,6 +5707,7 @@ local function padButton(kc, gpe)
 end
 
 -- touch
+local TOUCH_DEADZONE = 14 -- pixels a finger has to move before it drags anything
 local touches = {}
 local function touchPos(input) return Vector2.new(input.Position.X, input.Position.Y) + GuiService:GetGuiInset() end
 local function touchCount()
@@ -5605,14 +5742,21 @@ local function touchChanged(input)
 			local d = p - old
 			E.pointer = p
 			E.touch.moved += d.Magnitude
-			if E.touchOrbit then orbit(d) else pointerMoved(d) end
+			if E.touchOrbit then
+				-- phone screens have far more pixels per finger move than a mouse: scale by the screen, then the setting
+				local vp = viewportSize()
+				orbit(d * (720 / math.max(vp.Y, 1)) * (0.4 + 1.2 * (tonumber(ES("edTouchSens", 0.5)) or 0.5)))
+			elseif E.touch.moved >= TOUCH_DEADZONE or not E.drag then
+				-- (a tap that wobbles a few pixels doesn't drag the item / selection to the next tile)
+				pointerMoved(d)
+			end
 		elseif touchCount() >= 2 then
 			local list = {}
 			for _, v in pairs(touches) do table.insert(list, v) end
 			local a, b = list[1], list[2]
 			local mid, dist = (a + b) / 2, (a - b).Magnitude
 			if E.pinch then
-				panCamera(mid - E.pinch.mid)
+				panCamera((mid - E.pinch.mid) * (720 / math.max(viewportSize().Y, 1)) * 1.5)
 				if dist > 1 and E.pinch.dist > 1 then
 					E.dist = math.clamp(E.dist * E.pinch.dist / dist, 25, 600)
 					E.zoomShow = os.clock() + 0.9
@@ -5783,6 +5927,13 @@ editLoop = function(dt)
 			if UserInputService:IsKeyDown(Enum.KeyCode.E) then move += Vector3.yAxis end
 			if UserInputService:IsKeyDown(Enum.KeyCode.Q) then move -= Vector3.yAxis end
 		end
+		-- touch: the on-screen stick (and its up / down buttons) move like WASD / E Q
+		if X.touchMove then
+			local jv, jy = X.touchMove()
+			if jv.Magnitude > 0.05 or jy ~= 0 then
+				move += fwd * jv.Y + right * jv.X + Vector3.yAxis * jy
+			end
+		end
 		E.target += move * dt * moveSpeed
 
 		-- controller: sticks, shoulder zoom
@@ -5871,6 +6022,7 @@ editLoop = function(dt)
 	padHint.Visible = E.pointerMode == "pad" and not inMenu
 	local tb = ES("edTouchBar", "Auto")
 	touchBar.Visible = tb == "Always" or (tb == "Auto" and (E.pointerMode == "touch" or (UserInputService.TouchEnabled and not UserInputService.MouseEnabled)))
+	if X.setStickVisible then X.setStickVisible(touchBar.Visible and not inMenu and not E.carry and not Pal.open and ES("edTouchStick", "Enabled") == "Enabled") end
 
 	-- zoom bar: longer the further out you are
 	local zt = math.clamp((E.cDist - 25) / (600 - 25), 0, 1)

@@ -735,7 +735,7 @@ local function cleanMap(data)
 				local o = Config.OFFS[f]
 				local wallOk = o and not air[Config.Key(x + o[1], y + o[2], z + o[3])]
 				local mountOk = Config.MountOk(def, f)
-				local floorOk = not def.needsFloor or not air[Config.Key(x, y - 1, z)]
+				local floorOk = not def.needsFloor or Config.DOORS_ANY_HEIGHT or not air[Config.Key(x, y - 1, z)]
 				if air[k] and wallOk and mountOk and floorOk and not taken[slot] and not (def.mandatory and uniques[e[1]]) then
 					taken[slot] = true
 					uniques[e[1]] = true

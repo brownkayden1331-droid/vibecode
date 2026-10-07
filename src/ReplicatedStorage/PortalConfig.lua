@@ -208,7 +208,10 @@ C.FAITH_PLATE_FLUSH = true -- faith plates sit IN the floor (top flush with the 
 --   MountRotation (Vector3, degrees)  extra rotation after placing
 --   MountOffset   (Vector3, studs)    extra offset in the surface's space (X right, Y up, -Z out of the surface)
 --   Seat          (bool, default true) false = don't snap the model's bounding box onto the surface
+C.DOORS_ANY_HEIGHT = true -- false = doors only on the bottom row of a wall (on the floor), like Portal 2
 C.ENTITY_TYPES = {
+	-- (doors stand on the bottom of their tile; with C.DOORS_ANY_HEIGHT they can sit on any row of a wall, their alcove
+	-- has its own floor - a raised exit is a puzzle goal, a raised entry drops you into the room)
 	entry        = { name = "Entry Door",             mount = "wall",    mandatory = true, needsFloor = true, recess = C.DOOR_RECESS, asset = C.DOOR_ASSET },
 	exit         = { name = "Exit Door",              mount = "wall",    mandatory = true, needsFloor = true, recess = C.DOOR_RECESS, asset = C.DOOR_ASSET },
 	button       = { name = "Weighted Floor Button",  mount = "floor",   asset = "Button" },
