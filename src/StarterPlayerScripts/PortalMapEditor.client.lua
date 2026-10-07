@@ -1168,7 +1168,12 @@ updateCull = function()
 end
 
 applyCamera = function()
-	cam.CFrame = CFrame.new(E.cTarget) * CFrame.Angles(0, E.cYaw, 0) * CFrame.Angles(E.cPitch, 0, 0) * CFrame.new(0, 0, E.cDist)
+	if E.cEye then
+		-- "Orbit in place": the camera turns where it stands (smoothed from its own position, so it never swings round)
+		cam.CFrame = CFrame.new(E.cEye) * CFrame.Angles(0, E.cYaw, 0) * CFrame.Angles(E.cPitch, 0, 0)
+	else
+		cam.CFrame = CFrame.new(E.cTarget) * CFrame.Angles(0, E.cYaw, 0) * CFrame.Angles(E.cPitch, 0, 0) * CFrame.new(0, 0, E.cDist)
+	end
 	local wcam = workspace.CurrentCamera
 	if wcam and E.active and not E.playtest then
 		wcam.CameraType = Enum.CameraType.Scriptable
@@ -3462,6 +3467,7 @@ local function frameCamera()
 	E.target = (mn + mx) / 2 * CELL + W
 	E.dist = math.max(((mx - mn) + Vector3.new(1, 1, 1)).Magnitude * CELL * 2.1, 120)
 	E.cYaw, E.cPitch, E.cDist, E.cTarget = E.yaw, E.pitch, E.dist, E.target
+	E.cEye = nil -- (snaps to the new spot)
 end
 
 loadData = function(data)
@@ -4701,11 +4707,21 @@ local function panCamera(d)
 end
 
 -- d in pixels (mouse delta); speed + invert from the editor settings
+-- where the camera is for a target / yaw / pitch / distance
+local function eyeOf(target, yaw, pitch, dist)
+	return (CFrame.new(target) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0) * CFrame.new(0, 0, dist)).Position
+end
+X.eyeOf = eyeOf
 orbit = function(d)
 	local s = 0.006 * curve(ES("edOrbitSens", 0.5))
 	local inv = ES("edInvertY", "Disabled") == "Enabled" and -1 or 1
+	local eye = eyeOf(E.target, E.yaw, E.pitch, E.dist)
 	E.yaw -= d.X * s
 	E.pitch = math.clamp(E.pitch - d.Y * s * inv, math.rad(-89), math.rad(89)) -- straight down to straight up
+	if ES("edOrbitInPlace", "Enabled") == "Enabled" then
+		-- turn on the spot: the point the camera looks at moves, the camera doesn't (no swinging round the middle)
+		E.target = eye - (eyeOf(Vector3.zero, E.yaw, E.pitch, E.dist))
+	end
 end
 
 zoomBy = function(amount) -- amount > 0 = in
@@ -5253,6 +5269,10 @@ editLoop = function(dt)
 	wcam.CameraType = Enum.CameraType.Scriptable
 	local fwd = Vector3.new(-math.sin(E.yaw), 0, -math.cos(E.yaw))
 	local right = Vector3.new(math.cos(E.yaw), 0, -math.sin(E.yaw))
+	if ES("edFlyCam", "Disabled") == "Enabled" then
+		-- Studio / Unity style: W flies where you're looking (up and down too)
+		fwd = (CFrame.Angles(0, E.yaw, 0) * CFrame.Angles(E.pitch, 0, 0)).LookVector
+	end
 	local moveSpeed = 30 + E.dist * 0.7
 	if canEdit() then
 		local move = Vector3.zero
@@ -5308,6 +5328,12 @@ editLoop = function(dt)
 	E.cPitch += (E.pitch - E.cPitch) * a
 	E.cDist += (E.dist - E.cDist) * a
 	E.cTarget = E.cTarget:Lerp(E.target, a)
+	if ES("edOrbitInPlace", "Enabled") == "Enabled" then
+		local eye = X.eyeOf(E.target, E.yaw, E.pitch, E.dist)
+		E.cEye = E.cEye and E.cEye:Lerp(eye, a) or X.eyeOf(E.cTarget, E.cYaw, E.cPitch, E.cDist)
+	else
+		E.cEye = nil
+	end
 	applyCamera()
 	updateCull()
 	staleBox.Visible = false -- the game view is always current now
@@ -5497,13 +5523,16 @@ do
 		for k, v in pairs(p) do c[k] = typeof(v) == "Color3" and v or Config.ParseHex(v) end
 		local function mix(a, b, t) return a:Lerp(b, t) end
 		local accent2 = c.accent2 or c.accent
+		local _, _, lum = c.bg:ToHSV()
+		local light = lum > 0.6
+		local hi = light and mix(c.bg, c.accent, 0.35) or c.accent -- hovered menu rows / tiles
 		return {
 			gui = guiMap({
 				OUT = c.out, STRIP_OPEN = mix(c.out, c.text, 0.1), STRIP_SHUT = mix(c.out, c.text, 0.05), GRIP = c.dim,
 				MENU_TEXT = c.dim, MENU_HI = c.text, ICON = c.dim, ICON_HI = c.text, ICON_ON = accent2,
-				PAL_BG = c.bg, PAL_EDGE = c.edge, TILE = mix(c.bg, c.text, 0.05), TILE_LINE = mix(c.bg, c.text, 0.15), TILE_HI = mix(c.bg, c.accent, 0.5),
+				PAL_BG = c.bg, PAL_EDGE = c.edge, TILE = mix(c.bg, c.text, 0.05), TILE_LINE = mix(c.bg, c.text, 0.15), TILE_HI = hi,
 				CTX_BG = c.bg, CTX_HEAD = c.head, CTX_ICONCOL = mix(c.bg, c.text, 0.07), CTX_EDGE = c.edge,
-				CTX_HI = mix(c.bg, c.accent, 0.6), CTX_TEXT = c.text, CTX_SHORT = c.dim, CTX_SEP = mix(c.bg, c.text, 0.25),
+				CTX_HI = hi, CTX_TEXT = c.text, CTX_SHORT = c.dim, CTX_SEP = mix(c.bg, c.text, 0.25),
 			}, {
 				{ rgb(250), c.field }, { rgb(255), c.field }, { rgb(200, 206, 203), c.button },
 				{ rgb(214, 218, 216), mix(c.button, c.bg, 0.3) }, { rgb(206, 208, 206), mix(c.bg, c.out, 0.5) }, { rgb(232), mix(c.button, c.text, 0.12) },
@@ -5515,27 +5544,38 @@ do
 				SHELL = mix(c.black, Color3.new(0, 0, 0), 0.4), BACKDROP = c.backdrop },
 		}
 	end
+	-- (colours taken from the real programs / games, kept flat and muted the way they are)
 	local THEMES = {
-		["SCP: CB"] = { out = "0b0b0b", bg = "1a1a1a", field = "0f0f0f", head = "000000", text = "e8e8e0", dim = "8f8f88", accent = "7a1010",
-			accent2 = "c42020", edge = "4a4a4a", button = "2b2b2b", white = "8d8d86", black = "3f3f3c", backdrop = "050505" },
-		Unity = { out = "191919", bg = "383838", field = "2a2a2a", head = "282828", text = "d2d2d2", dim = "999999", accent = "2c5d87",
-			accent2 = "4c9be8", edge = "1a1a1a", button = "4a4a4a", white = "c4c4c4", black = "4a4a4a", backdrop = "2e3238" },
-		Blender = { out = "1d1d1d", bg = "303030", field = "1d1d1d", head = "242424", text = "e6e6e6", dim = "9a9a9a", accent = "4772b3",
-			accent2 = "ed9e3a", edge = "161616", button = "545454", white = "a8a8a8", black = "474747", backdrop = "393939" },
-		["Roblox Studio"] = { out = "1f1f1f", bg = "2e2e2e", field = "252525", head = "1b1b1b", text = "cccccc", dim = "9e9e9e", accent = "0e64ad",
-			accent2 = "00a2ff", edge = "1a1a1a", button = "3c3c3c", white = "f2f3f3", black = "6a6a6a", backdrop = "7fa6d6" },
-		Terminal = { out = "000000", bg = "050a05", field = "000000", head = "0a140a", text = "33ff66", dim = "1f9a42", accent = "0f4a1f",
-			accent2 = "33ff66", edge = "1f9a42", button = "0d200f", white = "1f5a2c", black = "0c2412", backdrop = "000000" },
+		-- SCP - Containment Breach: black menus, grey boxes with light outlines, plain off-white text, concrete rooms
+		["SCP: CB"] = { out = "000000", bg = "0d0d0d", field = "000000", head = "000000", text = "c8c8c8", dim = "6e6e6e", accent = "3a3a3a",
+			accent2 = "b0b0b0", edge = "8a8a8a", button = "1c1c1c", white = "777770", black = "3a3a37", backdrop = "000000" },
+		-- Unity's dark editor skin
+		Unity = { out = "191919", bg = "383838", field = "2a2a2a", head = "282828", text = "c4c4c4", dim = "8f8f8f", accent = "2c5d87",
+			accent2 = "80b9ff", edge = "232323", button = "585858", white = "cbcbcb", black = "595959", backdrop = "313131" },
+		-- Blender's default theme
+		Blender = { out = "181818", bg = "303030", field = "1d1d1d", head = "232323", text = "e5e5e5", dim = "999999", accent = "4772b3",
+			accent2 = "ffa033", edge = "3d3d3d", button = "545454", white = "a3a3a3", black = "575757", backdrop = "393939" },
+		-- Roblox Studio's dark theme
+		["Roblox Studio"] = { out = "232323", bg = "2e2e2e", field = "252525", head = "353535", text = "cccccc", dim = "aaaaaa", accent = "0b5aaf",
+			accent2 = "35b5ff", edge = "222222", button = "3c3c3c", white = "e5e5e5", black = "616161", backdrop = "6d8bb0" },
+		-- an old green-screen terminal, dimmed the way the phosphor really looks
+		Terminal = { out = "050805", bg = "0c110c", field = "070a07", head = "000000", text = "8fd19e", dim = "4f7a58", accent = "1e3524",
+			accent2 = "8fd19e", edge = "2c4a33", button = "152018", white = "3d5c44", black = "182419", backdrop = "030503" },
+		-- Solarized Light (Ethan Schoonover's palette)
 		Solarized = { out = "073642", bg = "fdf6e3", field = "eee8d5", head = "073642", text = "073642", dim = "93a1a1", accent = "268bd2",
 			accent2 = "b58900", edge = "93a1a1", button = "e4ddc8", white = "fdf6e3", black = "586e75", backdrop = "002b36" },
-		Synthwave = { out = "120d1a", bg = "241b2f", field = "1a1325", head = "0d0913", text = "f8f8f2", dim = "b6a0d0", accent = "ff2e97",
-			accent2 = "00e5ff", edge = "3b2a50", button = "3b2a50", white = "e8d6ff", black = "2e1f45", backdrop = "120d1a" },
-		["Aperture '70s"] = { out = "1e150f", bg = "3a2a1e", field = "2a1e15", head = "1e150f", text = "f1deb4", dim = "b89b70", accent = "d9822b",
-			accent2 = "f2b33d", edge = "5a4230", button = "5a4230", white = "d6c7a1", black = "5b4a3a", backdrop = "24180f" },
-		["Aperture Clean"] = { out = "2b2b2b", bg = "f4f4f4", field = "ffffff", head = "2b2b2b", text = "1e1e1e", dim = "7a7a7a", accent = "ff9a00",
-			accent2 = "27a7d8", edge = "2b2b2b", button = "dcdcdc", white = "ffffff", black = "3b3f40", backdrop = "9aa3a6" },
-		Midnight = { out = "0b1020", bg = "141b2d", field = "0e1424", head = "0a0f1c", text = "dfe6f5", dim = "8a96b3", accent = "3d5afe",
-			accent2 = "7c9cff", edge = "26304a", button = "26304a", white = "b8c2d9", black = "2a3350", backdrop = "080c18" },
+		-- SynthWave '84 (the VS Code theme), without the glow
+		Synthwave = { out = "171520", bg = "262335", field = "1e1a2e", head = "171520", text = "e0dfe8", dim = "848bbd", accent = "463465",
+			accent2 = "ff7edb", edge = "34294f", button = "34294f", white = "b6b1cc", black = "2a2139", backdrop = "171520" },
+		-- 1970s Aperture: wood panels, cream paper, worn orange
+		["Aperture '70s"] = { out = "241a12", bg = "3b2c20", field = "2c2118", head = "1f1610", text = "e6d8b8", dim = "a38f6e", accent = "8a5a2b",
+			accent2 = "d08a3c", edge = "57422f", button = "4d3a29", white = "cbbd9b", black = "564636", backdrop = "1c140e" },
+		-- Portal 2's own menus: white panels, grey text, Aperture orange
+		["Aperture Clean"] = { out = "3f4446", bg = "f2f2f2", field = "ffffff", head = "3f4446", text = "2b2f31", dim = "7d8285", accent = "f2a33a",
+			accent2 = "3d9bd1", edge = "b9bdbf", button = "dfe1e2", white = "ffffff", black = "3b3f40", backdrop = "a4abad" },
+		-- GitHub's "dark dimmed"
+		Midnight = { out = "1c2128", bg = "22272e", field = "1c2128", head = "2d333b", text = "adbac7", dim = "768390", accent = "316dca",
+			accent2 = "539bf5", edge = "444c56", button = "373e47", white = "adbac7", black = "2d333b", backdrop = "1c2128" },
 	}
 	X.THEMES = THEMES
 	local THEME_ORDER = { "SCP: CB", "Unity", "Blender", "Roblox Studio", "Terminal", "Solarized", "Synthwave", "Aperture '70s", "Aperture Clean", "Midnight" }
@@ -5572,9 +5612,14 @@ do
 	local applying = false
 
 	-- obj's Classic colour for prop: what it was the first time we saw it (or since the code last set it itself)
+	local WHITE_HEX = "ffffff"
 	local function styleProp(obj, prop)
+		-- 3D previews and pictures keep their own colours: a ViewportFrame's ImageColor3 tints the whole render (a dark
+		-- style made every item preview black), and a white ImageColor3 is a picture shown as it is
+		if prop == "ImageColor3" and obj:IsA("ViewportFrame") then return end
 		local ok, v = pcall(function() return obj[prop] end)
 		if not ok or typeof(v) ~= "Color3" then return end
+		if prop == "ImageColor3" and hex(obj:GetAttribute("StyleBase_" .. prop) or v) == WHITE_HEX then return end
 		local base = obj:GetAttribute("StyleBase_" .. prop)
 		if not base then
 			base = v

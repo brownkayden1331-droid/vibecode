@@ -64,8 +64,11 @@ TestElementsServer now drops cubes into the chamber's slot map (`workspace.Porta
 Chips can drive more items: `launch plate1` (aerial faith plates throw whoever stands on them, and cubes, along their arc), `forward` / `backward` / `speed <funnel> <n>`, `color <light> <name | #hex>`, and `enable` / `disable` on faith plates (a switched-off plate gets `Enabled = false` and its parts stop touching — if your FaithPlateServer uses something other than Touched, have it skip plates with `Enabled == false`).
 More code: `if ... then ... else ...`, `wait until <a> <cmp> <b>`, `calc <var> <a> <+ - * / % min max> <b>`, functions (`when call <name>` / `call <name>`, across chips), built-in values `time` and `players`.
 
+## Editor camera
+Options › Editor: **Orbit In Place** (on by default) turns the camera where it stands instead of swinging it round a point in the middle of the chamber. **Fly Camera** (off by default) makes W / S fly where you look, up and down too, like Studio or Unity (A / D strafe, E / Q straight up / down).
+
 ## Editor styles + custom colours
-Styles: Classic, Dark, Blueprint, High Contrast, **SCP: CB**, **Unity**, **Blender**, Roblox Studio, Terminal, Solarized, Synthwave, Aperture '70s, Aperture Clean, Midnight and **Custom** (File › Editor style › Make a custom style… — 12 colours, live preview, saved in `Setting_edCustomTheme`). New styles are 12 colours each in `THEMES` in PortalMapEditor.
+Styles: Classic, Dark, Blueprint, High Contrast, **SCP: CB**, **Unity**, **Blender**, Roblox Studio, Terminal, Solarized, Synthwave, Aperture '70s, Aperture Clean, Midnight and **Custom** (File › Editor style › Make a custom style… — 12 colours, live preview, saved in `Setting_edCustomTheme`). New styles are 12 colours each in `THEMES` in PortalMapEditor, taken from the real programs. Item previews (3D viewports) and pictures keep their own colours in every style.
 Intermediate / Advanced: **Tile color › Custom colour…** (and the Light's colour menu) opens a colour picker; tiles store `"#rrggbb"`, the last 8 are kept as recent colours.
 
 ## Duplicate, export, import, Studio
