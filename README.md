@@ -103,6 +103,7 @@ A Python 3 script for your PC (standard library only) that turns a Portal 2 map 
 ```
 python tools/p2_to_roblox.py mp_coop_lobby_3.vmf -o CoopHub.rbxmx --name CoopHub
 ```
+**No Python? Use `tools/p2_to_roblox.exe`** (built on Windows by GitHub Actions every time the converter changes). Double-click it and pick the map, or drag a `.vmf` / `.bsp` onto it; the `.rbxmx` lands next to the map. It also takes the same options in a command prompt (`p2_to_roblox.exe map.vmf --name CoopHub`). Put an edited `p2_materials.json` next to the .exe to override the built-in one. If something goes wrong the window stays open with the error and saves `p2_to_roblox_crash.txt`; brushes / entities that can't be converted are left out and listed instead of stopping the map.
 - **Input**: `.vmf` (best; get it from a `.bsp` with BSPSource) or a `.bsp` directly (experimental).
 - **Geometry**: boxes (also rotated) become Parts, right-angle ramps WedgeParts, every other shape thin wedge-pair triangles. Sides with a different texture than the rest of the box get a thin plate. Tool textures: nodraw sides aren't drawn, clips / invisible become invisible walls, triggers / skybox / hints are left out.
 - **Materials**: `tools/p2_materials.json` maps Portal 2 texture paths (regular expressions) to your MaterialService variants (White 4.5, Metal 9, DevG, bts1concrete...) and says which are portalable. The script prints every texture it had no rule for - add rules and run it again.
