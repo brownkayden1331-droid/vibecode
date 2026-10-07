@@ -3391,7 +3391,7 @@ end
 
 local function buildAndPlay(demoMode)
 	if not E.active or E.building then return end
-	E.demoMode = (demoMode == "watch" or demoMode == "with") and demoMode or nil
+	E.demoMode = (demoMode == "watch" or demoMode == "with" or demoMode == "auto") and demoMode or nil
 	E.building = true
 	E.cancel = false
 	closeMenus()
@@ -3498,7 +3498,12 @@ loadData = function(data)
 		if type(c) == "table" and type(c.src) == "string" then table.insert(E.chips, { name = tostring(c.name or "Chip"), src = c.src }) end
 	end
 	E.coop = data.coop == true
-	E.demo = (type(data.demo) == "table" and type(data.demo.tracks) == "table" and #data.demo.tracks > 0) and data.demo or nil
+	E.demo = nil
+	if type(data.demo) == "table" then
+		local tracks = type(data.demo.tracks) == "table" and data.demo.tracks or {}
+		local learn = type(data.demo.learn) == "table" and data.demo.learn or {}
+		if #tracks > 0 or #learn > 0 then E.demo = { tracks = tracks, learn = learn } end
+	end
 	E.audio = {}
 	for _, au in ipairs(type(data.audio) == "table" and data.audio or {}) do
 		if type(au) == "table" and type(au.n) == "string" and tonumber(au.id) then table.insert(E.audio, { n = au.n, id = math.floor(tonumber(au.id)) }) end
@@ -4024,7 +4029,7 @@ function X.demoMenu()
 			for i, t in ipairs(list) do
 				t.color = (E.coop or #list > 1) and (i == 1 and "Blue" or "Orange") or nil
 			end
-			E.demo = { tracks = list }
+			E.demo = { tracks = list, learn = E.demo and E.demo.learn or {} }
 			E.dirty, E.stale = true, true
 			E.rev += 1
 			local done = new[1] and new[1].done
@@ -4033,21 +4038,50 @@ function X.demoMenu()
 			sfx("Click")
 		end)
 	end
+	local learn = E.demo and E.demo.learn or {}
+	-- Teach: your last run goes into the NPC's training runs (kept smaller: every 3rd frame), up to 6
+	local function teach()
+		task.spawn(function()
+			local ok, run = netCall("DemoTake")
+			if not ok then flash(run) sfx("Error") return end
+			local list = table.clone(learn)
+			for _, t in ipairs(run) do
+				local frames = {}
+				for i = 1, #t.frames, 3 do table.insert(frames, t.frames[i]) end
+				table.insert(list, { t0 = 0, dt = (t.dt or 0.1) * 3, done = t.done, frames = frames, portals = t.portals })
+			end
+			while #list > 6 do table.remove(list, 1) end -- the oldest go first
+			E.demo = { tracks = E.demo and E.demo.tracks or {}, learn = list }
+			E.dirty, E.stale = true, true
+			E.rev += 1
+			flash(("The NPC now learns from %d run%s of this chamber."):format(#list + n, #list + n == 1 and "" or "s"))
+			sfx("Click")
+		end)
+	end
 	return {
-		{ text = "Watch the NPC" .. (n > 1 and "s" or "") .. " play it", disabled = n == 0, fn = function() task.spawn(buildAndPlay, "watch") end },
+		{ text = ("Watch the NPC play on its own (learned from %d run%s)"):format(n + #learn, n + #learn == 1 and "" or "s"),
+			fn = function() task.spawn(buildAndPlay, "auto") end },
+		{ text = "Teach the NPC with my last run", sep = true, fn = teach },
+		{ text = "Watch the NPC" .. (n > 1 and "s" or "") .. " replay the demo", disabled = n == 0, fn = function() task.spawn(buildAndPlay, "watch") end },
 		{ text = "Play alongside the NPC (record your part)", disabled = n ~= 1, sep = true, fn = function()
 			flash("The NPC plays its part while yours is recorded. Then: NPC demo > Add my last run as the partner.")
 			task.spawn(buildAndPlay, "with")
 		end },
 		{ text = "Keep my last run as the demo", fn = function() keep(false) end },
 		{ text = "Add my last run as the partner", disabled = n ~= 1, sep = true, fn = function() keep(true) end },
+		{ text = ("Forget what the NPC learned (%d run%s)"):format(#learn, #learn == 1 and "" or "s"), disabled = #learn == 0, fn = function()
+			E.demo = n > 0 and { tracks = E.demo.tracks, learn = {} } or nil
+			E.dirty, E.stale = true, true
+			E.rev += 1
+			flash("The NPC forgot its training runs.")
+		end },
 		{ text = ("Delete the demo (%d run%s)"):format(n, n == 1 and "" or "s"), disabled = n == 0, fn = function()
-			E.demo = nil
+			E.demo = #learn > 0 and { tracks = {}, learn = learn } or nil
 			E.dirty, E.stale = true, true
 			E.rev += 1
 			flash("NPC demo deleted.")
 		end },
-		{ text = "How it works: you play, the NPC repeats it", disabled = true, fn = function() end },
+		{ text = "Replays repeat a run; on its own the NPC plans + walks itself", disabled = true, fn = function() end },
 	}
 end
 

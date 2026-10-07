@@ -670,37 +670,45 @@ local function cleanMap(data)
 			end
 		end
 	end
-	-- NPC demo (ChamberBotServer): recorded runs, numbers only
-	if type(data.demo) == "table" and type(data.demo.tracks) == "table" then
-		local tracks = {}
-		for i, t in ipairs(data.demo.tracks) do
-			if i > 2 then break end
-			if type(t) == "table" and type(t.frames) == "table" then
-				local frames, portals = {}, {}
-				for j, f in ipairs(t.frames) do
-					if j > 2400 then break end
-					if type(f) == "table" and tonumber(f[1]) and tonumber(f[2]) and tonumber(f[3]) then
-						table.insert(frames, { tonumber(f[1]), tonumber(f[2]), tonumber(f[3]), tonumber(f[4]) or 0, math.floor(tonumber(f[5]) or 0) % 2 })
-					end
-				end
-				for j, ev in ipairs(type(t.portals) == "table" and t.portals or {}) do
-					if j > 300 then break end
-					if type(ev) == "table" and tonumber(ev[1]) and (ev[2] == "Blue" or ev[2] == "Orange") then
-						local clean = { tonumber(ev[1]), ev[2] }
-						if tonumber(ev[3]) then
-							for k = 3, 13 do clean[k] = tonumber(ev[k]) or 0 end
-						end
-						table.insert(portals, clean)
-					end
-				end
-				if #frames > 1 then
-					table.insert(tracks, { color = (t.color == "Blue" or t.color == "Orange") and t.color or nil,
-						t0 = math.clamp(tonumber(t.t0) or 0, 0, 30), dt = math.clamp(tonumber(t.dt) or 0.1, 0.05, 1),
-						done = t.done == true, frames = frames, portals = portals })
+	-- NPC demo (ChamberBotServer): recorded runs, numbers only. tracks = the runs NPCs replay (up to 2),
+	-- learn = extra runs the autonomous NPC learns from (up to 6, File > NPC demo > Teach the NPC)
+	if type(data.demo) == "table" then
+		local function cleanTrack(t, maxFrames)
+			if type(t) ~= "table" or type(t.frames) ~= "table" then return nil end
+			local frames, portals = {}, {}
+			for j2, f in ipairs(t.frames) do
+				if j2 > maxFrames then break end
+				if type(f) == "table" and tonumber(f[1]) and tonumber(f[2]) and tonumber(f[3]) then
+					table.insert(frames, { tonumber(f[1]), tonumber(f[2]), tonumber(f[3]), tonumber(f[4]) or 0, math.floor(tonumber(f[5]) or 0) % 2 })
 				end
 			end
+			for j2, ev in ipairs(type(t.portals) == "table" and t.portals or {}) do
+				if j2 > 300 then break end
+				if type(ev) == "table" and tonumber(ev[1]) and (ev[2] == "Blue" or ev[2] == "Orange") then
+					local c = { tonumber(ev[1]), ev[2] }
+					if tonumber(ev[3]) then
+						for k = 3, 13 do c[k] = tonumber(ev[k]) or 0 end
+					end
+					table.insert(portals, c)
+				end
+			end
+			if #frames < 2 then return nil end
+			return { color = (t.color == "Blue" or t.color == "Orange") and t.color or nil,
+				t0 = math.clamp(tonumber(t.t0) or 0, 0, 30), dt = math.clamp(tonumber(t.dt) or 0.1, 0.05, 1),
+				done = t.done == true, frames = frames, portals = portals }
 		end
-		if #tracks > 0 then out.demo = { tracks = tracks } end
+		local tracks, learn = {}, {}
+		for i2, t in ipairs(type(data.demo.tracks) == "table" and data.demo.tracks or {}) do
+			if i2 > 2 then break end
+			local c = cleanTrack(t, 2400)
+			if c then table.insert(tracks, c) end
+		end
+		for i2, t in ipairs(type(data.demo.learn) == "table" and data.demo.learn or {}) do
+			if i2 > 6 then break end
+			local c = cleanTrack(t, 900)
+			if c then table.insert(learn, c) end
+		end
+		if #tracks > 0 or #learn > 0 then out.demo = { tracks = tracks, learn = learn } end
 	end
 	-- chips (My Chips tab): kept as their source text, run by wireLinks
 	if type(data.chips) == "table" then
@@ -2549,8 +2557,12 @@ function Actions.EditorTest(player, arg)
 		local slot = slotOf[player]
 		if (arg.demo == "watch" or arg.demo == "with") and clean.demo then
 			bots.Play(clean.demo, Config.ChamberOrigin(slot), activeFolder(player))
+		elseif arg.demo == "auto" and bots.AutoPlay then
+			-- the NPC plays it on its own (two in co-op chambers / co-op demos), learning from every taught run
+			local two = clean.coop or (clean.demo and #clean.demo.tracks >= 2)
+			bots.AutoPlay(clean, Config.ChamberOrigin(slot), activeFolder(player), cf, two and 2 or 1)
 		end
-		if arg.demo ~= "watch" then bots.StartRecording(player, slot, Config.ChamberOrigin(slot)) end
+		if arg.demo ~= "watch" and arg.demo ~= "auto" then bots.StartRecording(player, slot, Config.ChamberOrigin(slot)) end
 	end
 	return true
 end
