@@ -1748,7 +1748,7 @@ end
 -- L / File > Show connections: lines from every source to what it drives (selected items always show theirs)
 function X.toggleLinks()
 	E.showLinks = not E.showLinks
-	flash(E.showLinks and "Showing every connection (L to hide)." or "Connections hidden (selected items still show theirs).")
+	flash(E.showLinks and "Showing every connection (L to hide)." or "Connections hidden (L to show them again).")
 	sfx("Click")
 end
 
@@ -5837,15 +5837,17 @@ editLoop = function(dt)
 	local zk = 1 - math.exp(-10 * dt)
 	zoomBar.BackgroundTransparency += ((now < E.zoomShow and 0 or 1) - zoomBar.BackgroundTransparency) * zk
 
-	-- the connection map: every connection with L / File > Show connections, else the selected items' ones
+	-- the connection map: every connection with L / File > Show connections; the selected items' ones too when
+	-- Options > Editor > Show Connections Of Selected is on (off by default)
 	do
 		local list = {}
-		if E.active and not E.gameView and not inMenu then
+		local onSelect = ES("edLinkOnSelect", "Disabled") == "Enabled"
+		if E.active and not E.gameView and not inMenu and (E.showLinks or onSelect) then
 			local selIds = {}
 			for _, i in ipairs(X.selection()) do if E.ents[i] then selIds[E.ents[i][8]] = true end end
 			for _, l in ipairs(E.links) do
 				local mine = selIds[l[1]] or selIds[l[2]]
-				if E.showLinks or mine then
+				if E.showLinks or (mine and onSelect) then
 					local _, ea = entById(l[1])
 					local _, eb = entById(l[2])
 					if ea and eb then
