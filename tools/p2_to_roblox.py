@@ -578,9 +578,32 @@ def convert_brush(w, brush, xf, mats, opts, stats):
                     stats["wedges"] += 1
                     return
 
+    # ----- a prism (arches, pipes, angled walls: two parallel caps, sides square to them): solid wedges -----
+    # every triangle of a cap, pushed through the brush, is a triangular prism = exactly two WedgeParts
+    solid_mat = dominant if not invisible else {"base": "SmoothPlastic", "portalable": False, "transparency": 1.0}
+    for i, (n0, _t0, vs0, _a0, _m0) in enumerate(rfaces):
+        k = len(vs0)
+        if len(rfaces) != k + 2:
+            continue
+        caps = [j for j, f in enumerate(rfaces) if j != i and dot(f[0], n0) < -0.9999 and len(f[2]) == k]
+        if not caps:
+            continue
+        sides = [f for j, f in enumerate(rfaces) if j != i and j != caps[0]]
+        if not all(len(f[2]) == 4 and abs(dot(f[0], n0)) < 1e-3 for f in sides):
+            continue
+        depth = abs(dot(sub(rfaces[caps[0]][2][0], vs0[0]), n0))
+        if depth < 0.02:
+            break
+        made = 0
+        for t in range(1, k - 1):
+            made += thin_triangle(w, vs0[0], vs0[t], vs0[t + 1], n0, solid_mat, dom_tex, depth, collide)
+        stats["prisms"] += 1
+        stats["triangles"] += made
+        return
+
     # ----- anything else: every drawn side as triangles (two thin wedges each) -----
     for n, tex, vs, area, m in (visible if not invisible else rfaces):
-        mm = m if not invisible else {"base": "SmoothPlastic", "portalable": False}
+        mm = m if not invisible else {"base": "SmoothPlastic", "portalable": False, "transparency": 1.0}
         for i in range(1, len(vs) - 1):
             stats["triangles"] += thin_triangle(w, vs[0], vs[i], vs[i + 1], n, mm, tex, opts.thickness, collide)
     stats["shapes"] += 1
@@ -932,6 +955,7 @@ local function placeModel(p)
 			missingModels[name] = true
 			missingCount += 1
 		end
+		p.Transparency = 1 -- the purple box only shows in Studio, not in the game
 		return nil
 	end
 	local c = template:Clone()
@@ -994,7 +1018,8 @@ for _, p in ipairs(map:GetDescendants()) do
 				p:Destroy()
 				if id then entInst[id] = c end
 			else
-				warn("[P2MapSetup] no model '" .. tostring(templateName) .. "' in ReplicatedStorage.PortalAssets - left a placeholder")
+				warn("[P2MapSetup] no model '" .. tostring(templateName) .. "' in ReplicatedStorage.PortalAssets - its placeholder is hidden")
+				p.Transparency = 1
 				if id then entInst[id] = p end
 			end
 		elseif id then
@@ -1004,7 +1029,7 @@ for _, p in ipairs(map:GetDescendants()) do
 end
 
 if missingCount > 0 then
-	warn("[P2MapSetup] " .. missingCount .. " ripped models aren't in ReplicatedStorage.P2Models yet (their purple boxes stay)."
+	warn("[P2MapSetup] " .. missingCount .. " ripped models aren't in ReplicatedStorage.P2Models yet (their purple boxes are hidden in game)."
 		.. " Import the .glb files the converter wrote (<map>_models) with Import 3D and put them in that folder.")
 end
 
@@ -1384,7 +1409,7 @@ def main(argv=None):
     out_path = opts.output or os.path.splitext(opts.input)[0] + ".rbxmx"
     stats = {"boxes": 0, "wedges": 0, "shapes": 0, "triangles": 0, "plates": 0, "skipped": 0, "degenerate": 0,
              "spawns": 0, "placeholders": 0, "lights": 0, "triggers": 0, "props_skipped": {}, "errors": [],
-             "props": [], "ripped": 0, "rip_failed": 0}
+             "props": [], "ripped": 0, "rip_failed": 0, "prisms": 0}
 
     w = Writer()
     w.out.write('<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
@@ -1424,8 +1449,8 @@ def main(argv=None):
         f.write(w.out.getvalue())
 
     print("Wrote", out_path)
-    print("  %d boxes, %d ramps, %d other shapes (%d triangle wedges), %d side plates" %
-          (stats["boxes"], stats["wedges"], stats["shapes"], stats["triangles"], stats["plates"]))
+    print("  %d boxes, %d ramps, %d solid prisms, %d other shapes (%d wedges for prisms + shapes), %d side plates" %
+          (stats["boxes"], stats["wedges"], stats["prisms"], stats["shapes"], stats["triangles"], stats["plates"]))
     print("  %d spawns, %d test element placeholders, %d triggers, %d lights; %d tool / trigger brushes skipped, %d broken brushes" %
           (stats["spawns"], stats["placeholders"], stats["triggers"], stats["lights"], stats["skipped"], stats["degenerate"]))
     print("  %d entities with names / connections kept for the map's I/O" % len(io_records))
