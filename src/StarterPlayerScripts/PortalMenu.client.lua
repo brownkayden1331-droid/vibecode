@@ -2858,7 +2858,9 @@ end
 
 local function inviteFriend(f)
 	if f.status == "In This Server" then
-		local ok, err = Net.call("CoopInvite", f.id)
+		-- invited from a Workshop co-op chamber: you both go straight into it
+		local chamber = S.inviteChamber
+		local ok, err = Net.call("CoopInvite", chamber and { userId = f.id, chamber = chamber.id } or f.id)
 		openPanel(function()
 			return Panels.dialog("Invite Sent", ok and (f.name .. " has been invited. Waiting for them to accept...") or tostring(err), nil, 2)
 		end)
@@ -2922,16 +2924,90 @@ function Panels.PlayOnline()
 	}, 2)
 end
 
-function Panels.Coop()
-	return buildPanel({
-		title = "CO-OP MODE",
-		rows = {
-			{ kind = "button", text = "ONLINE: INVITE A FRIEND", action = function() openPanel(Panels.SearchFriends) end },
-			{ kind = "button", text = "ONLINE: QUICK MATCH", action = function() openPanel(Panels.PlayOnline) end },
-			{ kind = "button", text = "CHALLENGE MODE CO-OP", action = function() openPanel(function() return Panels.Leaderboards(true, 1) end) end },
-			{ kind = "button", text = "ROBOT ENRICHMENT", action = function() openEnrichment() end },
+-- a Workshop co-op chamber: with your partner, a friend, a stranger, or alone
+function Panels.CoopChamber(m)
+	local partnerId = player:GetAttribute("CoopPartner")
+	local partner = partnerId and Players:GetPlayerByUserId(partnerId)
+	local rows = {}
+	if partner then
+		table.insert(rows, { kind = "button", text = "PLAY WITH " .. string.upper(partner.DisplayName), action = function()
+			startGame("CommunityCoop", m.id)
+		end })
+	end
+	table.insert(rows, { kind = "button", text = "INVITE A FRIEND", action = function()
+		S.inviteChamber = { id = m.id, title = m.title }
+		openPanel(Panels.SearchFriends)
+	end })
+	table.insert(rows, { kind = "button", text = "QUICK MATCH", action = function()
+		task.spawn(Net.call, "CoopQuickMatch", { chamber = m.id })
+		openPanel(Panels.Matchmaking)
+	end })
+	table.insert(rows, { kind = "button", text = "PLAY ALONE", action = function() startGame("CommunitySingle", m.id) end })
+	return buildPanel({ title = string.upper(m.title or "CO-OP CHAMBER"), rows = rows })
+end
+
+-- after pairing up: what to play (both vote; different votes = a coin flip)
+local VOTE_SOURCES = { "Built-in chambers", "Custom chambers (Workshop)" }
+local VOTE_MODES = { "Normal", "Speedrun" }
+function Panels.CoopVote()
+	local v = S.vote or {}
+	S.vote = v
+	v.source = v.source or VOTE_SOURCES[1]
+	v.mode = v.mode or VOTE_MODES[1]
+	local partnerText
+	if v.partnerPick then
+		partnerText = ("%s voted: %s, %s"):format(v.partner or "Your partner", v.partnerPick.source == "builtin" and VOTE_SOURCES[1] or VOTE_SOURCES[2],
+			v.partnerPick.mode == "speedrun" and "Speedrun" or "Normal")
+	else
+		partnerText = (v.partner or "Your partner") .. " is still voting..."
+	end
+	local rows = {
+		{ kind = "choice", text = "Chambers", options = VOTE_SOURCES, value = function() return v.source end, onChange = function(x) v.source = x end },
+		{ kind = "choice", text = "Mode", options = VOTE_MODES, value = function() return v.mode end, onChange = function(x) v.mode = x end },
+		{ kind = "text", text = ("Built-in: %d chambers   ·   Custom: the %d top rated co-op chambers"):format(v.builtin or 0, v.custom or 0), color = COL.INFO_TEXT },
+		{ kind = "text", text = v.mine and "You voted. " .. partnerText or partnerText, color = COL.INFO_TEXT },
+		{ kind = "text", text = "Normal: play them all.   Speedrun: one clock for the whole list - beat your best.", color = COL.INFO_TEXT },
+	}
+	local panel
+	panel = buildPanel({
+		title = "CO-OP: WHAT DO WE PLAY?", rows = rows,
+		buttons = {
+			{ v.mine and "CHANGE VOTE" or "VOTE", function()
+				v.mine = true
+				local source = v.source == VOTE_SOURCES[1] and "builtin" or "custom"
+				local modeV = v.mode == "Speedrun" and "speedrun" or "normal"
+				task.spawn(function()
+					local ok, err = Net.call("CoopVote", { source = source, mode = modeV })
+					if not ok then toast(tostring(err), "Co-op", "info") end
+				end)
+				replaceTop(Panels.CoopVote)
+			end },
+			{ "JUST HANG OUT", function() S.vote = nil goBack() end, true },
 		},
 	})
+	panel.isCoopVote = true -- (a partner's vote refreshes it)
+	return panel
+end
+
+function Panels.Coop()
+	local rows = {}
+	if player:GetAttribute("CoopPartner") ~= nil then
+		-- already paired up: vote on Built-in / Custom chambers, Normal / Speedrun
+		table.insert(rows, { kind = "button", text = "PICK WHAT TO PLAY (VOTE)", action = function()
+			task.spawn(function()
+				local ok, err = Net.call("CoopVoteOpen")
+				if not ok then toast(tostring(err), "Co-op", "info") end
+			end)
+		end })
+	end
+	for _, r in ipairs({
+			{ kind = "button", text = "ONLINE: INVITE A FRIEND", action = function() S.inviteChamber = nil openPanel(Panels.SearchFriends) end },
+			{ kind = "button", text = "ONLINE: QUICK MATCH", action = function() openPanel(Panels.PlayOnline) end },
+			{ kind = "button", text = "WORKSHOP CO-OP CHAMBERS", action = function() openPanel(function() return Panels.Chambers(true) end) end },
+			{ kind = "button", text = "CHALLENGE MODE CO-OP", action = function() openPanel(function() return Panels.Leaderboards(true, 1) end) end },
+			{ kind = "button", text = "ROBOT ENRICHMENT", action = function() openEnrichment() end },
+		}) do table.insert(rows, r) end
+	return buildPanel({ title = "CO-OP MODE", rows = rows })
 end
 
 -- ----- leaderboards (challenge mode) -----
@@ -3124,7 +3200,9 @@ function Panels.Chambers(coop, srcIdx)
 	for _, s in ipairs(CFG.SOURCES) do table.insert(labels, s[1]) end
 	local rows = {
 		{ kind = "button", glyph = "play", text = "Quick Play", h = 71, action = function()
-			if list[1] then startGame(action, list[math.random(#list)].id) else uiSound(CFG.SOUND_INVALID) end
+			if not list[1] then uiSound(CFG.SOUND_INVALID) return end
+			local m = list[math.random(#list)]
+			if coop then openPanel(function() return Panels.CoopChamber(m) end) else startGame(action, m.id) end
 		end },
 		{ kind = "cycler", text = src[1], h = 56, options = labels, value = function() return src[1] end,
 		onChange = function(v)
@@ -3133,7 +3211,10 @@ function Panels.Chambers(coop, srcIdx)
 		end },
 	}
 	for _, m in ipairs(list) do
-		table.insert(rows, { kind = "list", text = m.title or "Untitled", meta = m, action = function() startGame(action, m.id) end })
+		table.insert(rows, { kind = "list", text = m.title or "Untitled", meta = m, action = function()
+			-- co-op chambers: invite a friend / quick match / your partner / alone
+			if coop then openPanel(function() return Panels.CoopChamber(m) end) else startGame(action, m.id) end
+		end })
 	end
 	if #list == 0 then
 		table.insert(rows, { kind = "text", text = ok and "No test chambers here yet." or "Couldn't reach the Workshop.", color = COL.DARK_TEXT })
@@ -3901,7 +3982,9 @@ function Push.Autosaved()
 end
 function Push.CoopInvite(d)
 	showAnywhere(function()
-		return Panels.dialog("Co-op Invite", d.name .. " wants you to join them in co-op. Play together?", {
+		local text = d.chamberTitle and (d.name .. " wants you to play the co-op chamber \"" .. d.chamberTitle .. "\" with them. Play together?")
+			or (d.name .. " wants you to join them in co-op. Play together?")
+		return Panels.dialog("Co-op Invite", text, {
 			{ "ACCEPT", function()
 				goBack()
 				task.spawn(Net.call, "CoopRespond", { from = d.from, accept = true })
@@ -3954,7 +4037,21 @@ end
 function Push.ChamberComplete(d)
 	if d.editor then return end -- the editor shows its own message
 	toast(("Solved in %s."):format(fmtTime(d.time)), "Chamber complete", "good")
-	if d.mapId then
+	if d.mapId and player:GetAttribute("CoopPartner") then
+		-- co-op: rate it, then pick what to play next together
+		local function after(up)
+			task.spawn(Net.call, "WorkshopRate", { id = d.mapId, up = up })
+			goBack()
+			task.spawn(Net.call, "CoopVoteOpen")
+		end
+		showAnywhere(function()
+			return Panels.dialog("Chamber Complete", ("Solved in %s together. What did you think of this test chamber?"):format(fmtTime(d.time)), {
+				{ "RATE UP", function() after(true) end },
+				{ "RATE DOWN", function() after(false) end },
+				{ "KEEP PLAYING", function() resume() end, true },
+			}, 2)
+		end)
+	elseif d.mapId then
 		showAnywhere(function()
 			return Panels.dialog("Chamber Complete", ("Solved in %s. What did you think of this test chamber?"):format(fmtTime(d.time)), {
 				{ "RATE UP", function() task.spawn(Net.call, "WorkshopRate", { id = d.mapId, up = true }) exitToMain() end },
@@ -3972,6 +4069,119 @@ function Push.ChamberComplete(d)
 		end)
 	end
 end
+-- ----- co-op runs -----
+local runHud
+do
+	local hudGui = new("ScreenGui", { Name = "PortalCoopRun", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 60, Enabled = false, Parent = playerGui })
+	local box = new("Frame", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 52), Size = px(460, 64),
+		BackgroundColor3 = rgb(20), BackgroundTransparency = 0.35, BorderSizePixel = 0, Parent = hudGui })
+	new("UICorner", { CornerRadius = UDim.new(0, 6), Parent = box })
+	local line1 = new("TextLabel", { Position = px(12, 4), Size = px(436, 26), BackgroundTransparency = 1, FontFace = F_SET, TextSize = 22,
+		TextColor3 = rgb(235), TextXAlignment = Enum.TextXAlignment.Center, TextTruncate = Enum.TextTruncate.AtEnd, Text = "", Parent = box })
+	local line2 = new("TextLabel", { Position = px(12, 32), Size = px(436, 26), BackgroundTransparency = 1, FontFace = F_SET, TextSize = 24,
+		TextColor3 = rgb(255, 200, 90), TextXAlignment = Enum.TextXAlignment.Center, Text = "", Parent = box })
+	local st = { on = false, base = 0, at = 0, speed = false, paused = false }
+	local function clock(t)
+		local cs = math.floor((t % 1) * 100)
+		return ("%d:%02d.%02d"):format(t // 60, math.floor(t) % 60, cs)
+	end
+	RunService.RenderStepped:Connect(function()
+		if not st.on then return end
+		hudGui.Enabled = not player:GetAttribute("InMenu") or mode == "pause"
+		if st.speed then
+			local t = st.paused and st.base or (st.base + os.clock() - st.at)
+			line2.Text = clock(t)
+		end
+	end)
+	runHud = {
+		step = function(d)
+			st.on, st.speed = true, d.mode == "speedrun"
+			line1.Text = ("CHAMBER %d / %d  ·  %s"):format(d.index or 1, d.count or 1, tostring(d.name or ""))
+			if st.speed then
+				st.base, st.at, st.paused = tonumber(d.total) or 0, os.clock(), false
+				box.Size = px(460, 64)
+			else
+				line2.Text = ""
+				box.Size = px(460, 36)
+			end
+			hudGui.Enabled = true
+		end,
+		split = function(d)
+			if st.speed then
+				st.base, st.at, st.paused = tonumber(d.total) or st.base, os.clock(), false
+				toast(("Chamber %d: %s"):format(d.index or 0, clock(tonumber(d.split) or 0)), "Split", "good")
+			end
+		end,
+		stop = function()
+			st.on = false
+			hudGui.Enabled = false
+		end,
+		clock = clock,
+	}
+end
+
+function Push.CoopVote(d)
+	S.vote = { partner = d.partner, builtin = d.builtin, custom = d.custom }
+	showAnywhere(Panels.CoopVote)
+end
+function Push.CoopVoteUpdate(d)
+	local v = S.vote
+	if not v then return end
+	v.partner = d.partner or v.partner
+	v.partnerPick = { source = d.source, mode = d.mode }
+	local top = current()
+	if top and top.isCoopVote then replaceTop(Panels.CoopVote) end
+end
+function Push.CoopVoteResult(d)
+	S.vote = nil
+	local what = (d.source == "builtin" and "Built-in chambers" or "Custom chambers") .. ", " .. (d.mode == "speedrun" and "Speedrun" or "Normal")
+	local flip = (d.flipSource or d.flipMode) and " (you voted differently - a coin flip decided)" or ""
+	toast(what .. flip, "Co-op", "good")
+end
+function Push.CoopRunStart(d)
+	S.vote = nil
+	if not d.single then
+		toast(("%d chambers, %s. Both of you have to reach each exit."):format(d.count or 0, d.mode == "speedrun" and "speedrun - the clock is running" or "normal mode"),
+			"Co-op run", "good")
+	end
+	task.spawn(function()
+		local t0 = os.clock()
+		while busy and os.clock() - t0 < 5 do task.wait() end
+		busy = true
+		runLoading(function()
+			task.wait(2.6) -- the server builds the first chamber
+			closeAll()
+		end, 2.5)
+		busy = false
+	end)
+end
+function Push.CoopRunStep(d) runHud.step(d) end
+function Push.CoopRunSplit(d) runHud.split(d) end
+function Push.CoopRunEnd(d)
+	runHud.stop()
+	if d.cancelled then return end
+	local lines = {}
+	if d.mode == "speedrun" then
+		table.insert(lines, ("Total: %s%s"):format(runHud.clock(d.total or 0), d.newBest and "  -  NEW BEST!" or
+			(d.best and ("  (best %s)"):format(runHud.clock(d.best)) or "")))
+		for i, s in ipairs(d.splits or {}) do
+			if i > 6 then table.insert(lines, "...") break end
+			table.insert(lines, ("%d. %s  %s"):format(i, tostring(d.names and d.names[i] or ""), runHud.clock(s)))
+		end
+	else
+		table.insert(lines, ("All %d chambers solved together in %s."):format(#(d.splits or {}), fmtTime(d.total)))
+	end
+	showAnywhere(function()
+		return Panels.dialog(d.mode == "speedrun" and "Speedrun Complete" or "Co-op Run Complete", table.concat(lines, "\n"), {
+			{ "PLAY AGAIN", function()
+				goBack()
+				task.spawn(Net.call, "CoopVoteOpen")
+			end },
+			{ "BACK TO THE HUB", function() resume() end, true },
+		}, math.min(#lines + 1, 7))
+	end)
+end
+
 function Push.GameFinished()
 	showAnywhere(function() return Panels.dialog("Testing Complete", "You've finished every chapter. Thanks for playing!", { { "MAIN MENU", function() exitToMain() end } }, 1) end)
 end

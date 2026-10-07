@@ -8,6 +8,7 @@ C.LOBBY_SPAWN = "MenuSpawn"
 C.COOP_HUB_MAP = "CoopHub"
 -- co-op characters (rig names in PortalAssets.Rigs, used by RigChangerServer): blue = Atlas, orange = P-body
 C.COOP_RIGS = { Blue = "Atlas", Orange = "PBody" }
+C.COOP_RUN_MAX = 12 -- co-op runs with Custom chambers: the top rated Workshop co-op chambers, at most this many
 C.EDITOR_ORIGIN = Vector3.new(0, 600, 0)
 
 -- ==========================================

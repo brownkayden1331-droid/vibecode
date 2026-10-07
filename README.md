@@ -90,6 +90,10 @@ Intermediate / Advanced: **Tile color › Custom colour…** (and the Light's co
 ## Old chambers
 Chambers saved or published before exits needed a button carry no `fmt`. When one is loaded (editor, Workshop, Studio import) and nothing is wired to its exit, the exit gets **Open without a button**, so it plays like it used to. New chambers are saved with `fmt = 3`. Drafts are no longer dropped from your profile just because they're old.
 
+## Co-op: invites, quick match, runs
+- **Workshop co-op chambers** (Co-op › Workshop co-op chambers, or Community): picking one asks how to play it: **with your partner** (if you have one), **Invite a friend** (they're invited straight into that chamber), **Quick match** (pairs you with someone who wants the same chamber, or anyone), or **Play alone**.
+- **Normal co-op mode**: after you pair up (invite or quick match) you both **vote**: *Built-in chambers* (the co-op courses in `Config.COURSES`) or *Custom chambers* (the top `Config.COOP_RUN_MAX` rated Workshop co-op chambers), and *Normal* or *Speedrun*. Same pick wins, different picks are a coin flip. Then you play the whole list: a chamber is done when **both** of you reach the exit. Speedrun runs one clock over the whole list (HUD at the top, splits per chamber, personal best per list kept in your profile). Co-op › *Pick what to play (vote)* or *Play again* on the results starts another run.
+
 ## NPCs that play your chamber (ChamberBotServer)
 `src/ServerScriptService/ChamberBotServer.server.lua`. Every editor playtest is recorded (where you walk, the portals you shoot, when you carry a cube). **File › NPC demo**:
 - **Keep my last run as the demo** – saved with the chamber (`data.demo`).

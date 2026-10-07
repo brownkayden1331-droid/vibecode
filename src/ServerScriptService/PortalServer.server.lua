@@ -1548,11 +1548,15 @@ end
 -- CO-OP
 -- ==========================================
 local pendingInvites = {}
-local queued = {}
+local queued = {} -- [player] = { chamber = workshop id or nil }
+local CoopRun = {} -- co-op runs: the vote, chamber lists, speedruns (filled in further down)
 local QUEUE = nil
 pcall(function() QUEUE = MemoryStoreService:GetSortedMap("PortalCoopQueue") end)
 
-local function startCoop(a, b)
+-- opts.chamber: a Workshop co-op chamber the pair goes straight into (invite / quick match from the Workshop);
+-- without it they go to the co-op hub and vote on what to play
+local function startCoop(a, b, opts)
+	opts = type(opts) == "table" and opts or {}
 	queued[a], queued[b] = nil, nil
 	if QUEUE then
 		pcall(function() QUEUE:RemoveAsync(tostring(a.UserId)) end)
@@ -1564,12 +1568,13 @@ local function startCoop(a, b)
 	b:SetAttribute("CoopColor", "Orange")
 	unlock(a, "COOP_FRIEND")
 	unlock(b, "COOP_FRIEND")
-	Push:FireClient(a, "CoopStart", { partner = b.Name, color = "Blue" })
-	Push:FireClient(b, "CoopStart", { partner = a.Name, color = "Orange" })
+	Push:FireClient(a, "CoopStart", { partner = b.Name, color = "Blue", chamber = opts.chamber })
+	Push:FireClient(b, "CoopStart", { partner = a.Name, color = "Orange", chamber = opts.chamber })
 	task.delay(1, function()
 		-- the pair share one instance (a's), b's old one is cleaned up if nobody else is in it
 		joinSlot(b, acquireSlot(a))
-		local root = loadMap(Config.COOP_HUB_MAP, true, a)
+		local root = not opts.chamber and loadMap(Config.COOP_HUB_MAP, true, a) or nil
+		local ready = 0
 		for _, pl in ipairs({ a, b }) do
 			task.spawn(function()
 				pl:SetAttribute("Chapter", nil)
@@ -1579,15 +1584,26 @@ local function startCoop(a, b)
 				if rigChange(pl, "Equip", { rig = Config.COOP_RIGS[color], source = "Coop", silent = true }) then
 					waitForRig(pl, oldChar, 6)
 				end
-				local s = findSpawn(root, color)
+				local s = root and findSpawn(root, color)
 				if s and pl.Parent then placeCharacter(pl, spawnCF(s)) end
+				ready += 1
 			end)
+		end
+		local t0 = os.clock()
+		while ready < 2 and os.clock() - t0 < 8 do task.wait(0.1) end
+		if not (a.Parent and b.Parent) then return end
+		if opts.chamber then
+			CoopRun.begin(a, b, { source = "custom", mode = "normal", single = true, ids = { opts.chamber } })
+		else
+			task.wait(1.5)
+			CoopRun.openVote(a, b) -- Built-in or Custom chambers, Normal or Speedrun
 		end
 	end)
 end
 
 -- leaving: true when the player is leaving the game (no point changing their character back)
 local function endCoop(player, leaving)
+	if CoopRun.stop then CoopRun.stop(player) end
 	local partnerId = player:GetAttribute("CoopPartner")
 	if partnerId then leaveSlot(player) end -- the partner keeps the shared instance, this player gets a fresh one
 	player:SetAttribute("CoopPartner", nil)
@@ -1619,7 +1635,7 @@ task.spawn(pcall, function() -- SubscribeAsync yields; don't hold up the rest of
 				queued[pl] = nil
 				Push:FireClient(pl, "CoopFound", {})
 				pcall(function()
-					TeleportService:TeleportToPrivateServer(game.PlaceId, d.code, { pl }, nil, { coop = true, a = d.a, b = d.b })
+					TeleportService:TeleportToPrivateServer(game.PlaceId, d.code, { pl }, nil, { coop = true, a = d.a, b = d.b, chamber = d.chamber })
 				end)
 			end
 		end
@@ -1633,18 +1649,40 @@ task.spawn(function()
 		for pl in pairs(queued) do
 			if pl.Parent then table.insert(here, pl) else queued[pl] = nil end
 		end
-		while #here >= 2 do
-			local a, b = table.remove(here), table.remove(here)
-			startCoop(a, b)
+		-- pairs: same Workshop chamber, or one of them doesn't mind (plays the other's chamber)
+		local function fits(x, y)
+			local cx, cy = queued[x] and queued[x].chamber, queued[y] and queued[y].chamber
+			return cx == nil or cy == nil or cx == cy
 		end
-		if QUEUE and #here == 1 then
+		local paired = true
+		while paired and #here >= 2 do
+			paired = false
+			for i = 1, #here do
+				for j = i + 1, #here do
+					local a, b = here[i], here[j]
+					if fits(a, b) then
+						local chamber = (queued[a] and queued[a].chamber) or (queued[b] and queued[b].chamber)
+						table.remove(here, j)
+						table.remove(here, i)
+						startCoop(a, b, { chamber = chamber })
+						paired = true
+						break
+					end
+				end
+				if paired then break end
+			end
+		end
+		if QUEUE and #here >= 1 then
 			local me = here[1]
-			pcall(function() QUEUE:SetAsync(tostring(me.UserId), { job = game.JobId, t = os.time() }, 120) end)
+			local myChamber = queued[me] and queued[me].chamber
+			pcall(function() QUEUE:SetAsync(tostring(me.UserId), { job = game.JobId, t = os.time(), chamber = myChamber }, 120) end)
 			local ok, entries = pcall(function() return QUEUE:GetRangeAsync(Enum.SortDirection.Ascending, 10) end)
 			if ok and entries then
 				for _, e in ipairs(entries) do
 					local other = tonumber(e.key)
-					if other and other ~= me.UserId and type(e.value) == "table" and e.value.job ~= game.JobId then
+					local theirs = type(e.value) == "table" and e.value.chamber or nil
+					if other and other ~= me.UserId and type(e.value) == "table" and e.value.job ~= game.JobId
+						and (theirs == nil or myChamber == nil or theirs == myChamber) then
 						local claimed = false
 						pcall(function()
 							QUEUE:UpdateAsync(e.key, function(v)
@@ -1657,7 +1695,8 @@ task.spawn(function()
 						if claimed then
 							local okR, code = pcall(function() return TeleportService:ReserveServer(game.PlaceId) end)
 							if okR then
-								pcall(function() MessagingService:PublishAsync(MATCH_TOPIC, { a = me.UserId, b = other, code = code }) end)
+								pcall(function() MessagingService:PublishAsync(MATCH_TOPIC, { a = me.UserId, b = other, code = code,
+									chamber = myChamber or theirs }) end)
 							end
 							break
 						end
@@ -1678,7 +1717,7 @@ local function checkArrival(player)
 		local other = arrivals[otherId]
 		if other and other.Parent then
 			arrivals[player.UserId], arrivals[otherId] = nil, nil
-			task.delay(2, startCoop, other, player)
+			task.delay(2, startCoop, other, player, { chamber = type(td.chamber) == "string" and td.chamber or nil })
 		end
 	end
 end
@@ -1954,12 +1993,17 @@ function Actions.GetLeaderboard(player, arg)
 	return true, out
 end
 
-function Actions.CoopInvite(player, targetUserId)
+-- arg: a userId, or { userId = n, chamber = Workshop co-op chamber id } (invite from a Workshop chamber)
+function Actions.CoopInvite(player, arg)
+	local targetUserId, chamber = arg, nil
+	if type(arg) == "table" then targetUserId, chamber = arg.userId, type(arg.chamber) == "string" and arg.chamber or nil end
 	local target = Players:GetPlayerByUserId(tonumber(targetUserId) or 0)
 	if not target then return false, "notHere" end
 	if target == player then return false, "You can't invite yourself." end
-	pendingInvites[target.UserId] = { from = player.UserId, t = os.clock() }
-	Push:FireClient(target, "CoopInvite", { from = player.UserId, name = player.DisplayName })
+	local meta = chamber and metaById(chamber)
+	if chamber and not meta then return false, "That chamber isn't in the Workshop any more." end
+	pendingInvites[target.UserId] = { from = player.UserId, t = os.clock(), chamber = chamber }
+	Push:FireClient(target, "CoopInvite", { from = player.UserId, name = player.DisplayName, chamberTitle = meta and meta.title })
 	return true
 end
 
@@ -1974,12 +2018,14 @@ function Actions.CoopRespond(player, arg)
 		Push:FireClient(from, "CoopDeclined", { name = player.DisplayName })
 		return true
 	end
-	startCoop(from, player)
+	startCoop(from, player, { chamber = inv.chamber })
 	return true
 end
 
-function Actions.CoopQuickMatch(player)
-	queued[player] = true
+-- arg.chamber: only match with someone who wants that Workshop chamber (or anyone, who then plays it)
+function Actions.CoopQuickMatch(player, arg)
+	local chamber = type(arg) == "table" and type(arg.chamber) == "string" and arg.chamber or nil
+	queued[player] = { chamber = chamber }
 	return true
 end
 
@@ -2053,7 +2099,280 @@ function Actions.CommunitySingle(player, id)
 	end)
 	return true
 end
-Actions.CommunityCoop = Actions.CommunitySingle
+
+-- ==========================================
+-- CO-OP RUNS
+-- After two players pair up (invite / quick match) they vote: Built-in chambers (the co-op courses) or Custom ones
+-- (the Workshop's co-op chambers), and Normal or Speedrun. Then they play the whole list together: a chamber is done
+-- when BOTH reach the exit, then the next one loads. Speedrun times the whole list (personal bests are kept).
+-- A Workshop co-op chamber picked with "invite a friend" / "quick match" is a run of just that chamber.
+-- ==========================================
+do
+	local runs = {}  -- [player] = run (both players point at the same table)
+	local votes = {} -- [player] = vote
+	local function partnerOf(pl)
+		local id = pl:GetAttribute("CoopPartner")
+		return id and Players:GetPlayerByUserId(id) or nil
+	end
+	local function push(r, kind, d)
+		for _, pl in ipairs({ r.a, r.b }) do
+			if pl.Parent then Push:FireClient(pl, kind, d) end
+		end
+	end
+
+	local function builtinList()
+		local out = {}
+		for _, course in ipairs(Config.COURSES) do
+			if course.coop then
+				for _, ch in ipairs(course.chambers) do table.insert(out, { kind = "builtin", id = ch.id, name = ch.name }) end
+			end
+		end
+		return out
+	end
+	local function customList(pl)
+		local out, coopMaps = {}, {}
+		for _, m in ipairs(workshopIndex()) do if m.coop then table.insert(coopMaps, m) end end
+		for i, m in ipairs(sortWorkshop(coopMaps, "TopRated", pl)) do
+			if i > (Config.COOP_RUN_MAX or 12) then break end
+			table.insert(out, { kind = "custom", id = m.id, name = m.title or "Untitled" })
+		end
+		return out
+	end
+
+	local function clearPlayer(pl)
+		runs[pl] = nil
+		testSpawn[pl] = nil
+		if pl.Parent then
+			pl:SetAttribute("CoopRun", nil)
+			pl:SetAttribute("ChamberDone", nil)
+		end
+	end
+
+	local function toHub(r)
+		local root = loadMap(Config.COOP_HUB_MAP, true, r.a)
+		for _, pl in ipairs({ r.a, r.b }) do
+			local s = root and findSpawn(root, pl:GetAttribute("CoopColor"))
+			if s and pl.Parent then task.spawn(placeCharacter, pl, spawnCF(s)) end
+		end
+	end
+
+	local loadEntry
+	local function finish(r)
+		local total = os.clock() - r.startT
+		for _, pl in ipairs({ r.a, r.b }) do clearPlayer(pl) end
+		if r.single then
+			-- one Workshop chamber: the usual "rate it" screen
+			local e = r.list[1]
+			push(r, "ChamberComplete", { mapId = e and e.id, time = total })
+			return
+		end
+		for _, pl in ipairs({ r.a, r.b }) do
+			if pl.Parent then
+				local best, newBest
+				local p = profiles[pl]
+				if p and r.mode == "speedrun" then
+					p.coopBest = type(p.coopBest) == "table" and p.coopBest or {}
+					best = p.coopBest[r.source]
+					if not best or total < best then
+						p.coopBest[r.source] = total
+						best, newBest = total, true
+						markDirty(pl)
+					end
+				end
+				Push:FireClient(pl, "CoopRunEnd", { mode = r.mode, source = r.source, total = total, splits = r.splits,
+					names = r.names, best = best, newBest = newBest == true })
+			end
+		end
+		task.delay(1.5, toHub, r)
+	end
+
+	loadEntry = function(r)
+		if runs[r.a] ~= r then return end
+		local e = r.list[r.index]
+		if not e then finish(r) return end
+		r.done = {}
+		local spawns = {}
+		local ok, err = pcall(function()
+			if e.kind == "builtin" then
+				local root = loadMap(e.id, true, r.a)
+				for _, pl in ipairs({ r.a, r.b }) do
+					local s = root and findSpawn(root, pl:GetAttribute("CoopColor"))
+					spawns[pl] = s and spawnCF(s)
+				end
+			else
+				local raw = getMapData(e.id)
+				local data, why = raw and cleanMap(raw)
+				if not data then error(why or "couldn't download it") end
+				local model = buildChamberMap(data, "coop_" .. e.id, r.a)
+				local cf = entrySpawnCF(model)
+				if not cf then error("it has no entry door") end
+				spawns[r.a], spawns[r.b] = cf * CFrame.new(-2, 0, 0), cf * CFrame.new(2, 0, 0) -- side by side
+				updateIndex(function(list)
+					for _, m in ipairs(list) do if m.id == e.id then m.plays = (m.plays or 0) + 1 end end
+				end)
+			end
+		end)
+		if not ok then
+			-- a broken chamber doesn't end the run: skip it
+			warn("[PortalServer] co-op run: skipping " .. tostring(e.id) .. ":", err)
+			for _, pl in ipairs({ r.a, r.b }) do toast(pl, ("Skipped %s (it wouldn't load)."):format(e.name), "info") end
+			r.index += 1
+			return loadEntry(r)
+		end
+		for _, pl in ipairs({ r.a, r.b }) do
+			pl:SetAttribute("ChamberDone", nil)
+			testSpawn[pl] = spawns[pl] -- dying puts you back at the start of this chamber
+			if spawns[pl] then task.spawn(placeCharacter, pl, spawns[pl]) end
+		end
+		r.chamberStart = os.clock()
+		push(r, "CoopRunStep", { index = r.index, count = #r.list, name = e.name, mode = r.mode,
+			total = r.mode == "speedrun" and (os.clock() - r.startT) or nil })
+	end
+
+	-- opts: { source = "builtin" | "custom", mode = "normal" | "speedrun", ids = { workshop ids } (optional), single }
+	function CoopRun.begin(a, b, opts)
+		local list
+		if opts.ids then
+			list = {}
+			for _, id in ipairs(opts.ids) do
+				local m = metaById(id)
+				table.insert(list, { kind = "custom", id = id, name = m and m.title or "Workshop chamber" })
+			end
+		else
+			list = opts.source == "builtin" and builtinList() or customList(a)
+		end
+		if #list == 0 then
+			for _, pl in ipairs({ a, b }) do
+				toast(pl, opts.source == "builtin" and "There are no built-in co-op chambers (Config.COURSES)." or "There are no co-op chambers in the Workshop yet.", "info")
+			end
+			return false
+		end
+		local names = {}
+		for _, e in ipairs(list) do table.insert(names, e.name) end
+		local r = { a = a, b = b, source = opts.source or "custom", mode = opts.mode == "speedrun" and "speedrun" or "normal",
+			single = opts.single == true, list = list, names = names, index = 1, splits = {}, startT = os.clock(), done = {} }
+		for _, pl in ipairs({ a, b }) do
+			runs[pl], votes[pl] = r, nil
+			pl:SetAttribute("CoopRun", true)
+			pl:SetAttribute("WorkshopMap", nil)
+			pl:SetAttribute("ChallengeChamber", nil)
+		end
+		push(r, "CoopRunStart", { source = r.source, mode = r.mode, count = #list, names = names, single = r.single })
+		task.delay(2.5, function()
+			r.startT = os.clock() -- the clock starts when the first chamber is there
+			loadEntry(r)
+		end)
+		return true
+	end
+
+	-- the exit: returns true when the player is in a co-op run (the run handles it)
+	function CoopRun.reached(pl)
+		local r = runs[pl]
+		if not r then return false end
+		if r.done[pl] then return true end
+		r.done[pl] = true
+		pl:SetAttribute("ChamberDone", true)
+		local other = pl == r.a and r.b or r.a
+		if not r.done[other] then
+			toast(pl, "Waiting for your partner at the exit...", "info")
+			if other.Parent then toast(other, pl.DisplayName .. " made it to the exit.", "info") end
+			return true
+		end
+		table.insert(r.splits, os.clock() - (r.chamberStart or r.startT))
+		if r.index >= #r.list then
+			finish(r)
+		else
+			r.index += 1
+			push(r, "CoopRunSplit", { index = r.index - 1, split = r.splits[#r.splits], total = os.clock() - r.startT, mode = r.mode })
+			task.delay(2, loadEntry, r)
+		end
+		return true
+	end
+
+	function CoopRun.stop(pl)
+		local r = runs[pl]
+		votes[pl] = nil
+		if not r then return end
+		for _, p in ipairs({ r.a, r.b }) do
+			clearPlayer(p)
+			if p.Parent then Push:FireClient(p, "CoopRunEnd", { cancelled = true }) end
+		end
+	end
+
+	-- ----- the vote -----
+	function CoopRun.openVote(a, b)
+		if runs[a] or runs[b] then return false end
+		if votes[a] and votes[a] == votes[b] then return true end -- already voting (both pressed PLAY AGAIN)
+		local v = { a = a, b = b, picks = {} }
+		votes[a], votes[b] = v, v
+		local builtinN, customN = #builtinList(), #customList(a)
+		for _, pl in ipairs({ a, b }) do
+			local other = pl == a and b or a
+			Push:FireClient(pl, "CoopVote", { partner = other.DisplayName, builtin = builtinN, custom = customN })
+		end
+		return true
+	end
+
+	function Actions.CoopVote(player, arg)
+		local v = votes[player]
+		if not v then return false, "There's nothing to vote on." end
+		if type(arg) ~= "table" or (arg.source ~= "builtin" and arg.source ~= "custom") or (arg.mode ~= "normal" and arg.mode ~= "speedrun") then
+			return false, "Pick the chambers and the mode."
+		end
+		v.picks[player] = { source = arg.source, mode = arg.mode }
+		local other = player == v.a and v.b or v.a
+		if other.Parent then Push:FireClient(other, "CoopVoteUpdate", { partner = player.DisplayName, source = arg.source, mode = arg.mode }) end
+		local pa, pb = v.picks[v.a], v.picks[v.b]
+		if pa and pb then
+			votes[v.a], votes[v.b] = nil, nil
+			-- the same pick wins; different picks: a coin flip (both see which way it went)
+			local flips = {}
+			local function decide(key)
+				if pa[key] == pb[key] then return pa[key] end
+				flips[key] = true
+				return math.random(2) == 1 and pa[key] or pb[key]
+			end
+			local source, mode = decide("source"), decide("mode")
+			for _, pl in ipairs({ v.a, v.b }) do
+				Push:FireClient(pl, "CoopVoteResult", { source = source, mode = mode, flipSource = flips.source, flipMode = flips.mode })
+			end
+			task.delay(2, function()
+				if v.a.Parent and v.b.Parent and partnerOf(v.a) == v.b then CoopRun.begin(v.a, v.b, { source = source, mode = mode }) end
+			end)
+		end
+		return true
+	end
+
+	-- the pause menu / results screen: vote again
+	function Actions.CoopVoteOpen(player)
+		local other = partnerOf(player)
+		if not other then return false, "You need a co-op partner first." end
+		if runs[player] then return false, "Finish (or leave) this run first." end
+		return CoopRun.openVote(player, other)
+	end
+
+	-- give up on the run (both go back to the hub)
+	function Actions.CoopRunQuit(player)
+		local r = runs[player]
+		if not r then return false end
+		CoopRun.stop(player)
+		toHub(r)
+		return true
+	end
+end
+
+-- Workshop co-op chamber: with your partner if you have one (both go in), alone otherwise
+function Actions.CommunityCoop(player, id)
+	if type(id) ~= "string" then return false, "No chamber picked." end
+	local other = player:GetAttribute("CoopPartner") and Players:GetPlayerByUserId(player:GetAttribute("CoopPartner"))
+	if other then
+		if not CoopRun.begin(player, other, { source = "custom", mode = "normal", single = true, ids = { id } }) then
+			return false, "Couldn't start that chamber."
+		end
+		return true
+	end
+	return Actions.CommunitySingle(player, id)
+end
 
 function Actions.WorkshopRate(player, arg)
 	if type(arg) ~= "table" or type(arg.id) ~= "string" then return false end
@@ -2819,6 +3138,7 @@ hookTrigger("PortalChamberExit", false, function(pl, inst)
 		end
 		return
 	end
+	if CoopRun.reached and CoopRun.reached(pl) then return end -- co-op runs: both players have to get out
 	local started = pl:GetAttribute("ChallengeStart") or os.clock()
 	local seconds = os.clock() - started
 	local chamber = pl:GetAttribute("ChallengeChamber")
@@ -2848,14 +3168,15 @@ local function onCharacterAdded(player, char)
 	task.spawn(function()
 		local root = waitRoot(player, 5)
 		if not root or player.Character ~= char then return end
-		local playing = player:GetAttribute("EditorPlaytest") or player:GetAttribute("WorkshopMap")
+		local playing = player:GetAttribute("EditorPlaytest") or player:GetAttribute("WorkshopMap") or player:GetAttribute("CoopRun")
 		if playing and testSpawn[player] then
 			-- died / respawned while testing or playing a Workshop chamber: back to the entry door, with the gun
 			task.wait(0.1)
 			placeCharacter(player, testSpawn[player])
 			local source = player:GetAttribute("EditorPlaytest") and "Editor" or "Workshop"
 			task.delay(1, function()
-				if player.Character == char and char.Parent and not char:GetAttribute("HasPortalGun")
+				-- (co-op runs: RigChangerServer gives Atlas / P-body back by itself)
+				if player.Character == char and char.Parent and not char:GetAttribute("HasPortalGun") and not player:GetAttribute("CoopRun")
 					and (player:GetAttribute("EditorPlaytest") or player:GetAttribute("WorkshopMap"))
 					and os.clock() - (lastRig[player] or 0) > 6 then
 					rigChange(player, "Equip", { source = source, silent = true })
