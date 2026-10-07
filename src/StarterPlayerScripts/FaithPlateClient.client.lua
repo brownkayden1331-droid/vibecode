@@ -5,6 +5,8 @@
 -- (the Humanoid's air control would otherwise brake it and you'd fall short).
 -- While you're flying the player attribute "FaithPlateFlight" is true: have your movement script (air strafing /
 -- bhop) leave the velocity alone while it is, or it'll fight this.
+-- Flying into an Excursion Funnel ends the flight at once (TestElementsClient sets "InFunnel"): the funnel catches you
+-- mid-air like in Portal 2 instead of this holding your speed through it.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -29,6 +31,11 @@ local function endFlight()
 	if flight then flight:Disconnect() flight = nil end
 	player:SetAttribute("FaithPlateFlight", nil)
 end
+
+-- (also ends it the moment a funnel grabs you, even between frames)
+player:GetAttributeChangedSignal("InFunnel"):Connect(function()
+	if player:GetAttribute("InFunnel") then endFlight() end
+end)
 
 remote.OnClientEvent:Connect(function(velocity, aim, apexY)
 	local char = player.Character
@@ -61,6 +68,10 @@ remote.OnClientEvent:Connect(function(velocity, aim, apexY)
 	local maxTime = (flightTime or 4) + 0.4
 	flight = RunService.Heartbeat:Connect(function()
 		local t = os.clock() - t0
+		if player:GetAttribute("InFunnel") then -- caught by a funnel: it takes over
+			endFlight()
+			return
+		end
 		if not hrp.Parent or hum.Health <= 0 or t > maxTime or (t > 0.25 and hum.FloorMaterial ~= Enum.Material.Air) then
 			endFlight()
 			return

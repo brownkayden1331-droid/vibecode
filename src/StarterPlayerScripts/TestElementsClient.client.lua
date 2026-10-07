@@ -1160,6 +1160,10 @@ local function setInFunnel(on, hum)
 	inFunnel = on
 	player:SetAttribute("InFunnel", on)
 	if on then
+		-- a faith plate launch (FaithPlateClient) holds your speed for the whole flight: the funnel takes over now
+		player:SetAttribute("FaithPlateFlight", nil)
+	end
+	if on then
 		playFunnelEnter() -- the whoosh as it grabs you
 	else
 		setRideLoop(nil)

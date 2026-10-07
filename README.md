@@ -13,6 +13,8 @@
 | `src/StarterPlayerScripts/PingClient.client.lua` | StarterPlayerScripts › LocalScript `PingClient` |
 | `src/ServerScriptService/PingServer.server.lua` | ServerScriptService › Script `PingServer` |
 | `src/ServerScriptService/ChamberBotServer.server.lua` | ServerScriptService › Script `ChamberBotServer` |
+| `src/ServerScriptService/FaithPlateServer.server.lua` | ServerScriptService › Script `FaithPlateServer` |
+| `src/StarterPlayerScripts/FaithPlateClient.client.lua` | StarterPlayerScripts › LocalScript `FaithPlateClient` |
 | `src/ServerScriptService/ChamberPiecesServer.server.lua` | ServerScriptService › Script `ChamberPiecesServer` |
 | `src/StarterPlayerScripts/ChamberPiecesClient.client.lua` | StarterPlayerScripts › LocalScript `ChamberPiecesClient` |
 | `src/ServerStorage/ChamberStudioTools.lua` | ServerStorage › ModuleScript `ChamberStudioTools` (Studio only) |
@@ -95,6 +97,14 @@ Chambers saved or published before exits needed a button carry no `fmt`. When on
 ## Co-op: invites, quick match, runs
 - **Workshop co-op chambers** (Co-op › Workshop co-op chambers, or Community): picking one asks how to play it: **with your partner** (if you have one), **Invite a friend** (they're invited straight into that chamber), **Quick match** (pairs you with someone who wants the same chamber, or anyone), or **Play alone**.
 - **Normal co-op mode**: after you pair up (invite or quick match) you both **vote**: *Built-in chambers* (the co-op courses in `Config.COURSES`) or *Custom chambers* (the top `Config.COOP_RUN_MAX` rated Workshop co-op chambers), and *Normal* or *Speedrun*. Same pick wins, different picks are a coin flip. Then you play the whole list: a chamber is done when **both** of you reach the exit. Speedrun runs one clock over the whole list (HUD at the top, splits per chamber, personal best per list kept in your profile). Co-op › *Pick what to play (vote)* or *Play again* on the results starts another run.
+
+## Editor: connections, multi-select, doors
+- **L** (or File / Edit › *Show connections*) draws every connection as a line from the source to what it drives (arrow at the driven end, labels at both ends), through walls. With it off, the selected item(s) still show theirs (yellow).
+- **Several items at once**: Ctrl / Shift + click items to add or remove them; *Select all like this* (Edit menu or right-click) selects every item of that kind (all funnels...). Delete, R, item options (e.g. funnel speed) and **C** work on all of them: C then click an item connects every selected one to it. **Shift + click** while connecting keeps going, so one button can be connected to several things in a row.
+- **Swap entrance and exit**: File / Edit menu, or right-click a door.
+
+## Faith plates + funnels
+`FaithPlateServer` / `FaithPlateClient` are in the repo. A faith plate launch used to hold your sideways speed for the whole flight, so funnels couldn't catch you; now the flight ends the moment a funnel grabs you (`InFunnel`), so funnels stop you mid-air like in Portal 2.
 
 ## Moving pieces, crushers, sound blocks (ChamberPiecesServer + ChamberPiecesClient)
 - **Moving Panel**, **Arm Panel** (`PortalAssets…Panel_Interior`) and **Arm Panel 2** (`Panel_Interior2`): the tile becomes a socket; the panel (`PanelTile`, portalable unless you untick it) comes out when it's on. Right-click › *When it's on*: **Extend** (straight out 1–3 tiles), **Door** (swings open on its bottom edge), **Bounce** (flips up and flings players / cubes; unconnected bounce panels go every 3 s). The arm models are bent procedurally: the deepest bone (`arm_192_tip` / `5`) follows the panel, the bones above take a growing share of the move. If an arm sits the wrong way in the socket, set `PanelNormal` (Vector3, model space: the way the panel faces) and/or `PanelOffset` (studs) on the model in PortalAssets.

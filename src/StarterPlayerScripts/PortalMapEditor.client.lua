@@ -928,7 +928,38 @@ local function panelColor(fp)
 	return fp.wallT and (fp.portal and C.WALLTILE_WHITE or C.WALLTILE_BLACK) or (fp.portal and C.WHITE or C.BLACK)
 end
 
+-- several items selected: Ctrl / Shift + click adds or removes one (E.multi = { [item id] = true }, the
+-- clicked one stays E.selItem). Delete, R, C (connect), Duplicate and the item options work on all of them.
+E.multi = {}
+function X.selection()
+	local list, seen = {}, {}
+	if E.selItem and E.ents[E.selItem] then
+		table.insert(list, E.selItem)
+		seen[E.selItem] = true
+	end
+	for i, e in ipairs(E.ents) do
+		if E.multi[e[8]] and not seen[i] then table.insert(list, i) end
+	end
+	return list
+end
+local multiBoxes = {}
 refreshSelection = function()
+	-- boxes round the extra selected items
+	local n = 0
+	for _, i in ipairs(X.selection()) do
+		local m = i ~= E.selItem and E.entModels[i]
+		if m then
+			n += 1
+			local box = multiBoxes[n]
+			if not box then
+				box = new("Part", { Anchored = true, CanQuery = false, CanCollide = false, Color = C.SEL_WHITE, Material = Enum.Material.SmoothPlastic, Parent = fxFolder })
+				multiBoxes[n] = box
+			end
+			local cf, size = m:GetBoundingBox()
+			box.CFrame, box.Size, box.Transparency = cf, size + Vector3.new(0.6, 0.6, 0.6), 0.75
+		end
+	end
+	for k = n + 1, #multiBoxes do multiBoxes[k].Transparency = 1 end
 	for fk, fp in pairs(E.faceParts) do
 		local sel = E.sel[fk]
 		fp.panel.Color = sel and (fp.portal and C.SEL_WHITE or C.SEL_BLACK) or panelColor(fp)
@@ -1281,6 +1312,54 @@ do
 		hBar.Visible, vBar.Visible, endSq.Visible, startSq.Visible = true, true, true, lit
 	end
 
+	-- the connection map (L / File > Show connections): a line from every source to what it drives, arrow at the
+	-- driven end, the labels on top. Drawn on the screen, so you see them through walls too.
+	local mapLayer = new("Frame", { Name = "ConnectMap", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 2, Parent = canvas })
+	local pool, used = {}, 0
+	local function seg()
+		used += 1
+		local s = pool[used]
+		if not s then
+			s = {
+				line = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, ZIndex = 2, Parent = mapLayer }),
+				arrow = new("TextLabel", { AnchorPoint = Vector2.new(0.5, 0.5), Size = px(22, 22), BackgroundTransparency = 1, Text = "▶",
+					FontFace = FONT.UI, TextSize = 20, TextStrokeTransparency = 0.3, ZIndex = 3, Parent = mapLayer }),
+				a = new("TextLabel", { AnchorPoint = Vector2.new(0.5, 1), Size = px(140, 18), BackgroundTransparency = 1, FontFace = FONT.UI_REG,
+					TextSize = 14, TextColor3 = rgb(255), TextStrokeTransparency = 0.2, ZIndex = 3, Parent = mapLayer }),
+				b = new("TextLabel", { AnchorPoint = Vector2.new(0.5, 1), Size = px(140, 18), BackgroundTransparency = 1, FontFace = FONT.UI_REG,
+					TextSize = 14, TextColor3 = rgb(255), TextStrokeTransparency = 0.2, ZIndex = 3, Parent = mapLayer }),
+			}
+			pool[used] = s
+		end
+		return s
+	end
+	function connectGui.drawMap(list)
+		used = 0
+		for _, l in ipairs(list) do
+			local a, b = l[1], l[2]
+			local d = b - a
+			if d.Magnitude > 2 then
+				local s = seg()
+				local mid = (a + b) / 2
+				s.line.Position = px(mid.X, mid.Y)
+				s.line.Size = px(d.Magnitude, l.hi and 4 or 2.5)
+				s.line.Rotation = math.deg(math.atan2(d.Y, d.X))
+				s.line.BackgroundColor3 = l.color
+				s.line.BackgroundTransparency = l.hi and 0 or 0.25
+				local tip = b - d.Unit * 14
+				s.arrow.Position = px(tip.X, tip.Y)
+				s.arrow.Rotation = s.line.Rotation
+				s.arrow.TextColor3 = l.color
+				s.a.Position, s.a.Text = px(a.X, a.Y - 8), l.from or ""
+				s.b.Position, s.b.Text = px(b.X, b.Y - 8), l.to or ""
+				for _, g in pairs(s) do g.Visible = true end
+			end
+		end
+		for i = used + 1, #pool do
+			for _, g in pairs(pool[i]) do g.Visible = false end
+		end
+	end
+
 	-- the pink heart that pops up on the item you just connected to
 	function connectGui.heart(p)
 		if not p then return end
@@ -1581,17 +1660,29 @@ end
 paintSelection = function() setTileColor(E.lastColor or 1) end
 
 deleteItem = function()
-	local e = E.selItem and E.ents[E.selItem]
-	if not e then sfx("Error") return end
-	if Config.ENTITY_TYPES[e[1]].mandatory then
+	local sel = X.selection()
+	if #sel == 0 then sfx("Error") return end
+	local doomed, kinds, kept = {}, {}, false
+	for _, i in ipairs(sel) do
+		local e = E.ents[i]
+		if e and Config.ENTITY_TYPES[e[1]].mandatory then kept = true elseif e then table.insert(doomed, i) end
+	end
+	if #doomed == 0 then
 		flash("The entry and exit doors can be moved, but they can't be deleted or copied.")
 		sfx("Error")
 		return
 	end
 	pushUndo()
-	table.remove(E.ents, E.selItem)
-	E.selItem = nil
-	refreshItems(e[1])
+	table.sort(doomed, function(a, b) return a > b end) -- from the back, so the indices stay right
+	for _, i in ipairs(doomed) do
+		kinds[E.ents[i][1]] = true
+		table.remove(E.ents, i)
+	end
+	E.selItem, E.multi = nil, {}
+	local needRoom = false
+	for k in pairs(kinds) do if needsRoom(k) then needRoom = true end end
+	if needRoom then rebuild() else rebuildEnts() end
+	if kept then flash("The entry and exit doors stay (they can't be deleted).") end
 	sfx("Click")
 end
 
@@ -1642,18 +1733,57 @@ duplicateItem = function()
 end
 
 rotateItem = function()
-	local e = E.selItem and E.ents[E.selItem]
-	if not e or Config.ENTITY_TYPES[e[1]].needsFloor then sfx("Error") return end
+	local list = {}
+	for _, i in ipairs(X.selection()) do
+		local e = E.ents[i]
+		if e and not Config.ENTITY_TYPES[e[1]].needsFloor then table.insert(list, e) end
+	end
+	if #list == 0 then sfx("Error") return end
 	pushUndo()
-	e[6] = ((e[6] or 0) + 1) % 4
+	for _, e in ipairs(list) do e[6] = ((e[6] or 0) + 1) % 4 end
 	rebuildEnts()
+	sfx("Click")
+end
+
+-- L / File > Show connections: lines from every source to what it drives (selected items always show theirs)
+function X.toggleLinks()
+	E.showLinks = not E.showLinks
+	flash(E.showLinks and "Showing every connection (L to hide)." or "Connections hidden (selected items still show theirs).")
+	sfx("Click")
+end
+
+-- File / Edit > Swap entrance and exit: the doors trade places (each keeps its connections and options)
+function X.swapDoors()
+	local ei, xi
+	for i, e in ipairs(E.ents) do
+		if e[1] == "entry" then ei = i elseif e[1] == "exit" then xi = i end
+	end
+	if not (ei and xi) then flash("The chamber needs both doors.") sfx("Error") return end
+	pushUndo()
+	local a, b = E.ents[ei], E.ents[xi]
+	for k = 2, 6 do a[k], b[k] = b[k], a[k] end
+	rebuild()
+	flash("Swapped the entrance and the exit.")
+	sfx("Click")
+end
+
+-- Edit > Select all like this: every item of the selected kind (all funnels, all buttons...)
+function X.selectSameKind()
+	local cur = E.selItem and E.ents[E.selItem]
+	if not cur then flash("Select an item first.") sfx("Error") return end
+	E.multi = {}
+	for _, e in ipairs(E.ents) do
+		if e[1] == cur[1] and e ~= cur then E.multi[e[8]] = true end
+	end
+	refreshSelection()
+	flash(("Selected %d %s."):format(#X.selection(), string.lower(Config.ENTITY_TYPES[cur[1]].name) .. "s"))
 	sfx("Click")
 end
 
 -- ----- connecting items -----
 cancelLink = function()
 	if not E.linking then return end
-	E.linking = nil
+	E.linking, E.linkMany = nil, nil
 	connectGui.hide()
 	H.highlight(nil)
 	tooltip.Text = ""
@@ -1667,8 +1797,14 @@ startLink = function()
 		return
 	end
 	E.linking = e[8]
-	tooltip.Text = "Click an item to connect (Esc / B cancels)"
-	flash("Click the item to connect it to.")
+	-- every selected item gets connected to what you click; Shift + click keeps going (one -> several)
+	E.linkMany = {}
+	for _, i in ipairs(X.selection()) do
+		local se = E.ents[i]
+		if se and (canSource(se) or canTarget(se)) then table.insert(E.linkMany, se[8]) end
+	end
+	tooltip.Text = "Click an item to connect (Shift + click: connect more, Esc / B cancels)"
+	flash(#E.linkMany > 1 and ("Click the item to connect these %d to."):format(#E.linkMany) or "Click the item to connect it to. Hold Shift to connect several.")
 	sfx("Click")
 end
 
@@ -1688,6 +1824,37 @@ end
 
 completeLink = function(index)
 	local b = E.ents[index]
+	local ids = (E.linkMany and #E.linkMany > 1) and E.linkMany or nil
+	if ids then
+		-- several at once: each selected item <-> the one you clicked
+		local made, skipped = {}, 0
+		for _, id in ipairs(ids) do
+			local _, a = entById(id)
+			if a and b and a ~= b then
+				local src, dst = linkPair(a, b)
+				if src and not linked(src[8], dst[8]) and not linked(dst[8], src[8]) then
+					table.insert(made, { src[8], dst[8] })
+				else
+					skipped += 1
+				end
+			end
+		end
+		if #made == 0 then
+			flash("Nothing new to connect there.")
+			sfx("Error")
+			if not shiftDown() then cancelLink() end
+			return
+		end
+		pushUndo()
+		for _, l in ipairs(made) do table.insert(E.links, l) end
+		if not shiftDown() then cancelLink() end
+		rebuildEnts()
+		local bm = E.entModels[index]
+		if bm then connectGui.heart(connectGui.project(bm:GetBoundingBox().Position)) end
+		flash(("Made %d connection%s%s."):format(#made, #made == 1 and "" or "s", skipped > 0 and (" (" .. skipped .. " couldn't / already were)") or ""))
+		sfx("Click")
+		return
+	end
 	local _, a = entById(E.linking)
 	if not a or not b or a == b then cancelLink() return end
 	local src, dst = linkPair(a, b)
@@ -1710,9 +1877,10 @@ completeLink = function(index)
 	end
 	pushUndo()
 	table.insert(E.links, { src[8], dst[8] })
-	cancelLink()
+	local keep = shiftDown() -- Shift: keep connecting from the same item
+	if not keep then cancelLink() end
 	-- like the Puzzle Maker: the item you connected to gets selected and a heart pops up on it
-	E.selItem, E.sel = index, { [faceKey(b[2], b[3], b[4], b[5])] = true }
+	if not keep then E.selItem, E.sel = index, { [faceKey(b[2], b[3], b[4], b[5])] = true } E.multi = {} end
 	rebuildEnts()
 	local bm = E.entModels[index]
 	if bm then connectGui.heart(connectGui.project(bm:GetBoundingBox().Position)) end
@@ -4120,6 +4288,8 @@ local MENUS = {
 				return list
 			end },
 			{ text = "Rebuild...", shortcut = "F9", fn = function() task.spawn(buildAndPlay) end },
+			{ text = "Show connections", shortcut = "L", icon = "check", checked = E.showLinks == true, fn = function() X.toggleLinks() end },
+			{ text = "Swap entrance and exit", fn = function() X.swapDoors() end },
 			{ text = "NPC demo", sub = function() return X.demoMenu() end },
 			{ text = "Chamber audio...", fn = function() X.audioDialog() end },
 			{ text = "Publish...", disabled = g, fn = Dlg.publish, sep = true },
@@ -4152,6 +4322,9 @@ local MENUS = {
 		{ text = "Undo", shortcut = "Ctrl+Z", icon = "glyph", glyph = "↶", disabled = #E.undo == 0, fn = undo },
 		{ text = "Redo", shortcut = "Ctrl+Y", icon = "glyph", glyph = "↷", disabled = #E.redo == 0, fn = redo, sep = true },
 		{ text = "Select all", shortcut = "Ctrl+A", fn = selectAll },
+		{ text = "Select all like this", disabled = not E.selItem, fn = function() X.selectSameKind() end, sep = true },
+		{ text = "Show connections", shortcut = "L", icon = "check", checked = E.showLinks == true, fn = function() X.toggleLinks() end },
+		{ text = "Swap entrance and exit", fn = function() X.swapDoors() end },
 		} end,
 	Help = function() return {
 		{ text = "Tips...", fn = function() tipIndex = tipIndex % #SET.TIPS + 1 flash(SET.TIPS[tipIndex]) end },
@@ -4644,10 +4817,21 @@ local function setOption(index, k, v, quiet)
 	local e = E.ents[index]
 	if not e then return end
 	pushUndo()
-	local o = table.clone(Config.Options(e)) -- a fresh table, so undo keeps the old one
-	o[k] = v
-	e[10] = next(o) and o or nil
+	-- several selected: every selected item of the same kind gets it too (e.g. the speed of all the funnels)
+	local targets = { e }
+	if index == E.selItem then
+		for _, i in ipairs(X.selection()) do
+			local o2 = E.ents[i]
+			if o2 and o2 ~= e and o2[1] == e[1] then table.insert(targets, o2) end
+		end
+	end
+	for _, t in ipairs(targets) do
+		local o = table.clone(Config.Options(t)) -- a fresh table, so undo keeps the old one
+		o[k] = v
+		t[10] = next(o) and o or nil
+	end
 	rebuildEnts()
+	if #targets > 1 and not quiet then flash(("Changed %d %s."):format(#targets, string.lower(Config.ENTITY_TYPES[e[1]].name) .. "s")) end
 	if not quiet then sfx("Click") end
 end
 
@@ -4881,10 +5065,16 @@ itemMenu = function(x, y)
 			end })
 		end
 	end
+	if e[1] == "entry" or e[1] == "exit" then
+		table.insert(items, { text = "Swap entrance and exit", fn = function() X.swapDoors() end })
+	end
+	table.insert(items, { text = "Select all like this", fn = function() X.selectSameKind() end })
 	table.insert(items, { text = "Duplicate", shortcut = "Ctrl+D", disabled = def.mandatory == true, fn = duplicateItem })
 	table.insert(items, { text = "Delete item", shortcut = "Delete", disabled = def.mandatory == true, fn = deleteItem })
 	local title = e[1] == "gate" and (Config.GateMode(e) .. " gate") or "Item"
 	if adv and Config.LabelOf(e) then title = Config.LabelOf(e) end
+	local nSel = #X.selection()
+	if nSel > 1 then title = ("%d items selected"):format(nSel) end
 	popupMenu(x, y, { { title = title, items = items }, surfaceSection() })
 end
 
@@ -4994,6 +5184,13 @@ contextAt = function()
 		sfx("Click")
 		surfaceMenu(m.X, m.Y)
 	elseif hit and (hit.kind == "ent" or hit.kind == "handle") and hit.index and E.ents[hit.index] then
+		-- right-clicking one of several selected items keeps them all selected (its options go to all of that kind)
+		local inSel = table.find(X.selection(), hit.index) ~= nil
+		if not inSel then E.multi = {} end
+		if inSel and E.selItem and E.selItem ~= hit.index then
+			E.multi[E.ents[E.selItem][8]] = true
+			E.multi[E.ents[hit.index][8]] = nil
+		end
 		E.selItem = hit.index
 		sfx("Click")
 		itemMenu(m.X, m.Y)
@@ -5036,11 +5233,30 @@ local function primaryDown()
 		end
 	elseif hit and hit.kind == "ent" then
 		local he = E.ents[hit.index]
-		E.selItem, E.sel = hit.index, { [faceKey(he[2], he[3], he[4], he[5])] = true }
-		E.drag = { kind = "move", index = hit.index, before = snapshot(), moved = false }
-		sfx("Click")
+		if (ctrlDown() or shiftDown()) and E.selItem and E.ents[E.selItem] then
+			-- add / take away this one (the first one you picked stays the main one)
+			local cur = E.ents[E.selItem]
+			if hit.index == E.selItem then
+				-- (clicking the main one again hands "main" to another selected one, or clears it)
+				local nextIdx
+				for _, i in ipairs(X.selection()) do if i ~= E.selItem then nextIdx = i break end end
+				if nextIdx then E.multi[E.ents[nextIdx][8]] = nil end
+				E.selItem = nextIdx
+			else
+				E.multi[cur[8]] = nil
+				E.multi[he[8]] = (not E.multi[he[8]]) or nil
+			end
+			E.drag = nil
+			sfx("TilePick")
+		else
+			E.multi = {}
+			E.selItem, E.sel = hit.index, { [faceKey(he[2], he[3], he[4], he[5])] = true }
+			E.drag = { kind = "move", index = hit.index, before = snapshot(), moved = false }
+			sfx("Click")
+		end
 	elseif hit and hit.kind == "face" then
 		E.selItem = nil
+		E.multi = {}
 		if shiftDown() then
 			local a = E.anchor
 			if not (a and E.faceParts[a.key] and selectRect(a, hit, true)) then
@@ -5066,6 +5282,7 @@ local function primaryDown()
 			return
 		end
 		E.sel, E.selItem = {}, nil
+		E.multi = {}
 	end
 	refreshSelection()
 end
@@ -5268,6 +5485,8 @@ local function keyAction(kc)
 		rotateItem()
 	elseif kc == Enum.KeyCode.C and not ctrlDown() then
 		startLink()
+	elseif kc == Enum.KeyCode.L and not ctrlDown() then
+		X.toggleLinks()
 	elseif kc == Enum.KeyCode.Escape then
 		cancelLink()
 		closeMenus()
@@ -5618,6 +5837,30 @@ editLoop = function(dt)
 	local zk = 1 - math.exp(-10 * dt)
 	zoomBar.BackgroundTransparency += ((now < E.zoomShow and 0 or 1) - zoomBar.BackgroundTransparency) * zk
 
+	-- the connection map: every connection with L / File > Show connections, else the selected items' ones
+	do
+		local list = {}
+		if E.active and not E.gameView and not inMenu then
+			local selIds = {}
+			for _, i in ipairs(X.selection()) do if E.ents[i] then selIds[E.ents[i][8]] = true end end
+			for _, l in ipairs(E.links) do
+				local mine = selIds[l[1]] or selIds[l[2]]
+				if E.showLinks or mine then
+					local _, ea = entById(l[1])
+					local _, eb = entById(l[2])
+					if ea and eb then
+						local pa = connectGui.project(Config.ItemFrame(W, ea).Position)
+						local pb = connectGui.project(Config.ItemFrame(W, eb).Position)
+						if pa and pb then
+							table.insert(list, { pa, pb, color = mine and rgb(255, 214, 80) or rgb(0, 210, 214), hi = mine,
+								from = Config.LabelOf(ea) or entLabel(ea), to = Config.LabelOf(eb) or entLabel(eb) })
+						end
+					end
+				end
+			end
+		end
+		connectGui.drawMap(list)
+	end
 	-- connecting: elbow line from the item's tile to the pointer, snaps to anything it can connect to
 	if E.linking then
 		local _, se = entById(E.linking)
