@@ -375,6 +375,86 @@ local function setupMusic(m)
 end
 
 -- ==========================================
+-- DOORS that slide / split open (right-click a door > Opens): moves the door's leaves while "Open" is true
+-- ==========================================
+local TweenService = game:GetService("TweenService")
+local DOOR_SLIDE_TIME = 0.55
+local function doorLeaves(m)
+	local skip = { PlayerSpawn = true, Exit = true, Start = true, End = true }
+	local function usable(p)
+		return p:IsA("BasePart") and not skip[p.Name] and not p.Name:match("^Alcove") and p.Transparency < 0.95
+	end
+	local list = {}
+	for _, d in ipairs(m:GetDescendants()) do
+		if usable(d) and d:GetAttribute("DoorLeaf") == true then table.insert(list, d) end
+	end
+	if #list > 0 then return list end
+	for _, d in ipairs(m:GetDescendants()) do
+		if usable(d) then
+			local n = d.Name:lower()
+			if (n:find("door") or n:find("leaf") or n:find("panel") or n:find("slide")) and not n:find("frame") then table.insert(list, d) end
+		end
+	end
+	if #list > 0 then return list end
+	local best, bestV
+	for _, d in ipairs(m:GetDescendants()) do
+		if usable(d) then
+			local v = d.Size.X * d.Size.Y * d.Size.Z
+			if not bestV or v > bestV then best, bestV = d, v end
+		end
+	end
+	return { best }
+end
+
+local function setupDoor(m)
+	local style = m:GetAttribute("OpenStyle")
+	local frame = m:GetAttribute("DoorFrame")
+	if not style or typeof(frame) ~= "CFrame" then return end
+	local leaves = doorLeaves(m)
+	if #leaves == 0 then return end
+	-- the doorway's centre (in the door frame: X right, Y up, -Z into the room)
+	local center = Vector3.zero
+	for _, p in ipairs(leaves) do center += frame:PointToObjectSpace(p.Position) end
+	center /= #leaves
+	local entries = {}
+	for _, p in ipairs(leaves) do
+		local lp = frame:PointToObjectSpace(p.Position)
+		local dir
+		if style == "Left" then dir = -frame.RightVector
+		elseif style == "Right" then dir = frame.RightVector
+		elseif style == "Up" then dir = frame.UpVector
+		elseif style == "Down" then dir = -frame.UpVector
+		elseif style == "SplitSides" then dir = (lp.X >= center.X and 1 or -1) * frame.RightVector
+		else dir = (lp.Y >= center.Y and 1 or -1) * frame.UpVector end
+		-- how far: the leaf's own size that way (so it clears the doorway), a little extra
+		local size = math.abs(p.CFrame:VectorToObjectSpace(dir).X) * p.Size.X + math.abs(p.CFrame:VectorToObjectSpace(dir).Y) * p.Size.Y
+			+ math.abs(p.CFrame:VectorToObjectSpace(dir).Z) * p.Size.Z
+		if style == "SplitSides" or style == "SplitUpDown" then size = size * (#leaves > 1 and 1 or 0.5) end
+		table.insert(entries, { part = p, rest = p.CFrame, open = p.CFrame + dir * (size + 0.2) })
+	end
+	local function set(open)
+		for _, en in ipairs(entries) do
+			if en.part.Parent then
+				TweenService:Create(en.part, TweenInfo.new(DOOR_SLIDE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut),
+					{ CFrame = open and en.open or en.rest }):Play()
+			end
+		end
+	end
+	m:GetAttributeChangedSignal("Open"):Connect(function() set(m:GetAttribute("Open") == true) end)
+	if m:GetAttribute("Open") == true then set(true) end
+end
+
+local doorsDone = setmetatable({}, { __mode = "k" })
+local function hookDoor(m)
+	if doorsDone[m] or not m:IsDescendantOf(workspace) then return end
+	doorsDone[m] = true
+	local ok, err = pcall(setupDoor, m)
+	if not ok then warn("[ChamberPieces] door: " .. tostring(err)) end
+end
+for _, m in ipairs(CollectionService:GetTagged("PeTIDoorStyle")) do task.spawn(hookDoor, m) end
+CollectionService:GetInstanceAddedSignal("PeTIDoorStyle"):Connect(function(m) task.defer(hookDoor, m) end)
+
+-- ==========================================
 local done = setmetatable({}, { __mode = "k" })
 local function setup(m)
 	if done[m] or not m:IsDescendantOf(workspace) then return end

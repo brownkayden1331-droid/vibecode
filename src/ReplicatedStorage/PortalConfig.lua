@@ -178,6 +178,12 @@ C.DOOR_RECESS = C.CELL -- the wall tile behind a door becomes an alcove this dee
 C.DOOR_INSET = 0 -- studs from the room's wall surface to the FRONT of the door (0 = the door frame is flush with the wall,
                  -- C.DOOR_RECESS = pushed all the way to the back of the alcove like before)
 C.DOOR_OPEN_RADIUS = 14 -- the exit door opens when a player is this close AND it's unlocked
+-- how a door opens (right-click a door > Opens). "Asset" = the door model's own script / animation does it; the rest
+-- slide the door's leaf parts (ChamberPiecesServer). Leaves: parts with the attribute DoorLeaf = true, else parts named
+-- like door / leaf / panel / slide (not "frame"), else the biggest part of the model.
+C.DOOR_OPEN_STYLES = { "Asset", "Left", "Right", "Up", "Down", "SplitSides", "SplitUpDown" }
+C.DOOR_OPEN_LABELS = { Asset = "Its own animation", Left = "Slides left", Right = "Slides right", Up = "Slides up",
+	Down = "Slides down", SplitSides = "Splits to the sides", SplitUpDown = "Splits up and down" }
 -- The exit door is LOCKED until something opens it: a button / pedestal / laser catcher / gate connected to it, a chip
 -- that opens it, or the item option "Open without a button" (e[10].free). Walking up to a locked door does nothing.
 -- Doors are turned so their thinnest side faces the room. If yours ends up facing the wall, give the door model in
@@ -1474,6 +1480,16 @@ function C.BuildEntity(e, origin, opts)
 		-- exit: locked until a connection / chip opens it, or it's set to open without a button
 		if kind == "exit" then m:SetAttribute("Enabled", o.free == true) end
 		if kind == "exit" then removeNamed(m, "PlayerSpawn") end
+		-- a slide / split opening instead of the model's own: its scripts stay off, ChamberPiecesServer moves the leaves
+		local style = table.find(C.DOOR_OPEN_STYLES, o.open) and o.open or "Asset"
+		if style ~= "Asset" and not opts.editor then
+			m:SetAttribute("OpenStyle", style)
+			m:SetAttribute("DoorFrame", cf) -- right / up / out of the wall of the doorway
+			for _, d in ipairs(m:GetDescendants()) do
+				if d:IsA("BaseScript") then d.Enabled = false end
+			end
+			m:AddTag("PeTIDoorStyle")
+		end
 		-- Start / End markers inside the door model: the entry only keeps Start, the exit only End
 		local mine = C.DOOR_MARKERS[kind]
 		local other = C.DOOR_MARKERS[kind == "entry" and "exit" or "entry"]

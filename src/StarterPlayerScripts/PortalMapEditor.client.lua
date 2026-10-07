@@ -5147,6 +5147,9 @@ itemMenu = function(x, y)
 		end
 	end
 	if e[1] == "entry" or e[1] == "exit" then
+		table.insert(items, { text = "Opens", sub = function()
+			return radios(index, "open", Config.DOOR_OPEN_STYLES, table.find(Config.DOOR_OPEN_STYLES, o.open) and o.open or "Asset", Config.DOOR_OPEN_LABELS)
+		end })
 		table.insert(items, { text = "Swap entrance and exit", fn = function() X.swapDoors() end })
 	end
 	-- Move one tile at a time (handy on phones, and the way to raise / lower a door)

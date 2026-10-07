@@ -111,6 +111,9 @@ Chambers saved or published before exits needed a button carry no `fmt`. When on
 ## Doors at any height
 `Config.DOORS_ANY_HEIGHT = true`: entry / exit doors can go on any row of a wall (their alcove has its own floor). Drag them, or Move › Up / Down. A raised exit is a puzzle goal; a raised entry drops you into the room. Set it to false for floor-only doors like Portal 2.
 
+## How doors open
+Right-click a door › **Opens**: *Its own animation* (the door model's own script, default), *Slides left / right / up / down*, *Splits to the sides / up and down*. For the slide styles the model's scripts are switched off and ChamberPiecesServer slides the door's leaves while `Open` is true. Leaves = parts with the attribute `DoorLeaf = true`, else parts named like door / leaf / panel / slide (not frame), else the biggest part. Tag your door model's moving parts with `DoorLeaf` for exact control (two leaves split, one leaf slides).
+
 ## Faith plates + funnels
 `FaithPlateServer` / `FaithPlateClient` are in the repo. A faith plate launch used to hold your sideways speed for the whole flight, so funnels couldn't catch you; now the flight ends the moment a funnel grabs you (`InFunnel`), so funnels stop you mid-air like in Portal 2.
 

@@ -753,6 +753,7 @@ local function cleanMap(data)
 					if oo.vis == "Antline" or oo.vis == "Signage" or oo.vis == "None" then opt.vis = oo.vis end
 					if type(oo.free) == "boolean" and e[1] == "exit" then opt.free = oo.free end
 					if oo.link == "Power" or oo.link == "Reverse" then opt.link = oo.link end
+					if table.find(Config.DOOR_OPEN_STYLES, oo.open) and oo.open ~= "Asset" then opt.open = oo.open end
 					if tonumber(oo.speed) then opt.speed = math.clamp(math.floor(tonumber(oo.speed)), 2, 40) end
 					-- moving panels / crushers / sound blocks
 					if tonumber(oo.dist) then opt.dist = math.clamp(math.floor(tonumber(oo.dist)), 1, 3) end
