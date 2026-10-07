@@ -134,6 +134,10 @@ def read_vmf(path):
             solids(v, "worldspawn")
         elif k.lower() == "entity":
             ent = {kk.lower(): vv for kk, vv in v if isinstance(vv, str)}
+            ent["_kv"] = [(kk, vv) for kk, vv in v if isinstance(vv, str)]
+            for kk, vv in v:
+                if kk.lower() == "connections" and isinstance(vv, list):
+                    ent["_kv"] += [(ck, cv) for ck, cv in vv if isinstance(cv, str)]
             cls = ent.get("classname", "")
             first = len(brushes)
             solids(v, cls)
@@ -182,7 +186,9 @@ def read_bsp(path):
     entities = []
     for k, v in parse_keyvalues(ent_text):
         if isinstance(v, list):
-            entities.append({kk.lower(): vv for kk, vv in v if isinstance(vv, str)})
+            ent = {kk.lower(): vv for kk, vv in v if isinstance(vv, str)}
+            ent["_kv"] = [(kk, vv) for kk, vv in v if isinstance(vv, str)]
+            entities.append(ent)
 
     planes_b = lump(1)
     planes = [struct.unpack_from("<4f", planes_b, i * 20) for i in range(len(planes_b) // 20)]
@@ -560,14 +566,97 @@ def entity_bounds(ent, xf):
     return mul(add(lo, hi), 0.5), sub(hi, lo)
 
 CUBE_TYPES = {"0": "Normal", "1": "Companion", "2": "Reflection", "3": "Sphere", "4": "Antique"}
+
+# ----- Portal 2's connections ("outputs"): OnPressed -> door, Open, , 0, -1 -----
+def outputs_of(ent):
+    outs = []
+    for k, v in ent.get("_kv", []):
+        if not k.lower().startswith("on") and not k.lower().startswith("out"):
+            continue
+        parts = v.split("\x1b") if "\x1b" in v else v.split(",")
+        if len(parts) < 2:
+            continue
+        while len(parts) < 5:
+            parts.append("")
+        try:
+            delay = float(parts[3] or 0)
+        except ValueError:
+            delay = 0.0
+        try:
+            times = int(float(parts[4] or -1))
+        except ValueError:
+            times = -1
+        outs.append([k, parts[0], parts[1], parts[2], delay, times])
+    return outs
+
+# the keys the map's I/O script needs
+IO_KEYS = ("startdisabled", "startenabled", "startstate", "linearforce", "max", "min", "startvalue", "refiretime",
+           "initialvalue", "launchtarget", "playerspeed", "physicsspeed", "entitytemplate", "spawnflags", "cubetype",
+           "lowerrandombound", "upperrandombound", "usetrandomtime") + tuple("template%02d" % i for i in range(1, 17))
+# brush triggers that become invisible boxes the I/O script watches
+TRIGGER_CLASSES = {"trigger_once", "trigger_multiple", "trigger_playerteam", "trigger_coop_manager", "trigger_look"}
+# classes the I/O script runs
+LOGIC_CLASSES = {"logic_auto", "logic_relay", "logic_branch", "logic_coop_manager", "math_counter", "logic_timer",
+                 "env_entity_maker", "point_template", "logic_compare", "logic_case"}
+EXIT_RE = re.compile(r"changelevel|transition|@exit|end_level|exit_teleport|levelend|elevator_end", re.I)
+
+def lua_value(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(float(v)) if isinstance(v, float) else str(v)
+    if isinstance(v, str):
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").replace("\r", " ") + '"'
+    if isinstance(v, dict):
+        return "{" + ", ".join("[%s] = %s" % (lua_value(k), lua_value(x)) for k, x in v.items()) + "}"
+    if isinstance(v, (list, tuple)):
+        return "{" + ", ".join(lua_value(x) for x in v) + "}"
+    return "nil"
 IDENT = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
 
 def convert_entities(w, entities, xf, mats, opts, stats):
+    io_records = {}
+    # cubes a point_template spawns later aren't in the map at the start (unless flag 2 keeps them)
+    templated = set()
+    names = {}
     for ent in entities:
+        if ent.get("targetname"):
+            names.setdefault(ent["targetname"].lower(), []).append(ent)
+    launch_targets = {ent.get("launchtarget", "").lower() for ent in entities if ent.get("launchtarget")}
+    for ent in entities:
+        if ent.get("classname") == "point_template" and not (int(ent.get("spawnflags", "0") or 0) & 2):
+            for i in range(1, 17):
+                t = ent.get("template%02d" % i)
+                if t:
+                    templated.add(t.lower())
+    for idx, ent in enumerate(entities):
         cls = ent.get("classname", "")
         rule = mats.entities.get(cls)
         name = ent.get("targetname", "")
+        eid = "e%d" % idx
+        outs = outputs_of(ent)
+        # everything with a name or connections goes into the map's I/O table
+        if name or outs or cls in LOGIC_CLASSES:
+            rec = {"c": cls, "n": name.lower(), "o": outs, "kv": {k: ent[k] for k in IO_KEYS if k in ent}}
+            if cls in ("prop_weighted_cube", "prop_monster_box"):
+                rec["cube"] = CUBE_TYPES.get(ent.get("cubetype", "0"), "Normal")
+            io_records[eid] = rec
         if rule and rule.get("skip"):
+            continue
+        if name.lower() in templated and cls in ("prop_weighted_cube", "prop_monster_box"):
+            continue  # (spawned by its env_entity_maker / point_template when the map asks for it)
+        if cls in TRIGGER_CLASSES:
+            bb = entity_bounds(ent, xf)
+            if bb:
+                tags = ["P2Trigger", "P2Ent:" + eid]
+                if any(EXIT_RE.search(" ".join(str(x) for x in o)) for o in outs) or EXIT_RE.search(name):
+                    tags.append("PortalChamberExit")  # the end of the map: PortalServer finishes the chamber
+                part_xml(w, "Part", cls, bb[0], IDENT, tuple(max(c, 0.5) for c in bb[1]), {"base": "SmoothPlastic"}, tags, False, 1.0)
+                stats["triggers"] += 1
+            continue
+        if cls == "env_entity_maker" or (cls == "info_target" and name.lower() in launch_targets):
+            part_xml(w, "Part", cls, origin_of(ent, xf), angles_axes(ent, xf), (1.0, 1.0, 1.0), {"base": "SmoothPlastic"},
+                     ["P2Point", "P2Ent:" + eid], False, 1.0)
             continue
         if rule and "spawn" in rule:
             spawn = rule["spawn"]
@@ -591,6 +680,7 @@ def convert_entities(w, entities, xf, mats, opts, stats):
                 tags.append("P2Attr:CubeType=" + CUBE_TYPES.get(ent.get("cubetype", "0"), "Normal"))
             if name:
                 tags.append("P2Name:" + name[:60])
+            tags.append("P2Ent:" + eid)
             if rule.get("brush"):
                 bb = entity_bounds(ent, xf)
                 if not bb:
@@ -628,18 +718,24 @@ def convert_entities(w, entities, xf, mats, opts, stats):
             stats["lights"] += 1
         elif cls.startswith("prop_") or cls.startswith("npc_"):
             stats["props_skipped"][cls] = stats["props_skipped"].get(cls, 0) + 1
+    return io_records
 
 SETUP_SCRIPT = r'''-- P2MapSetup (made by p2_to_roblox.py)
--- Runs when this map is in Workspace (a server Script). You can also paste it into the command bar with the map
--- selected (change `map` to that model) to see the result in edit mode.
---   * every part with a MaterialVariant gets that variant's BaseMaterial (a variant only shows on its own material)
---   * tag P2NoPortal -> attribute NoPortal = true (your portal gun refuses those surfaces)
---   * placeholders (tag P2Placeholder + "P2Asset:<name>") -> a clone of that model from ReplicatedStorage.PortalAssets
+-- Runs when this map is in Workspace (a server Script).
+--   1. every part with a MaterialVariant gets that variant's BaseMaterial; tag P2NoPortal -> attribute NoPortal
+--   2. placeholders -> clones from ReplicatedStorage.PortalAssets, tagged so your scripts run them (buttons, cubes,
+--      lasers, catchers, fizzlers, funnels, bridges, pedestals, turrets, faith plates)
+--   3. Portal 2's connections (P2IO): buttons, triggers, relays, branches, co-op managers, counters, timers, cube
+--      makers, doors - "OnPressed -> door Open" etc. work like in Portal 2
 local CollectionService = game:GetService("CollectionService")
 local MaterialService = game:GetService("MaterialService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 local map = script.Parent
 
+-- ==========================================
+-- 1. MATERIALS
+-- ==========================================
 local BLOCKED = { [Enum.Material.Metal] = true, [Enum.Material.DiamondPlate] = true, [Enum.Material.Foil] = true,
 	[Enum.Material.CorrodedMetal] = true, [Enum.Material.Plastic] = true, [Enum.Material.Glass] = true }
 local bases, warned = {}, {}
@@ -653,8 +749,7 @@ for _, p in ipairs(map:GetDescendants()) do
 				if not bases[mv] then warn("[P2MapSetup] no MaterialVariant called '" .. mv .. "' in MaterialService") end
 			end
 			if bases[mv] then
-				local portalable = not p:HasTag("P2NoPortal")
-				if portalable and BLOCKED[bases[mv]] and not warned[mv] then
+				if not p:HasTag("P2NoPortal") and BLOCKED[bases[mv]] and not warned[mv] then
 					warned[mv] = true
 					warn("[P2MapSetup] '" .. mv .. "' is a portal surface but its BaseMaterial is " .. bases[mv].Name
 						.. " (the portal gun blocks that). Set its BaseMaterial to SmoothPlastic or Concrete.")
@@ -666,9 +761,12 @@ for _, p in ipairs(map:GetDescendants()) do
 	end
 end
 
+-- ==========================================
+-- 2. PLACEHOLDERS -> YOUR MODELS
+-- ==========================================
 local assets = ReplicatedStorage:FindFirstChild("PortalAssets")
 local function findAsset(name)
-	if not assets then return nil end
+	if not assets or not name then return nil end
 	for _, folder in ipairs({ "TestElements", "TestingAssets", "EditorAssets", "Cubes" }) do
 		local f = assets:FindFirstChild(folder)
 		local a = f and f:FindFirstChild(name)
@@ -676,28 +774,356 @@ local function findAsset(name)
 	end
 	return assets:FindFirstChild(name, true)
 end
+-- the tags your scripts look for (PortalServer presses PeTIFloorButton models, TestElementsServer runs the rest)
+local ELEMENT_TAGS = { Button = "PeTIFloorButton", Cube = "PortalCube", ["Laser Emitter"] = "LaserEmitter",
+	["Laser Catcher"] = "LaserCatcher", Fizzler = "Fizzler", TBeam = "Funnel", LightBridgeFree = "LightBridge",
+	PedestalButton = "PedestalButton", Turret = "Turret" }
+local entInst = {} -- Portal 2 entity id -> the part / model standing for it
+local function setAll(inst, k, v)
+	inst:SetAttribute(k, v)
+	for _, d in ipairs(inst:GetDescendants()) do
+		if d:IsA("Model") then d:SetAttribute(k, v) end
+	end
+end
 for _, p in ipairs(map:GetDescendants()) do
-	if p:IsA("BasePart") and p:HasTag("P2Placeholder") then
-		local assetName, attrs = nil, {}
-		for _, t in ipairs(p:GetTags()) do
-			local a = t:match("^P2Asset:(.+)$")
-			if a then assetName = a end
-			local k, v = t:match("^P2Attr:([^=]+)=(.*)$")
-			if k then attrs[k] = v end
-		end
-		if assetName == "Cube" and attrs.CubeType then assetName = findAsset(attrs.CubeType) and attrs.CubeType or assetName end
-		local template = assetName and findAsset(assetName)
-		if template then
-			local c = template:Clone()
-			if c:IsA("Model") then c:PivotTo(p.CFrame) elseif c:IsA("BasePart") then c.CFrame = p.CFrame end
-			for k, v in pairs(attrs) do c:SetAttribute(k, v) end
-			c.Parent = p.Parent
-			p:Destroy()
-		else
-			warn("[P2MapSetup] no model '" .. tostring(assetName) .. "' in ReplicatedStorage.PortalAssets - left a placeholder")
+	if p:IsA("BasePart") then
+		local id
+		for _, t in ipairs(p:GetTags()) do id = t:match("^P2Ent:(.+)$") or id end
+		if p:HasTag("P2Placeholder") then
+			local assetName, attrs = nil, {}
+			for _, t in ipairs(p:GetTags()) do
+				assetName = t:match("^P2Asset:(.+)$") or assetName
+				local k, v = t:match("^P2Attr:([^=]+)=(.*)$")
+				if k then attrs[k] = v end
+			end
+			local templateName = assetName
+			if assetName == "Cube" and attrs.CubeType and findAsset(attrs.CubeType) then templateName = attrs.CubeType end
+			local template = findAsset(templateName)
+			if template then
+				local c = template:Clone()
+				local cf = p.CFrame
+				if assetName == "FaithPlate" then cf = CFrame.new(p.Position - Vector3.new(0, p.Size.Y / 2, 0)) end -- on the floor of its trigger
+				if c:IsA("Model") then c:PivotTo(cf) elseif c:IsA("BasePart") then c.CFrame = cf end
+				for k, v in pairs(attrs) do c:SetAttribute(k, v) end
+				if ELEMENT_TAGS[assetName] then c:AddTag(ELEMENT_TAGS[assetName]) end
+				if id then c:AddTag("P2Ent:" .. id) end
+				c.Parent = p.Parent
+				p:Destroy()
+				if id then entInst[id] = c end
+			else
+				warn("[P2MapSetup] no model '" .. tostring(templateName) .. "' in ReplicatedStorage.PortalAssets - left a placeholder")
+				if id then entInst[id] = p end
+			end
+		elseif id then
+			entInst[id] = p -- triggers / points
 		end
 	end
 end
+
+-- ==========================================
+-- 3. PORTAL 2 I/O
+-- ==========================================
+local ioModule = map:FindFirstChild("P2IO")
+local okIO, IO = false, nil
+if ioModule then okIO, IO = pcall(require, ioModule) end
+if not okIO or type(IO) ~= "table" then return end
+
+local byName = {}
+for id, e in pairs(IO) do
+	e.id = id
+	e.enabled = true
+	if e.n ~= "" then
+		byName[e.n] = byName[e.n] or {}
+		table.insert(byName[e.n], e)
+	end
+end
+local function kv(e, k) return e.kv and e.kv[k] end
+local function num(x, d) return tonumber(x) or d end
+local function alive() return map.Parent ~= nil end
+
+local fire, input
+local function targets(name, selfE)
+	name = string.lower(name or "")
+	if name == "!self" then return { selfE } end
+	if name:sub(1, 1) == "!" then return {} end
+	local out = {}
+	if name:sub(-1) == "*" then
+		local pre = name:sub(1, -2)
+		for n, list in pairs(byName) do
+			if n:sub(1, #pre) == pre then for _, e in ipairs(list) do table.insert(out, e) end end
+		end
+	else
+		for _, e in ipairs(byName[name] or {}) do table.insert(out, e) end
+	end
+	return out
+end
+
+fire = function(e, output)
+	local lo = string.lower(output)
+	for _, o in ipairs(e.o or {}) do
+		if string.lower(o[1]) == lo and o[6] ~= 0 then
+			if o[6] > 0 then o[6] -= 1 end
+			local tgt, inp, param = o[2], o[3], o[4]
+			task.delay(o[5] or 0, function()
+				if not alive() then return end
+				for _, t in ipairs(targets(tgt, e)) do
+					local ok, err = pcall(input, t, inp, param, e)
+					if not ok then warn("[P2MapSetup] " .. tostring(t.n) .. "." .. tostring(inp) .. ": " .. tostring(err)) end
+				end
+			end)
+		end
+	end
+end
+
+local function setEnabled(e, on)
+	e.enabled = on
+	local inst = entInst[e.id]
+	if inst and inst.Parent then setAll(inst, "Enabled", on) end
+end
+
+-- cube makers: a fresh cube of the template's type at the maker (the old one goes, like Portal 2)
+local function cubeTypeOf(maker)
+	for _, pt in ipairs(targets(kv(maker, "entitytemplate"), maker)) do
+		for i = 1, 16 do
+			local t = pt.kv and pt.kv[("template%02d"):format(i)]
+			for _, ce in ipairs(targets(t, pt)) do
+				if ce.cube then return ce.cube end
+			end
+		end
+	end
+	return "Normal"
+end
+local function spawnFromMaker(e)
+	local at = entInst[e.id]
+	if not at then return end
+	if e.spawned and e.spawned.Parent then e.spawned:Destroy() end
+	local kind = cubeTypeOf(e)
+	local template = findAsset(kind) or findAsset("Cube")
+	if not template then warn("[P2MapSetup] no cube model for the cube maker") return end
+	local c = template:Clone()
+	if c:IsA("Model") then c:PivotTo(at.CFrame) elseif c:IsA("BasePart") then c.CFrame = at.CFrame end
+	c:SetAttribute("CubeType", kind)
+	c:AddTag("PortalCube")
+	c.Parent = map
+	e.spawned = c
+	fire(e, "OnEntitySpawned")
+end
+
+local function counterCheck(e)
+	local mx, mn = num(kv(e, "max"), 0), num(kv(e, "min"), 0)
+	if mx ~= 0 and e.value >= mx then
+		e.value = mx
+		fire(e, "OnHitMax")
+	elseif (mn ~= 0 or mx ~= 0) and e.value <= mn then
+		e.value = mn
+		fire(e, "OnHitMin")
+	end
+end
+
+local ON = { enable = true, turnon = true, activate = true, enablerefire = true, start = true }
+local OFF = { disable = true, turnoff = true, deactivate = true, stop = true }
+input = function(e, inp, param, caller)
+	local i = string.lower(inp or "")
+	local c = e.c
+	local inst = entInst[e.id]
+	local user = i:match("^fireuser(%d)$")
+	if user then fire(e, "OnUser" .. user) return end
+	if i == "kill" or i == "dissolve" or i == "killhierarchy" then
+		if inst and inst.Parent then inst:Destroy() end
+		entInst[e.id] = nil
+		e.enabled = false
+		return
+	end
+	if c == "prop_testchamber_door" then
+		if i == "open" or i == "close" then
+			local open = i == "open"
+			if inst then inst:SetAttribute("Open", open) end -- the door model's own script opens / closes on "Open"
+			fire(e, open and "OnOpen" or "OnClose")
+			task.delay(1, function() fire(e, open and "OnFullyOpen" or "OnFullyClosed") end)
+		end
+		return
+	elseif c == "logic_relay" then
+		if i == "trigger" then
+			if e.enabled then
+				fire(e, "OnTrigger")
+				if num(kv(e, "spawnflags"), 0) % 2 == 1 then e.enabled = false end -- "only trigger once"
+			end
+		elseif i == "enable" then e.enabled = true
+		elseif i == "disable" then e.enabled = false
+		elseif i == "toggle" then e.enabled = not e.enabled end
+		return
+	elseif c == "logic_branch" then
+		e.value = e.value or num(kv(e, "initialvalue"), 0) ~= 0
+		if i == "setvalue" or i == "setvaluetest" then e.value = num(param, 0) ~= 0
+		elseif i == "toggle" or i == "toggletest" then e.value = not e.value end
+		if i == "test" or i == "setvaluetest" or i == "toggletest" then fire(e, e.value and "OnTrue" or "OnFalse") end
+		return
+	elseif c == "logic_coop_manager" then
+		if i == "setstateatrue" then e.a = true elseif i == "setstateafalse" then e.a = false
+		elseif i == "setstatebtrue" then e.b = true elseif i == "setstatebfalse" then e.b = false end
+		local all, any = (e.a and e.b) == true, (e.a or e.b) == true
+		if all ~= (e.lastAll == true) then e.lastAll = all fire(e, all and "OnChangeToAllTrue" or "OnChangeToAnyFalse") end
+		if any ~= (e.lastAny == true) then e.lastAny = any fire(e, any and "OnChangeToAnyTrue" or "OnChangeToAllFalse") end
+		return
+	elseif c == "math_counter" then
+		e.value = e.value or num(kv(e, "startvalue"), 0)
+		if i == "add" then e.value += num(param, 0) counterCheck(e)
+		elseif i == "subtract" then e.value -= num(param, 0) counterCheck(e)
+		elseif i == "setvalue" then e.value = num(param, 0) counterCheck(e)
+		elseif i == "setvaluenofire" then e.value = num(param, 0)
+		elseif i == "getvalue" then fire(e, "OnGetValue") end
+		return
+	elseif c == "logic_timer" then
+		if i == "refiretime" then e.kv.refiretime = param end
+		if ON[i] or i == "toggle" and not e.enabled then e.enabled = true e.timerToken = (e.timerToken or 0) + 1 e.startTimer()
+		elseif OFF[i] or i == "toggle" then e.enabled = false e.timerToken = (e.timerToken or 0) + 1
+		elseif i == "firetimer" then fire(e, "OnTimer") end
+		return
+	elseif c == "env_entity_maker" then
+		if i == "forcespawn" then spawnFromMaker(e) end
+		return
+	elseif c == "prop_tractor_beam" and i == "setlinearforce" then
+		local f = num(param, 250)
+		if inst then
+			setAll(inst, "Reversed", f < 0)
+			setAll(inst, "Speed", math.clamp(math.abs(f) / 14.7, 2, 40))
+		end
+		return
+	elseif c == "prop_floor_button" or c == "prop_floor_cube_button" or c == "prop_floor_ball_button" then
+		if i == "pressin" then fire(e, "OnPressed") elseif i == "pressout" then fire(e, "OnUnPressed") end
+		return
+	elseif c == "prop_button" or c == "prop_under_button" then
+		if i == "press" then fire(e, "OnPressed") end
+		if ON[i] then e.enabled = true elseif OFF[i] then e.enabled = false end
+		return
+	end
+	if ON[i] then setEnabled(e, true)
+	elseif OFF[i] then setEnabled(e, false)
+	elseif i == "toggle" then setEnabled(e, not e.enabled) end
+end
+
+-- ----- start states -----
+for _, e in pairs(IO) do
+	local k = e.kv or {}
+	local startsOff = k.startdisabled == "1" or k.startenabled == "0" or (e.c == "env_portal_laser" and k.startstate == "1")
+	if startsOff then setEnabled(e, false) end
+	if e.c == "prop_tractor_beam" and k.linearforce then input(e, "SetLinearForce", k.linearforce) end
+	if e.c == "logic_timer" then
+		e.startTimer = function()
+			local my = e.timerToken
+			task.spawn(function()
+				while alive() and e.enabled and e.timerToken == my do
+					local lo, hi = num(k.lowerrandombound, 0), num(k.upperrandombound, 0)
+					local wait = (k.usetrandomtime == "1" and hi > 0) and (lo + math.random() * (hi - lo)) or num(k.refiretime, 1)
+					task.wait(math.max(wait, 0.05))
+					if alive() and e.enabled and e.timerToken == my then fire(e, "OnTimer") end
+				end
+			end)
+		end
+		e.timerToken = 0
+		if not startsOff then e.startTimer() end
+	end
+	-- faith plates aim at their launch target (FaithPlateServer reads AimPoint)
+	if e.c == "trigger_catapult" and k.launchtarget then
+		local inst = entInst[e.id]
+		for _, t in ipairs(targets(k.launchtarget, e)) do
+			local tp = entInst[t.id]
+			if inst and tp and tp:IsA("BasePart") then inst:SetAttribute("AimPoint", tp.Position) end
+		end
+	end
+end
+
+-- ----- buttons / pedestals / catchers: their "Pressed" -> OnPressed / OnUnPressed ... -----
+local function watchPressed(e, onOut, offOut)
+	local inst = entInst[e.id]
+	if not inst then return end
+	local was = false
+	local function check()
+		local on = inst:GetAttribute("Pressed") == true or inst:GetAttribute("PressesButton") == true
+		if not on then
+			for _, d in ipairs(inst:GetDescendants()) do
+				if (d:IsA("Model") or d:IsA("BasePart")) and (d:GetAttribute("Pressed") == true or d:GetAttribute("PressesButton") == true) then on = true break end
+			end
+		end
+		if on == was then return end
+		was = on
+		if e.enabled == false then return end
+		if on then fire(e, onOut) elseif offOut then fire(e, offOut) end
+	end
+	local function hook(d)
+		if d:IsA("Model") or d:IsA("BasePart") then
+			d:GetAttributeChangedSignal("Pressed"):Connect(check)
+			d:GetAttributeChangedSignal("PressesButton"):Connect(check)
+		end
+	end
+	hook(inst)
+	for _, d in ipairs(inst:GetDescendants()) do hook(d) end
+	inst.DescendantAdded:Connect(hook)
+end
+for _, e in pairs(IO) do
+	if e.c == "prop_floor_button" or e.c == "prop_floor_cube_button" or e.c == "prop_floor_ball_button" then
+		watchPressed(e, "OnPressed", "OnUnPressed")
+	elseif e.c == "prop_button" or e.c == "prop_under_button" then
+		watchPressed(e, "OnPressed", "OnButtonReset")
+	elseif e.c == "prop_laser_catcher" or e.c == "prop_laser_relay" then
+		watchPressed(e, "OnPowered", "OnUnpowered")
+	end
+end
+
+-- ----- triggers: players walking in / out -----
+local triggers = {}
+for _, e in pairs(IO) do
+	local inst = entInst[e.id]
+	if inst and inst:IsA("BasePart") and inst:HasTag("P2Trigger") then
+		e.inside = {}
+		table.insert(triggers, e)
+	end
+end
+if #triggers > 0 then
+	task.spawn(function()
+		local params = OverlapParams.new()
+		while alive() do
+			task.wait(0.1)
+			for _, e in ipairs(triggers) do
+				local part = entInst[e.id]
+				if part and part.Parent and e.enabled ~= false then
+					local now = {}
+					for _, p in ipairs(workspace:GetPartBoundsInBox(part.CFrame, part.Size, params)) do
+						local m = p:FindFirstAncestorOfClass("Model")
+						local pl = m and Players:GetPlayerFromCharacter(m)
+						if pl then now[pl] = true end
+					end
+					local wasEmpty = next(e.inside) == nil
+					for pl in pairs(now) do
+						if not e.inside[pl] then
+							fire(e, "OnStartTouch")
+							if wasEmpty then
+								fire(e, "OnStartTouchAll")
+								fire(e, "OnTrigger")
+								if e.c == "trigger_once" then e.enabled = false end
+							end
+							wasEmpty = false
+						end
+					end
+					for pl in pairs(e.inside) do
+						if not now[pl] then fire(e, "OnEndTouch") end
+					end
+					if next(now) == nil and next(e.inside) ~= nil then fire(e, "OnEndTouchAll") end
+					e.inside = now
+				end
+			end
+		end
+	end)
+end
+
+-- ----- the map starts -----
+task.delay(0.5, function()
+	for _, e in pairs(IO) do
+		if e.c == "logic_auto" then
+			for _, out in ipairs({ "OnMapSpawn", "OnNewGame", "OnMultiNewMap", "OnMultiNewRound", "OnMapTransition" }) do fire(e, out) end
+		end
+	end
+end)
 '''
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -741,7 +1167,7 @@ def main():
     name = opts.name or os.path.splitext(os.path.basename(opts.input))[0]
     out_path = opts.output or os.path.splitext(opts.input)[0] + ".rbxmx"
     stats = {"boxes": 0, "wedges": 0, "shapes": 0, "triangles": 0, "plates": 0, "skipped": 0, "degenerate": 0,
-             "spawns": 0, "placeholders": 0, "lights": 0, "props_skipped": {}}
+             "spawns": 0, "placeholders": 0, "lights": 0, "triggers": 0, "props_skipped": {}}
 
     w = Writer()
     w.out.write('<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
@@ -754,7 +1180,11 @@ def main():
             print("  %d / %d brushes" % (i, len(keep)))
     w.close()
     w.open("Folder", "Entities")
-    convert_entities(w, entities, xf, mats, opts, stats)
+    io_records = convert_entities(w, entities, xf, mats, opts, stats)
+    w.close()
+    # Portal 2's connections, for the I/O part of P2MapSetup
+    w.open("ModuleScript", "P2IO", '<ProtectedString name="Source"><![CDATA[return %s\n]]></ProtectedString>'
+           % lua_value(io_records).replace("]]>", "] ]>"))
     w.close()
     w.open("Script", "P2MapSetup", '<ProtectedString name="Source"><![CDATA[%s]]></ProtectedString>' % SETUP_SCRIPT)
     w.close()
@@ -766,8 +1196,9 @@ def main():
     print("Wrote", out_path)
     print("  %d boxes, %d ramps, %d other shapes (%d triangle wedges), %d side plates" %
           (stats["boxes"], stats["wedges"], stats["shapes"], stats["triangles"], stats["plates"]))
-    print("  %d spawns, %d test element placeholders, %d lights; %d tool / trigger brushes skipped, %d broken brushes" %
-          (stats["spawns"], stats["placeholders"], stats["lights"], stats["skipped"], stats["degenerate"]))
+    print("  %d spawns, %d test element placeholders, %d triggers, %d lights; %d tool / trigger brushes skipped, %d broken brushes" %
+          (stats["spawns"], stats["placeholders"], stats["triggers"], stats["lights"], stats["skipped"], stats["degenerate"]))
+    print("  %d entities with names / connections kept for the map's I/O" % len(io_records))
     if stats["props_skipped"]:
         print("  models not converted (no .mdl support - add them by hand):",
               ", ".join("%s x%d" % kv for kv in sorted(stats["props_skipped"].items(), key=lambda kv: -kv[1])[:12]))
