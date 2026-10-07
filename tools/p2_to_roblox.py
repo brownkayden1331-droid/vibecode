@@ -1154,32 +1154,6 @@ def find_materials():
             return p
     return os.path.join(HERE, "p2_materials.json")
 
-def ask_for_input():
-    """double-clicked with no map: pick one in a file window (or type / drag it in)"""
-    print("Portal 2 map -> Roblox converter")
-    print("Pick the .vmf or .bsp in the window (you can also drag a map onto the .exe).")
-    path = ""
-    try:
-        import tkinter
-        from tkinter import filedialog
-        root = tkinter.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        path = filedialog.askopenfilename(title="Portal 2 map (.vmf / .bsp)",
-                                          filetypes=[("Portal 2 maps", "*.vmf *.bsp"), ("All files", "*.*")])
-        root.destroy()
-    except Exception:
-        path = ""
-    if not path:
-        path = input("Map file (drag it into this window, then press Enter): ").strip().strip('"').strip("'")
-    if not path:
-        raise SystemExit("no map picked")
-    name = input("Model name (Enter = the map's name, CoopHub for the co-op hub): ").strip()
-    args = [path]
-    if name:
-        args += ["--name", name]
-    return args
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Portal 2 map (.vmf / .bsp) -> Roblox model (.rbxmx)")
     ap.add_argument("input", help="the .vmf (best) or .bsp")
@@ -1283,11 +1257,287 @@ def main(argv=None):
         for e in stats["errors"][:15]:
             print("    " + e)
 
+class _QueueWriter:
+    """print() from the conversion thread -> the window's log"""
+    def __init__(self, q):
+        self.q = q
+    def write(self, text):
+        if text:
+            self.q.put(text)
+    def flush(self):
+        pass
+
+def save_crash(text):
+    for d in (os.getcwd(), os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) else HERE,
+              os.path.expanduser("~")):
+        try:
+            log = os.path.join(d, "p2_to_roblox_crash.txt")
+            with open(log, "w", encoding="utf-8") as f:
+                f.write(text)
+            return log
+        except OSError:
+            continue
+    return None
+
+def gui(initial=None):
+    """the converter's window: pick a map, options, Convert, and the log underneath"""
+    import queue
+    import subprocess
+    import threading
+    import tkinter as tk
+    from tkinter import filedialog, ttk
+
+    root = tk.Tk()
+    root.title("Portal 2 Map Converter")
+    root.geometry("760x620")
+    root.minsize(620, 480)
+    try:
+        ttk.Style(root).theme_use("vista" if sys.platform == "win32" else "clam")
+    except tk.TclError:
+        pass
+
+    v_in = tk.StringVar(value=initial or "")
+    v_out = tk.StringVar()
+    v_name = tk.StringVar()
+    v_units = tk.StringVar(value="14.7")
+    v_mats = tk.StringVar(value=find_materials())
+    v_plates = tk.BooleanVar(value=True)
+    v_lights = tk.BooleanVar(value=True)
+    v_center = tk.BooleanVar(value=True)
+    v_hub = tk.BooleanVar(value=False)
+    out_auto = {"path": ""}
+
+    def default_out(*_):
+        path = v_in.get().strip().strip('"')
+        if path and (not v_out.get() or v_out.get() == out_auto["path"]):
+            out_auto["path"] = (os.path.join(os.path.dirname(path), "CoopHub.rbxmx") if v_hub.get()
+                                else os.path.splitext(path)[0] + ".rbxmx")
+            v_out.set(out_auto["path"])
+    v_in.trace_add("write", default_out)
+
+    def on_hub():
+        if v_hub.get():
+            v_name.set("CoopHub")
+        elif v_name.get() == "CoopHub":
+            v_name.set("")
+        default_out()
+
+    def pick_in():
+        p = filedialog.askopenfilename(title="Portal 2 map", filetypes=[("Portal 2 maps", "*.vmf *.bsp"), ("All files", "*.*")])
+        if p:
+            v_in.set(p)
+    def pick_out():
+        p = filedialog.asksaveasfilename(title="Save the Roblox model as", defaultextension=".rbxmx",
+                                         filetypes=[("Roblox model", "*.rbxmx")], initialfile=os.path.basename(v_out.get() or ""))
+        if p:
+            v_out.set(p)
+    def pick_mats():
+        p = filedialog.askopenfilename(title="Material rules", filetypes=[("JSON", "*.json"), ("All files", "*.*")])
+        if p:
+            v_mats.set(p)
+
+    frm = ttk.Frame(root, padding=12)
+    frm.pack(fill="both", expand=True)
+    frm.columnconfigure(1, weight=1)
+    ttk.Label(frm, text="Portal 2 map  ->  Roblox model (.rbxmx)", font=("Segoe UI", 13, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    def file_row(r, label, var, cmd):
+        ttk.Label(frm, text=label).grid(row=r, column=0, sticky="w", pady=3)
+        ttk.Entry(frm, textvariable=var).grid(row=r, column=1, sticky="ew", padx=6, pady=3)
+        ttk.Button(frm, text="Browse...", command=cmd).grid(row=r, column=2, pady=3)
+    file_row(1, "Map (.vmf / .bsp)", v_in, pick_in)
+    file_row(2, "Save as", v_out, pick_out)
+    ttk.Label(frm, text="Model name").grid(row=3, column=0, sticky="w", pady=3)
+    name_row = ttk.Frame(frm)
+    name_row.grid(row=3, column=1, columnspan=2, sticky="ew", padx=6)
+    name_row.columnconfigure(0, weight=1)
+    ttk.Entry(name_row, textvariable=v_name).grid(row=0, column=0, sticky="ew")
+    ttk.Checkbutton(name_row, text="This is the co-op hub", variable=v_hub, command=on_hub).grid(row=0, column=1, padx=(10, 0))
+    ttk.Label(frm, text="(empty = the map's file name)", foreground="#777").grid(row=4, column=1, sticky="w", padx=6)
+
+    opts_box = ttk.LabelFrame(frm, text="Options", padding=8)
+    opts_box.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(10, 6))
+    ttk.Label(opts_box, text="Hammer units per stud").grid(row=0, column=0, sticky="w")
+    ttk.Entry(opts_box, textvariable=v_units, width=8).grid(row=0, column=1, sticky="w", padx=(6, 18))
+    ttk.Checkbutton(opts_box, text="Side plates (one texture per side)", variable=v_plates).grid(row=0, column=2, sticky="w", padx=(0, 12))
+    ttk.Checkbutton(opts_box, text="Lights", variable=v_lights).grid(row=0, column=3, sticky="w", padx=(0, 12))
+    ttk.Checkbutton(opts_box, text="Centre the map", variable=v_center).grid(row=0, column=4, sticky="w")
+    mats_row = ttk.Frame(opts_box)
+    mats_row.grid(row=1, column=0, columnspan=6, sticky="ew", pady=(8, 0))
+    mats_row.columnconfigure(1, weight=1)
+    ttk.Label(mats_row, text="Material rules").grid(row=0, column=0, sticky="w")
+    ttk.Entry(mats_row, textvariable=v_mats).grid(row=0, column=1, sticky="ew", padx=6)
+    ttk.Button(mats_row, text="Browse...", command=pick_mats).grid(row=0, column=2)
+
+    btns = ttk.Frame(frm)
+    btns.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(4, 6))
+    convert_btn = ttk.Button(btns, text="Convert")
+    convert_btn.pack(side="left")
+    open_btn = ttk.Button(btns, text="Open folder", state="disabled")
+    open_btn.pack(side="left", padx=6)
+    bar = ttk.Progressbar(btns, mode="indeterminate", length=180)
+    bar.pack(side="right")
+    status = ttk.Label(btns, text="")
+    status.pack(side="right", padx=8)
+
+    log_frame = ttk.Frame(frm)
+    log_frame.grid(row=7, column=0, columnspan=3, sticky="nsew")
+    frm.rowconfigure(7, weight=1)
+    log = tk.Text(log_frame, wrap="word", height=12, font=("Consolas", 9), state="disabled", background="#1e1e1e",
+                  foreground="#dcdcdc", insertbackground="#dcdcdc", relief="flat", padx=6, pady=6)
+    sb = ttk.Scrollbar(log_frame, command=log.yview)
+    log.configure(yscrollcommand=sb.set)
+    sb.pack(side="right", fill="y")
+    log.pack(side="left", fill="both", expand=True)
+    log.tag_configure("err", foreground="#ff8080")
+    log.tag_configure("ok", foreground="#8fe08f")
+
+    def write_log(text, tag=None):
+        log.configure(state="normal")
+        log.insert("end", text, tag)
+        log.see("end")
+        log.configure(state="disabled")
+
+    q = queue.Queue()
+    state = {"busy": False, "out": None}
+
+    def worker(argv):
+        old_out, old_err = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = _QueueWriter(q)
+        result = ("ok", None)
+        try:
+            main(argv)
+        except SystemExit as e:
+            if e.code not in (None, 0):
+                result = ("stop", str(e.code))
+        except BaseException:
+            import traceback
+            text = traceback.format_exc()
+            result = ("crash", text)
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+        q.put(result)
+
+    def poll():
+        try:
+            while True:
+                item = q.get_nowait()
+                if isinstance(item, tuple):
+                    finish(*item)
+                else:
+                    write_log(item)
+        except queue.Empty:
+            pass
+        if state["busy"]:
+            root.after(80, poll)
+
+    def finish(kind, detail):
+        state["busy"] = False
+        bar.stop()
+        convert_btn.configure(state="normal")
+        if kind == "ok":
+            status.configure(text="Done")
+            write_log("\nDone - drag the .rbxmx into Studio (or right-click > Insert from File).\n", "ok")
+            open_btn.configure(state="normal")
+        elif kind == "stop":
+            status.configure(text="Stopped")
+            write_log("\nStopped: %s\n" % detail, "err")
+        else:
+            status.configure(text="Crashed")
+            where = save_crash(detail)
+            write_log("\nThe converter crashed:\n%s" % detail, "err")
+            if where:
+                write_log("Saved this to %s - send it to whoever fixes the tool.\n" % where, "err")
+
+    def convert():
+        if state["busy"]:
+            return
+        path = v_in.get().strip().strip('"')
+        if not path:
+            write_log("Pick a map first.\n", "err")
+            return
+        try:
+            units = float(v_units.get())
+            if units <= 0:
+                raise ValueError
+        except ValueError:
+            write_log("Hammer units per stud must be a number above 0 (14.7 is normal).\n", "err")
+            return
+        argv = [path, "--scale", repr(1 / units), "--materials", v_mats.get().strip()]
+        out = v_out.get().strip().strip('"')
+        if out:
+            argv += ["-o", out]
+        if v_name.get().strip():
+            argv += ["--name", v_name.get().strip()]
+        if not v_plates.get():
+            argv.append("--no-face-plates")
+        if not v_lights.get():
+            argv.append("--no-lights")
+        if not v_center.get():
+            argv.append("--no-center")
+        state["busy"], state["out"] = True, out or os.path.splitext(path)[0] + ".rbxmx"
+        log.configure(state="normal")
+        log.delete("1.0", "end")
+        log.configure(state="disabled")
+        convert_btn.configure(state="disabled")
+        open_btn.configure(state="disabled")
+        status.configure(text="Converting...")
+        bar.start(12)
+        threading.Thread(target=worker, args=(argv,), daemon=True).start()
+        root.after(80, poll)
+
+    def open_folder():
+        folder = os.path.dirname(os.path.abspath(state["out"] or ""))
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer", "/select,", os.path.abspath(state["out"])])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except OSError as err:
+            write_log("Couldn't open the folder: %s\n" % err, "err")
+
+    convert_btn.configure(command=convert)
+    open_btn.configure(command=open_folder)
+    root.bind("<Return>", lambda _e: convert())
+    write_log("Pick a Portal 2 map (.vmf is best - decompile a .bsp with BSPSource) and press Convert.\n"
+              "For the co-op hub tick \"This is the co-op hub\", then put the model in ServerStorage.PortalMaps.\n")
+    if initial:
+        default_out()
+    root.mainloop()
+
+def console_fallback():
+    """no window possible: ask in the console"""
+    print("Portal 2 map -> Roblox converter")
+    path = input("Map file (drag it into this window, then press Enter): ").strip().strip('"').strip("'")
+    if not path:
+        raise SystemExit("no map picked")
+    name = input("Model name (Enter = the map's name, CoopHub for the co-op hub): ").strip()
+    return [path] + (["--name", name] if name else [])
+
 def run():
-    interactive = len(sys.argv) <= 1 or getattr(sys, "frozen", False)
+    frozen = getattr(sys, "frozen", False)
+    # the windowed .exe has no console: command-line runs print nowhere instead of crashing
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+    args = sys.argv[1:]
+    # the window: when double-clicked (no options) or as the .exe; a map dragged onto it is filled in
+    if not args or (frozen and len(args) == 1 and os.path.isfile(args[0])) or args == ["--gui"]:
+        initial = args[0] if args and args[0] != "--gui" else None
+        try:
+            import tkinter  # noqa: F401
+            gui(initial)
+            return
+        except ImportError:
+            pass
+        args = [initial] if initial else None
+    interactive = sys.stdin is not None and sys.stdout is not None and (not sys.argv[1:] or frozen)
     code = 0
     try:
-        main(ask_for_input() if len(sys.argv) <= 1 else None)
+        main(args if args else console_fallback())
     except SystemExit as e:
         if e.code not in (None, 0):
             print("\nStopped:", e.code)
@@ -1297,17 +1547,13 @@ def run():
         code = 1
         text = traceback.format_exc()
         print("\nThe converter crashed:\n" + text)
-        try:
-            log = os.path.join(os.getcwd(), "p2_to_roblox_crash.txt")
-            with open(log, "w", encoding="utf-8") as f:
-                f.write(text)
-            print("Saved this to", log, "- send it to whoever fixes the tool.")
-        except OSError:
-            pass
+        where = save_crash(text)
+        if where:
+            print("Saved this to", where, "- send it to whoever fixes the tool.")
     if interactive:
         try:
             input("\nPress Enter to close...")
-        except (EOFError, KeyboardInterrupt):
+        except (EOFError, KeyboardInterrupt, RuntimeError):
             pass
     sys.exit(code)
 

@@ -1610,10 +1610,12 @@ local function makeRow(panel, body, i, yPos, row, w, dark)
 		item.left = function() nudge(-1) end
 		item.right = function() nudge(1) end
 		local dragging, dragInput, lastTick = false, nil, 0
-		local function fromX(x)
-			local a = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+		-- touch: nothing changes until the finger clearly moves sideways (a vertical drag scrolls the list instead),
+		-- then the bar moves by how far the finger moved (not to where it is), so touching a row never snaps it to 0 %
+		local touchStart, touchStartValue, touchOnTrack = nil, 0, false
+		local function setFrac(a)
 			local mn, mx = row.min or 0, row.max or 1
-			local v = mn + (mx - mn) * a
+			local v = mn + (mx - mn) * math.clamp(a, 0, 1)
 			if row.step then v = math.floor(v / row.step + 0.5) * row.step end
 			local before = getValue()
 			setValue(math.clamp(v, mn, mx))
@@ -1623,24 +1625,65 @@ local function makeRow(panel, body, i, yPos, row, w, dark)
 			end
 			item.refresh(item.hiNow)
 		end
+		local function fromX(x)
+			setFrac((x - track.AbsolutePosition.X) / track.AbsoluteSize.X)
+		end
+		local function frac()
+			local mn, mx = row.min or 0, row.max or 1
+			return mx > mn and (getValue() - mn) / (mx - mn) or 0
+		end
 		b.InputBegan:Connect(function(input)
 			local t = input.UserInputType
-			if (t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch) and not busy then
+			if busy then return end
+			if t == Enum.UserInputType.MouseButton1 then
 				dragging, dragInput = true, input
 				panel.sliderDrag = true
 				setHi(panel, i, true)
 				fromX(input.Position.X)
+			elseif t == Enum.UserInputType.Touch and not touchStart then
+				dragInput = input
+				touchStart = Vector2.new(input.Position.X, input.Position.Y)
+				touchStartValue = frac()
+				local tx, tw = track.AbsolutePosition.X, track.AbsoluteSize.X
+				touchOnTrack = input.Position.X >= tx - 12 and input.Position.X <= tx + tw + 12
 			end
 		end)
 		table.insert(panel.conns, UserInputService.InputChanged:Connect(function(input)
-			if not dragging then return end
-			if input.UserInputType == Enum.UserInputType.MouseMovement
-				or (input.UserInputType == Enum.UserInputType.Touch and input == dragInput) then
-				fromX(input.Position.X)
+			if input.UserInputType == Enum.UserInputType.MouseMovement then
+				if dragging then fromX(input.Position.X) end
+			elseif input == dragInput and touchStart then
+				local d = Vector2.new(input.Position.X, input.Position.Y) - touchStart
+				if not dragging then
+					if panel.touchScrolled or (math.abs(d.Y) > 10 and math.abs(d.Y) >= math.abs(d.X)) then
+						touchStart, dragInput = nil, nil -- a scroll, leave the bar alone
+						return
+					end
+					if math.abs(d.X) < 14 then return end
+					dragging = true
+					panel.sliderDrag = true
+					setHi(panel, i, true)
+					touchStart = Vector2.new(input.Position.X, touchStart.Y)
+					touchStartValue = frac()
+					return
+				end
+				setFrac(touchStartValue + (input.Position.X - touchStart.X) / math.max(track.AbsoluteSize.X, 1))
 			end
 		end))
 		table.insert(panel.conns, UserInputService.InputEnded:Connect(function(input)
-			if input == dragInput or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			if input == dragInput and touchStart then
+				if not dragging and touchOnTrack and not panel.touchScrolled then
+					-- a clean tap right on the bar sets it there
+					setHi(panel, i, true)
+					fromX(input.Position.X)
+				elseif not dragging and not panel.touchScrolled then
+					setHi(panel, i, true)
+				end
+				touchStart, dragInput = nil, nil
+				if dragging then
+					dragging = false
+					panel.sliderDrag = false
+				end
+			elseif input == dragInput or input.UserInputType == Enum.UserInputType.MouseButton1 then
 				dragging, dragInput = false, nil
 				panel.sliderDrag = false
 			end
@@ -1928,7 +1971,7 @@ local function buildPanel(def)
 			-- touch: drag the list up / down
 			local dragTouch, dragY, dragMoved = nil, 0, 0
 			table.insert(panel.conns, UserInputService.InputBegan:Connect(function(input)
-				if input.UserInputType ~= Enum.UserInputType.Touch or current() ~= panel or busy or panel.sliderDrag then return end
+				if input.UserInputType ~= Enum.UserInputType.Touch or current() ~= panel or busy then return end
 				local pos = Vector2.new(input.Position.X, input.Position.Y) + GuiService:GetGuiInset()
 				local ap, as = body.AbsolutePosition, body.AbsoluteSize
 				if pos.X >= ap.X and pos.X <= ap.X + as.X and pos.Y >= ap.Y and pos.Y <= ap.Y + as.Y then
@@ -1938,6 +1981,7 @@ local function buildPanel(def)
 			end))
 			table.insert(panel.conns, UserInputService.InputChanged:Connect(function(input)
 				if input ~= dragTouch then return end
+				if panel.sliderDrag then dragY = input.Position.Y return end -- moving a bar sideways, not scrolling
 				local step = rowH * uiScale.Scale
 				local dy = input.Position.Y - dragY
 				dragMoved += math.abs(input.Delta.Y)

@@ -103,7 +103,7 @@ A Python 3 script for your PC (standard library only) that turns a Portal 2 map 
 ```
 python tools/p2_to_roblox.py mp_coop_lobby_3.vmf -o CoopHub.rbxmx --name CoopHub
 ```
-**No Python? Use `tools/p2_to_roblox.exe`** (built on Windows by GitHub Actions every time the converter changes). Double-click it and pick the map, or drag a `.vmf` / `.bsp` onto it; the `.rbxmx` lands next to the map. It also takes the same options in a command prompt (`p2_to_roblox.exe map.vmf --name CoopHub`). Put an edited `p2_materials.json` next to the .exe to override the built-in one. If something goes wrong the window stays open with the error and saves `p2_to_roblox_crash.txt`; brushes / entities that can't be converted are left out and listed instead of stopping the map.
+**No Python? Use `tools/p2_to_roblox.exe`** (built on Windows by GitHub Actions every time the converter changes). Double-click it (or drag a map onto it) and a window opens: pick the map, where to save, the model name (tick *This is the co-op hub* for CoopHub), the options, then **Convert**; the log shows what was built and **Open folder** shows the `.rbxmx`. `python tools/p2_to_roblox.py` with no arguments opens the same window; with arguments it stays a command-line tool. Put an edited `p2_materials.json` next to the .exe to override the built-in one. If something goes wrong the window stays open with the error and saves `p2_to_roblox_crash.txt`; brushes / entities that can't be converted are left out and listed instead of stopping the map.
 - **Input**: `.vmf` (best; get it from a `.bsp` with BSPSource) or a `.bsp` directly (experimental).
 - **Geometry**: boxes (also rotated) become Parts, right-angle ramps WedgeParts, every other shape thin wedge-pair triangles. Sides with a different texture than the rest of the box get a thin plate. Tool textures: nodraw sides aren't drawn, clips / invisible become invisible walls, triggers / skybox / hints are left out.
 - **Materials**: `tools/p2_materials.json` maps Portal 2 texture paths (regular expressions) to your MaterialService variants (White 4.5, Metal 9, DevG, bts1concrete...) and says which are portalable. The script prints every texture it had no rule for - add rules and run it again.
@@ -120,6 +120,7 @@ python tools/p2_to_roblox.py mp_coop_lobby_3.vmf -o CoopHub.rbxmx --name CoopHub
 ## Phones / tablets in the editor
 - **Move stick** (bottom left) flies the camera around (up on the stick = where you look), **▲ / ▼** go up and down. **Look stick** (bottom right) turns the camera, its speed follows Options › Editor › *Touch Orbit Speed*. One finger on the room still orbits too, two fingers pan and pinch zooms. *Touch Move Stick* turns both sticks off.
 - **Double-tap** a surface or an item = right-click: opens its menu (options, connect, delete, Move…).
+- **Menu settings on phones**: dragging up / down over a slider scrolls the list and leaves the bar alone. A bar only moves once your finger clearly goes sideways, and then by how far it moved (not to where you touched), so touching the label never drops it to 0 %. A clean tap right on the bar still sets it there.
 - A tap that wobbles a few pixels no longer drags the item or the selection to the next tile (14 px dead zone).
 - Right-click / long-press an item › **Move** › Up / Down / Left / Right moves it one tile – no dragging needed.
 

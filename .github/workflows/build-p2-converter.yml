@@ -25,11 +25,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller==6.11.1
-          pyinstaller --onefile --console --name p2_to_roblox --add-data "tools/p2_materials.json;." tools/p2_to_roblox.py
+          pyinstaller --onefile --windowed --name p2_to_roblox --add-data "tools/p2_materials.json;." tools/p2_to_roblox.py
       - name: Smoke test
         shell: cmd
         run: |
-          dist\p2_to_roblox.exe tools\sample\sample_room.vmf -o sample_out.rbxmx < NUL
+          start "" /wait dist\p2_to_roblox.exe tools\sample\sample_room.vmf -o sample_out.rbxmx
           if not exist sample_out.rbxmx exit /b 1
       - uses: actions/upload-artifact@v4
         with:
