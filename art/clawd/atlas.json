@@ -127,6 +127,13 @@
       "frames": 12,
       "fps": 8,
       "loop": true
+    },
+    "clauding": {
+      "row": 18,
+      "y": 288,
+      "frames": 12,
+      "fps": 8,
+      "loop": true
     }
   }
 }

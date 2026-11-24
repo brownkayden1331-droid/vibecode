@@ -23,6 +23,7 @@ Pixel-art animations of Clawd, drawn at native resolution (1 px = 1 block: 8×6 
 | dance_v2  | 12 | 10 |
 | coding_v2 | 12 | 10 |
 | claiming  | 12 | 8  |
+| clauding  | 12 | 8  |
 
 - `sheets/<anim>.png` – horizontal strip, 1×, transparent (use with nearest-neighbour scaling)
 - `sheets/<anim>@10x.png` – same strip at 10×

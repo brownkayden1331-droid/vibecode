@@ -612,6 +612,39 @@ def anim_claiming():
     return frames, 8
 
 
+def spinner_glyph(cv, stage, rot, cx=11.5, cy=3.5):
+    """Pixel take on Claude Code's spinner: · ✢ ✳ ✶ ✻ ✽ (stage 0-5)."""
+    import math
+    core, tip = (232, 128, 92, 255), (255, 196, 160, 255)
+    cv.rect(11, 3, 12, 4, core)
+    if stage == 0:
+        return
+    rays, length = [(4, 2.2), (8, 2.2), (6, 3.4), (8, 3.4), (8, 3.9)][stage - 1]
+    for k in range(rays):
+        ang = rot + k * 2 * math.pi / rays
+        t = 1.0
+        while t <= length:
+            x, y = cx + t * math.cos(ang), cy + t * math.sin(ang)
+            if math.floor(y) <= 5:  # keep a gap above the head
+                cv.px(math.floor(x), math.floor(y), tip if t > length - 0.6 else core)
+            t += 0.5
+
+
+def anim_clauding():
+    import math
+    stages = [0, 1, 2, 3, 4, 5, 5, 4, 3, 2, 1, 0]
+    frames = []
+    for i, st in enumerate(stages):
+        cv = Canvas()
+        spinner_glyph(cv, st, rot=i * math.pi / 12)
+        sq = (0, 0, 1, 1)[i % 4]
+        arms = (-1, 0) if i % 2 == 0 else (0, -1)
+        eyes = "closed" if i == 9 else ("happy" if st == 5 else "open")
+        clawd(cv, squash=sq, eyes=eyes, arms=arms)
+        frames.append(cv.img)
+    return frames, 8
+
+
 ANIMS = {
     "idle": anim_idle,
     "walk": anim_walk,
@@ -631,6 +664,7 @@ ANIMS = {
     "dance_v2": anim_dance_v2,
     "coding_v2": anim_coding_v2,
     "claiming": anim_claiming,
+    "clauding": anim_clauding,
 }
 
 
