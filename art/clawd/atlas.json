@@ -1,0 +1,62 @@
+{
+  "frameWidth": 24,
+  "frameHeight": 16,
+  "animations": {
+    "idle": {
+      "row": 0,
+      "y": 0,
+      "frames": 8,
+      "fps": 6,
+      "loop": true
+    },
+    "walk": {
+      "row": 1,
+      "y": 16,
+      "frames": 4,
+      "fps": 8,
+      "loop": true
+    },
+    "happy": {
+      "row": 2,
+      "y": 32,
+      "frames": 8,
+      "fps": 10,
+      "loop": true
+    },
+    "sad": {
+      "row": 3,
+      "y": 48,
+      "frames": 8,
+      "fps": 5,
+      "loop": true
+    },
+    "coding": {
+      "row": 4,
+      "y": 64,
+      "frames": 8,
+      "fps": 8,
+      "loop": true
+    },
+    "thinking": {
+      "row": 5,
+      "y": 80,
+      "frames": 8,
+      "fps": 4,
+      "loop": true
+    },
+    "sleep": {
+      "row": 6,
+      "y": 96,
+      "frames": 8,
+      "fps": 3,
+      "loop": true
+    },
+    "surprised": {
+      "row": 7,
+      "y": 112,
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    }
+  }
+}
