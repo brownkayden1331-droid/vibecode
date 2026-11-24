@@ -106,6 +106,27 @@
       "frames": 6,
       "fps": 6,
       "loop": true
+    },
+    "dance_v2": {
+      "row": 15,
+      "y": 240,
+      "frames": 12,
+      "fps": 10,
+      "loop": true
+    },
+    "coding_v2": {
+      "row": 16,
+      "y": 256,
+      "frames": 12,
+      "fps": 10,
+      "loop": true
+    },
+    "claiming": {
+      "row": 17,
+      "y": 272,
+      "frames": 12,
+      "fps": 8,
+      "loop": true
     }
   }
 }

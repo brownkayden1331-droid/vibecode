@@ -54,7 +54,20 @@ C = {
     "err_d": (150, 30, 30, 255),
     "ok": (70, 190, 100, 255),
     "ok_d": (40, 130, 65, 255),
+    "back": (192, 114, 86, 255),
+    "desk": (140, 95, 62, 255),
+    "desk_d": (105, 70, 45, 255),
+    "mug": (235, 235, 240, 255),
+    "coffee": (110, 70, 45, 255),
+    "gold": (255, 200, 60, 255),
+    "gold_d": (215, 150, 30, 255),
+    "gold_l": (255, 245, 190, 255),
+    "chest": (150, 95, 50, 255),
+    "chest_d": (105, 62, 32, 255),
+    "ball": (210, 215, 225, 255),
+    "ball_d": (140, 145, 160, 255),
 }
+DISCO = [(255, 90, 120, 255), (255, 200, 70, 255), (90, 200, 255, 255), (150, 230, 110, 255), (200, 120, 255, 255)]
 CODE_COLS = [(230, 140, 105, 255), (120, 180, 255, 255), (140, 210, 130, 255), (200, 150, 240, 255)]
 
 
@@ -443,6 +456,162 @@ def anim_success():
     return frames, 6
 
 
+def clawd_side(cv, facing=1, dx=0, dy=0, arm=0, legs=(0, 0), shadow=True, color=None):
+    """Clawd seen side-on (mid-turn): 4 wide, one eye, one arm sticking out front."""
+    body = color or C["body"]
+    x0, x1 = 10 + dx, 13 + dx
+    top, bottom = BODY_TOP + dy, BODY_TOP + BODY_H - 1 + dy
+    if shadow:
+        cv.rect(x0 - 1, GROUND, x1 + 1, GROUND, C["shadow"])
+    for i, lx in enumerate((x0, x1)):
+        cv.rect(lx, bottom + 1, lx, GROUND - 1 - legs[i], body)
+    cv.rect(x0, top, x1, bottom, body)
+    front = x1 if facing > 0 else x0
+    xa, xb = sorted((front + facing, front + 2 * facing))
+    cv.rect(xa, top + 2 + arm, xb, top + 3 + arm, body)
+    cv.px(front - facing, top + 1, C["eye"])
+    return top, bottom
+
+
+COIN = [(1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (3, 1), (0, 2), (1, 2), (2, 2), (3, 2), (1, 3), (2, 3)]
+PLUS1 = [(1, 0), (0, 1), (1, 1), (2, 1), (1, 2), (5, 0), (4, 1), (5, 1), (5, 2), (4, 3), (5, 3), (6, 3)]
+
+
+def coin(cv, x, y):
+    cv.pts(COIN, C["gold"], x, y)
+    cv.pts([(1, 3), (2, 3), (3, 2)], C["gold_d"], x, y)
+    cv.px(x + 1, y + 1, C["gold_l"])
+
+
+def anim_dance_v2():
+    F = "front"
+    plan = [
+        (F, dict(dx=-1, arms=("raised", "raised"), legs=(1, 0, 0, 0))),
+        (F, dict(dy=1, squash=1, arms=(1, 1))),
+        (F, dict(dx=1, arms=("raised", "raised"), legs=(0, 0, 0, 1))),
+        (F, dict(dy=1, squash=1, arms=(1, 1))),
+        ("side", dict(facing=1, arm=-1)),
+        ("back", dict(arms=("raised", "raised"))),
+        ("side", dict(facing=-1, arm=-1)),
+        (F, dict(dy=-2, airborne=True, arms=("raised", "raised"))),
+        (F, dict(dy=1, squash=1, arms=(1, 1))),
+        (F, dict(dx=-1, arms=("wave", 1), legs=(0, 0, 1, 0))),
+        (F, dict(dx=1, arms=(1, "wave"), legs=(0, 1, 0, 0))),
+        (F, dict(arms=(0, 0))),
+    ]
+    spots = [(1, 2), (21, 3), (4, 8), (19, 9), (2, 12), (22, 12), (6, 1), (17, 1), (3, 5), (20, 6)]
+    frames = []
+    for i, (view, f) in enumerate(plan):
+        cv = Canvas()
+        for x in range(W):                      # flashing dance floor
+            cv.px(x, GROUND, DISCO[((x // 3) + i) % len(DISCO)][:3] + (170,))
+        for k, (sx, sy) in enumerate(spots):    # light flecks thrown by the ball
+            if (k + i) % 3 == 0:
+                cv.px(sx, sy, DISCO[(k + i) % len(DISCO)])
+        cv.rect(11, 0, 12, 0, C["ball_d"])      # disco ball
+        cv.rect(10, 1, 13, 3, C["ball"])
+        cv.rect(11, 4, 12, 4, C["ball"])
+        for x in range(10, 14):
+            for y in range(1, 4):
+                if (x + y + i) % 2:
+                    cv.px(x, y, C["ball_d"])
+        cv.px(10 + i % 4, 1 + (i // 4) % 3, (255, 255, 255, 255))
+        if view == "front":
+            clawd(cv, eyes="happy", shadow=False, **f)
+        elif view == "back":
+            clawd(cv, eyes="none", shadow=False, color=C["back"], **f)
+        else:
+            clawd_side(cv, shadow=False, **f)
+        frames.append(cv.img)
+    return frames, 10
+
+
+CODE_LINES = [(0, 5, 3), (1, 4, 1), (2, 5, 2), (2, 3, 0), (1, 2, 1), (0, 1, 3), (0, 6, 3), (1, 3, 2),
+              (1, 6, 0), (2, 4, 1), (1, 2, 3), (0, 1, 3)]  # (indent, length, colour)
+
+
+def anim_coding_v2():
+    frames = []
+    for i in range(12):
+        cv = Canvas()
+        cv.rect(2, 10, 21, 10, C["desk"])               # desk top
+        cv.rect(2, 11, 21, 11, C["desk_d"])
+        cv.rect(3, 12, 3, 14, C["desk_d"])
+        cv.rect(20, 12, 20, 14, C["desk_d"])
+        cv.rect(5, 0, 18, 7, C["panel_b"])              # monitor
+        cv.rect(6, 1, 17, 6, C["panel"])
+        cv.rect(11, 8, 12, 9, C["panel_b"])             # stand
+        for row in range(5):                            # code scrolling up
+            ind, ln, col = CODE_LINES[(i + row) % len(CODE_LINES)]
+            if row == 4:
+                ln = min(ln, 1 + i % 3 * 2)             # newest line is being typed
+            for x in range(ln):
+                cv.px(7 + ind + x, 2 + row, CODE_COLS[col])
+            if row == 4 and i % 2 == 0:
+                cv.px(7 + ind + ln, 2 + row, (240, 240, 240, 255))
+        cv.rect(18, 8, 19, 9, C["mug"])                 # coffee mug + steam
+        cv.px(20, 8, C["mug"])
+        cv.px(18, 8, C["coffee"])
+        sx = 18 + (i // 2) % 2
+        cv.px(sx, 7 - (i % 2), C["steam"][:3] + (160,))
+        cv.px(19 - (i // 2) % 2, 5 + (i % 2), C["steam"][:3] + (110,))
+        bob = 1 if i % 4 == 3 else 0
+        typing = (0, 1) if i % 2 == 0 else (1, 0)
+        clawd(cv, dy=bob, eyes="none", color=C["back"], arms=typing)
+        frames.append(cv.img)
+    return frames, 10
+
+
+def anim_claiming():
+    D = -3                                              # Clawd shifted left, chest on the right
+    frames = []
+    for i in range(12):
+        cv = Canvas()
+        cx0 = 17 + ((1, -1)[i % 2] if i in (1, 2) else 0)
+        opened = i >= 3
+        cv.rect(cx0, 12, cx0 + 5, 14, C["chest"])       # chest
+        cv.rect(cx0, 14, cx0 + 5, 14, C["chest_d"])
+        if opened:
+            cv.rect(cx0, 9, cx0 + 5, 10, C["chest_d"])  # lid flipped up
+            cv.rect(cx0 + 1, 11, cx0 + 4, 11, C["gold"])
+            if i in (3, 4):
+                for k, (rx, ry) in enumerate(((cx0 + 1, 7), (cx0 + 3, 6), (cx0 + 5, 7))):
+                    cv.px(rx, ry - (i - 3), C["gold_l"])
+        else:
+            cv.rect(cx0, 11, cx0 + 5, 11, C["chest_d"])
+            cv.rect(cx0 + 2, 12, cx0 + 3, 12, C["gold"])
+        shadow_x = (8 + D, 15 + D)
+        if i < 5:
+            top, _, _ = clawd(cv, dx=D, eyes="right" if i else "open", arms=(0, 0), shadow=False)
+            cv.rect(shadow_x[0], GROUND, shadow_x[1], GROUND, C["shadow"])
+        if i == 4:
+            coin(cv, cx0 + 1, 6)
+        elif i == 5:
+            clawd(cv, dx=D, eyes="wide", arms=(0, "wave"), shadow=False)
+            cv.rect(shadow_x[0], GROUND, shadow_x[1], GROUND, C["shadow"])
+            coin(cv, 15, 2)
+        elif i == 6:
+            top, _, _ = clawd(cv, dx=D, eyes="happy", arms=(0, "raised"), shadow=False)
+            cv.rect(shadow_x[0], GROUND, shadow_x[1], GROUND, C["shadow"])
+            coin(cv, X1 + D + 1, top - 4)
+        elif i >= 7:
+            jump = {8: -2, 9: -2, 10: -1}.get(i, 0)
+            top, _, _ = clawd(cv, dx=D, dy=jump, airborne=jump < 0, eyes="happy", blush=True,
+                              arms=("raised", "raised"), shadow=False)
+            cv.rect(shadow_x[0] + (1 if jump else 0), GROUND, shadow_x[1] - (1 if jump else 0), GROUND, C["shadow"])
+            coin(cv, 10 + D, top - 5)
+            if i in (8, 9, 10):
+                cv.pts(PLUS1, C["gold"], 15, max(0, 2 - (i - 8)))
+            if i in (7, 9):
+                sparkle(cv, 3 + D + 1, 2, True)
+                sparkle(cv, 14, 7, False)
+            if i in (8, 10):
+                sparkle(cv, 14, 4, True)
+                sparkle(cv, 1, 6, False)
+        frames.append(cv.img)
+    return frames, 8
+
+
 ANIMS = {
     "idle": anim_idle,
     "walk": anim_walk,
@@ -459,6 +628,9 @@ ANIMS = {
     "dizzy": anim_dizzy,
     "error": anim_error,
     "success": anim_success,
+    "dance_v2": anim_dance_v2,
+    "coding_v2": anim_coding_v2,
+    "claiming": anim_claiming,
 }
 
 
