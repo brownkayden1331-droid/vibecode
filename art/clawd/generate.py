@@ -43,6 +43,17 @@ C = {
     "bubble": (250, 250, 252, 255),
     "bubble_o": (70, 70, 80, 255),
     "zzz": (190, 205, 245, 255),
+    "angry": (222, 98, 72, 255),
+    "steam": (190, 190, 200, 255),
+    "heart": (240, 80, 110, 255),
+    "heart2": (255, 150, 170, 255),
+    "note": (110, 130, 230, 255),
+    "note2": (200, 120, 220, 255),
+    "star": (255, 214, 90, 255),
+    "err": (230, 60, 60, 255),
+    "err_d": (150, 30, 30, 255),
+    "ok": (70, 190, 100, 255),
+    "ok_d": (40, 130, 65, 255),
 }
 CODE_COLS = [(230, 140, 105, 255), (120, 180, 255, 255), (140, 210, 130, 255), (200, 150, 240, 255)]
 
@@ -70,10 +81,13 @@ class Canvas:
             self.px(x + ox, y + oy, c)
 
 
-def clawd(cv, dy=0, squash=0, eyes="open", arms=(0, 0), legs=(0, 0, 0, 0),
-          airborne=False, blush=False, shadow=True, shade=False):
-    """Draw Clawd.  dy moves the whole body (negative = up), squash lowers only the
-    top edge, arms are a row offset for each 2x2 nub or 'raised', legs lift each foot."""
+def clawd(cv, dy=0, dx=0, squash=0, eyes="open", arms=(0, 0), legs=(0, 0, 0, 0),
+          airborne=False, blush=False, shadow=True, shade=False, color=None, look=(0, 0)):
+    """Draw Clawd.  dy/dx move the whole body (negative dy = up), squash lowers only the
+    top edge, arms are a row offset for each 2x2 nub, 'raised' or 'wave', legs lift each
+    foot, look nudges the eyes."""
+    body = color or C["body"]
+    x0, x1 = X0 + dx, X1 + dx
     top = BODY_TOP + dy + squash
     bottom = BODY_TOP + BODY_H - 1 + dy
 
@@ -81,42 +95,51 @@ def clawd(cv, dy=0, squash=0, eyes="open", arms=(0, 0), legs=(0, 0, 0, 0),
         shrink = max(0, -dy) // 2
         cv.rect(X0 + shrink, GROUND, X1 - shrink, GROUND, C["shadow"])
 
-    for i, lx in enumerate((X0, X0 + 2, X1 - 2, X1)):
+    for i, lx in enumerate((x0, x0 + 2, x1 - 2, x1)):
         end = bottom + 2 - legs[i] if airborne else GROUND - 1 - legs[i]
-        cv.rect(lx, bottom + 1, lx, end, C["body"])
+        cv.rect(lx, bottom + 1, lx, end, body)
 
-    cv.rect(X0, top, X1, bottom, C["body"])
+    cv.rect(x0, top, x1, bottom, body)
     if shade:
-        cv.rect(X0, bottom, X1, bottom, C["shade"])
+        cv.rect(x0, bottom, x1, bottom, C["shade"])
 
     ar = top + 2
     for side, a in ((-1, arms[0]), (1, arms[1])):
-        edge = X0 if side < 0 else X1
-        if a == "raised":   # arm thrown up diagonally
-            cv.px(edge + side, ar + 1, C["body"])
-            cv.px(edge + side, ar, C["body"])
-            cv.rect(edge + 2 * side, ar - 2, edge + 2 * side, ar, C["body"])
+        edge = x0 if side < 0 else x1
+        if a == "raised":   # arm thrown straight up
+            cv.px(edge + side, ar + 1, body)
+            cv.px(edge + side, ar, body)
+            cv.rect(edge + 2 * side, ar - 2, edge + 2 * side, ar, body)
+        elif a == "wave":   # raised arm tipped outward
+            cv.px(edge + side, ar + 1, body)
+            cv.px(edge + side, ar, body)
+            cv.px(edge + 2 * side, ar - 1, body)
+            cv.rect(edge + 3 * side, ar - 3, edge + 3 * side, ar - 1, body)
         else:
             xa, xb = sorted((edge + side, edge + 2 * side))
-            cv.rect(xa, ar + a, xb, ar + a + 1, C["body"])
+            cv.rect(xa, ar + a, xb, ar + a + 1, body)
 
     ey = top + 1
-    for side, ex in ((-1, X0 + 1), (1, X1 - 1)):
+    for side, ex in ((-1, x0 + 1), (1, x1 - 1)):
         inward = -side
+        ex += look[0]
+        e = ey + look[1]
         if eyes == "open":
-            cv.px(ex, ey, C["eye"])
+            cv.px(ex, e, C["eye"])
         elif eyes == "wide":
-            cv.rect(ex, ey, ex, ey + 1, C["eye"])
+            cv.rect(ex, e, ex, e + 1, C["eye"])
         elif eyes == "down":
-            cv.px(ex, ey + 1, C["eye"])
+            cv.px(ex, e + 1, C["eye"])
         elif eyes == "right":
-            cv.px(ex + 1, ey, C["eye"])
+            cv.px(ex + 1, e, C["eye"])
         elif eyes == "closed":
-            cv.pts([(ex, ey + 1), (ex + inward, ey + 1)], C["eye"])
+            cv.pts([(ex, e + 1), (ex + inward, e + 1)], C["eye"])
         elif eyes == "happy":
-            cv.pts([(ex - 1, ey + 1), (ex, ey), (ex + 1, ey + 1)], C["eye"])
+            cv.pts([(ex - 1, e + 1), (ex, e), (ex + 1, e + 1)], C["eye"])
         elif eyes == "sad":
-            cv.pts([(ex, ey), (ex + side, ey + 1)], C["eye"])
+            cv.pts([(ex, e), (ex + side, e + 1)], C["eye"])
+        elif eyes == "angry":
+            cv.pts([(ex + side, e), (ex, e + 1)], C["eye"])
         if blush:
             cv.px(ex + side, ey + 2, C["blush"])
     return top, bottom, ey
@@ -285,6 +308,141 @@ def anim_surprised():
     return frames, 8
 
 
+HEART = [(0, 0), (1, 0), (3, 0), (4, 0), (0, 1), (1, 1), (2, 1), (3, 1), (4, 1), (1, 2), (2, 2), (3, 2), (2, 3)]
+NOTE = [(1, 0), (2, 0), (3, 1), (1, 1), (1, 2), (0, 2), (0, 3), (1, 3)]
+CHECK = [(4, 0), (3, 1), (0, 2), (2, 2), (1, 3)]
+CROSS = [(0, 0), (4, 0), (1, 1), (3, 1), (2, 2), (1, 3), (3, 3), (0, 4), (4, 4)]
+
+
+def anim_wave():
+    frames = []
+    for i in range(6):
+        cv = Canvas()
+        right = "wave" if i % 2 else "raised"
+        clawd(cv, eyes="happy" if i in (2, 3) else "open", blush=i in (2, 3), arms=(0, right))
+        frames.append(cv.img)
+    return frames, 6
+
+
+def anim_angry():
+    frames = []
+    for i in range(6):
+        cv = Canvas()
+        dx = (0, 1, 0, -1, 0, 1)[i]
+        fists = (0, 1) if i % 2 == 0 else (1, 0)
+        top, _, _ = clawd(cv, dx=dx, eyes="angry", arms=fists, color=C["angry"])
+        for k, sx in enumerate((X0 + 1, X1 - 1)):   # steam puffs
+            p = (i + k * 3) % 6
+            if p < 4:
+                y = top - 1 - p
+                x = sx + (-1 if k == 0 else 1) * (p // 2)
+                col = C["steam"][:3] + (int(255 * (1 - p / 8)),)
+                w = 1 if p >= 1 else 0
+                cv.rect(min(x, x + w * (-1 if k == 0 else 1)), y - (1 if p >= 2 else 0),
+                        max(x, x + w * (-1 if k == 0 else 1)), y, col)
+        frames.append(cv.img)
+    return frames, 10
+
+
+def anim_love():
+    frames = []
+    for i in range(8):
+        cv = Canvas()
+        sway = (0, 0, 1, 1, 0, 0, -1, -1)[i]
+        clawd(cv, dx=sway, eyes="happy", blush=True, arms=(1, 1))
+        for k, hx in enumerate((2, 18)):
+            p = (i + k * 4) % 8
+            if p < 7:
+                col = C["heart"] if k == 0 else C["heart2"]
+                cv.pts(HEART, col, hx + (p // 2) % 2 - (k), 6 - p)
+        frames.append(cv.img)
+    return frames, 6
+
+
+def anim_dance():
+    plan = [
+        dict(dx=-1, arms=("raised", 1), legs=(1, 0, 0, 0)),
+        dict(dy=1, arms=(0, 0)),
+        dict(dx=1, arms=(1, "raised"), legs=(0, 0, 0, 1)),
+        dict(dy=1, arms=(0, 0)),
+        dict(dy=-2, airborne=True, arms=("raised", "raised")),
+        dict(dy=1, squash=1, arms=(1, 1)),
+        dict(dx=-1, arms=("wave", 0)),
+        dict(dx=1, arms=(0, "wave")),
+    ]
+    frames = []
+    for i, f in enumerate(plan):
+        cv = Canvas()
+        clawd(cv, eyes="happy", **f)
+        for k, (nx, col) in enumerate(((2, C["note"]), (19, C["note2"]))):
+            p = (i + k * 4) % 8
+            if p < 6:
+                cv.pts(NOTE, col, nx + (p % 2), 7 - p)
+        frames.append(cv.img)
+    return frames, 8
+
+
+def anim_dizzy():
+    looks = [(0, 0), (1, 0), (1, 1), (0, 1)]
+    orbit = [(-5, 0), (-3, -1), (0, -2), (3, -1), (5, 0), (3, 1), (0, 1), (-3, 1)]
+    frames = []
+    for i in range(8):
+        cv = Canvas()
+        dx = (0, 1, 1, 0, 0, -1, -1, 0)[i]
+        top, _, _ = clawd(cv, dx=dx, eyes="open", look=looks[i % 4], arms=(1, -1) if i < 4 else (-1, 1))
+        cx, cy = 11 + dx, top - 3
+        for k in range(3):                       # stars circling the head
+            ox, oy = orbit[(i + k * 3) % 8]
+            x, y = cx + ox + (1 if ox >= 0 else 0), cy + oy
+            cv.px(x, y, C["star"] if oy <= 0 else C["spark2"])
+        frames.append(cv.img)
+    return frames, 8
+
+
+def anim_error():
+    frames = []
+    for i in range(6):
+        cv = Canvas()
+        red = i in (1, 3)
+        top, _, _ = clawd(cv, eyes="wide" if i < 4 else "sad", color=C["err"] if red else None,
+                          arms=(-1, -1) if i in (1, 2, 3) else (1, 1))
+        if i in (1, 3):                          # glitch: tear a band of rows sideways
+            band = cv.img.crop((0, top + 2, W, top + 4))
+            cv.img.paste((0, 0, 0, 0), (0, top + 2, W, top + 4))
+            cv.img.paste(band, (2 if i == 1 else -2, top + 2))
+        bx, by = 17, 0                           # red "x" badge
+        cv.rect(bx, by, bx + 6, by + 6, C["err_d"] if i % 2 else C["err"])
+        cv.pts(CROSS, (255, 255, 255, 255), bx + 1, by + 1)
+        frames.append(cv.img)
+    return frames, 8
+
+
+def anim_success():
+    plan = [
+        dict(eyes="open"),
+        dict(dy=1, squash=1, eyes="happy", arms=(1, 1)),
+        dict(eyes="happy", blush=True, arms=(0, "raised")),
+        dict(eyes="happy", blush=True, arms=(0, "wave")),
+        dict(eyes="happy", blush=True, arms=(0, "raised")),
+        dict(eyes="happy", arms=(0, 0)),
+    ]
+    frames = []
+    for i, f in enumerate(plan):
+        cv = Canvas()
+        clawd(cv, **f)
+        if i >= 1:                               # green check badge pops in
+            bx, by = 17, 0 if i > 1 else 1
+            size = 7 if i > 1 else 5
+            cv.rect(bx, by, bx + size - 1, by + size - 1, C["ok"])
+            cv.rect(bx, by + size - 1, bx + size - 1, by + size - 1, C["ok_d"])
+            if i > 1:
+                cv.pts(CHECK, (255, 255, 255, 255), bx + 1, by + 2)
+        if i in (2, 4):
+            sparkle(cv, 3, 3, i == 2)
+        frames.append(cv.img)
+    return frames, 6
+
+
 ANIMS = {
     "idle": anim_idle,
     "walk": anim_walk,
@@ -294,6 +452,13 @@ ANIMS = {
     "thinking": anim_thinking,
     "sleep": anim_sleep,
     "surprised": anim_surprised,
+    "wave": anim_wave,
+    "angry": anim_angry,
+    "love": anim_love,
+    "dance": anim_dance,
+    "dizzy": anim_dizzy,
+    "error": anim_error,
+    "success": anim_success,
 }
 
 
@@ -315,9 +480,32 @@ def on_bg(img, bg=(245, 240, 232, 255)):
     return base
 
 
+KEY = (255, 0, 255)
+
+
+def gif_transparent(frames, path, fps):
+    """1-bit transparent GIF: pixels under 50% alpha become transparent."""
+    flat = []
+    for f in frames:
+        rgb = Image.new("RGB", f.size, KEY)
+        a = f.getchannel("A").point(lambda v: 255 if v >= 128 else 0)
+        rgb.paste(f.convert("RGB"), mask=a)
+        flat.append(upscale(rgb))
+    pal_src = Image.new("RGB", (flat[0].width, flat[0].height * len(flat)))
+    for i, f in enumerate(flat):
+        pal_src.paste(f, (0, i * f.height))
+    pal = pal_src.quantize(colors=255, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    out = [f.quantize(palette=pal, dither=Image.Dither.NONE) for f in flat]
+    colours = pal.getpalette()[:768]
+    key = min(range(len(colours) // 3), key=lambda i: sum(abs(colours[i * 3 + c] - KEY[c]) for c in range(3)))
+    out[0].save(path, save_all=True, append_images=out[1:], duration=round(1000 / fps),
+                loop=0, disposal=2, transparency=key, optimize=False)
+
+
 def main():
     os.makedirs(os.path.join(OUT, "sheets"), exist_ok=True)
-    os.makedirs(os.path.join(OUT, "gif"), exist_ok=True)
+    for d in ("gif", "gif_transparent", "apng", "frames"):
+        os.makedirs(os.path.join(OUT, d), exist_ok=True)
     data = {name: fn() for name, fn in ANIMS.items()}
 
     meta = {"frameWidth": W, "frameHeight": H, "animations": {}}
@@ -330,6 +518,14 @@ def main():
         gif = [upscale(on_bg(f)).convert("RGB").quantize(64) for f in frames]
         gif[0].save(os.path.join(OUT, "gif", f"{name}.gif"), save_all=True, append_images=gif[1:],
                     duration=round(1000 / fps), loop=0, disposal=2)
+        gif_transparent(frames, os.path.join(OUT, "gif_transparent", f"{name}.gif"), fps)
+        big = [upscale(f) for f in frames]
+        big[0].save(os.path.join(OUT, "apng", f"{name}.png"), save_all=True, append_images=big[1:],
+                    duration=round(1000 / fps), loop=0, disposal=1)
+        fdir = os.path.join(OUT, "frames", name)
+        os.makedirs(fdir, exist_ok=True)
+        for i, f in enumerate(big):
+            f.save(os.path.join(fdir, f"{name}_{i:02d}.png"))
         atlas.paste(s, (0, row * H))
         meta["animations"][name] = {"row": row, "y": row * H, "frames": len(frames), "fps": fps, "loop": True}
     atlas.save(os.path.join(OUT, "atlas.png"))

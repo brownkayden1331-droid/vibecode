@@ -57,6 +57,55 @@
       "frames": 6,
       "fps": 8,
       "loop": true
+    },
+    "wave": {
+      "row": 8,
+      "y": 128,
+      "frames": 6,
+      "fps": 6,
+      "loop": true
+    },
+    "angry": {
+      "row": 9,
+      "y": 144,
+      "frames": 6,
+      "fps": 10,
+      "loop": true
+    },
+    "love": {
+      "row": 10,
+      "y": 160,
+      "frames": 8,
+      "fps": 6,
+      "loop": true
+    },
+    "dance": {
+      "row": 11,
+      "y": 176,
+      "frames": 8,
+      "fps": 8,
+      "loop": true
+    },
+    "dizzy": {
+      "row": 12,
+      "y": 192,
+      "frames": 8,
+      "fps": 8,
+      "loop": true
+    },
+    "error": {
+      "row": 13,
+      "y": 208,
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    },
+    "success": {
+      "row": 14,
+      "y": 224,
+      "frames": 6,
+      "fps": 6,
+      "loop": true
     }
   }
 }
