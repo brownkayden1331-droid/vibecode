@@ -1,0 +1,139 @@
+{
+  "frameWidth": 24,
+  "frameHeight": 16,
+  "animations": {
+    "idle": {
+      "row": 0,
+      "y": 0,
+      "frames": 8,
+      "fps": 6,
+      "loop": true
+    },
+    "walk": {
+      "row": 1,
+      "y": 16,
+      "frames": 4,
+      "fps": 8,
+      "loop": true
+    },
+    "happy": {
+      "row": 2,
+      "y": 32,
+      "frames": 8,
+      "fps": 10,
+      "loop": true
+    },
+    "sad": {
+      "row": 3,
+      "y": 48,
+      "frames": 8,
+      "fps": 5,
+      "loop": true
+    },
+    "coding": {
+      "row": 4,
+      "y": 64,
+      "frames": 8,
+      "fps": 8,
+      "loop": true
+    },
+    "thinking": {
+      "row": 5,
+      "y": 80,
+      "frames": 8,
+      "fps": 4,
+      "loop": true
+    },
+    "sleep": {
+      "row": 6,
+      "y": 96,
+      "frames": 8,
+      "fps": 3,
+      "loop": true
+    },
+    "surprised": {
+      "row": 7,
+      "y": 112,
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    },
+    "wave": {
+      "row": 8,
+      "y": 128,
+      "frames": 6,
+      "fps": 6,
+      "loop": true
+    },
+    "angry": {
+      "row": 9,
+      "y": 144,
+      "frames": 6,
+      "fps": 10,
+      "loop": true
+    },
+    "love": {
+      "row": 10,
+      "y": 160,
+      "frames": 8,
+      "fps": 6,
+      "loop": true
+    },
+    "dance": {
+      "row": 11,
+      "y": 176,
+      "frames": 8,
+      "fps": 8,
+      "loop": true
+    },
+    "dizzy": {
+      "row": 12,
+      "y": 192,
+      "frames": 8,
+      "fps": 8,
+      "loop": true
+    },
+    "error": {
+      "row": 13,
+      "y": 208,
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    },
+    "success": {
+      "row": 14,
+      "y": 224,
+      "frames": 6,
+      "fps": 6,
+      "loop": true
+    },
+    "dance_v2": {
+      "row": 15,
+      "y": 240,
+      "frames": 12,
+      "fps": 10,
+      "loop": true
+    },
+    "coding_v2": {
+      "row": 16,
+      "y": 256,
+      "frames": 12,
+      "fps": 10,
+      "loop": true
+    },
+    "claiming": {
+      "row": 17,
+      "y": 272,
+      "frames": 12,
+      "fps": 8,
+      "loop": true
+    },
+    "clauding": {
+      "row": 18,
+      "y": 288,
+      "frames": 12,
+      "fps": 8,
+      "loop": true
+    }
+  }
+}
